@@ -1,0 +1,112 @@
+// Prisma schema for BelfProctor server
+// PostgreSQL datasource
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Prisma client generator
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  VIEWER
+}
+
+enum SystemEventType {
+  ProcessStarted
+  ProcessStopped
+  USBConnected
+  USBDisconnected
+  NetworkConnection
+  NetworkDisconnection
+  FileAccess
+  RegistryAccess
+  PolicyViolation
+  SystemError
+}
+
+model User {
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  passwordHash String
+  role        Role     @default(ADMIN)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Client {
+  id            String    @id // matches ProctorSettings.ClientId
+  encryptionKey String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  events        Event[]
+  heartbeats    Heartbeat[]
+  screenshots   Screenshot[]
+  reports       Report[]
+}
+
+model Event {
+  id             Int              @id @default(autoincrement())
+  clientId       String
+  client         Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  timestamp      DateTime
+  eventType      SystemEventType
+  description    String?
+  details        String?
+  processName    String?
+  deviceId       String?
+  networkAddress String?
+  additionalData Json?
+  createdAt      DateTime         @default(now())
+
+  @@index([clientId, timestamp])
+}
+
+model Heartbeat {
+  id        Int      @id @default(autoincrement())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  timestamp DateTime
+  status    String
+  version   String
+  createdAt DateTime @default(now())
+
+  @@index([clientId, timestamp])
+}
+
+model Screenshot {
+  id        Int      @id @default(autoincrement())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  timestamp DateTime
+  filename  String
+  path      String
+  createdAt DateTime @default(now())
+
+  @@index([clientId, timestamp])
+}
+
+model Report {
+  id        Int      @id @default(autoincrement())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  timestamp DateTime
+  filename  String
+  path      String
+  createdAt DateTime @default(now())
+
+  @@index([clientId, timestamp])
+}
+
+model Policy {
+  id        String   @id
+  name      String
+  isActive  Boolean  @default(true)
+  rules     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

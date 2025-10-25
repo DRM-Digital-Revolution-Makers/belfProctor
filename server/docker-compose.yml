@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: proctor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      UPLOAD_DIR: /app/storage
+      JWT_SECRET: supersecretjwt
+      DEFAULT_ADMIN_EMAIL: admin@example.com
+      DEFAULT_ADMIN_PASSWORD: admin123
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/proctor?schema=public
+    depends_on:
+      - db
+    volumes:
+      - backend_storage:/app/storage
+    ports:
+      - "4000:4000"
+    command: /bin/sh -c "npx prisma migrate deploy && node dist/index.js"
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Used at build time for API base URL in the SPA
+      VITE_API_URL: http://localhost:4000/api
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:
+  backend_storage:
