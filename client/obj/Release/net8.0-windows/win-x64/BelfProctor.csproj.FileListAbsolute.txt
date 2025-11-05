@@ -1,0 +1,6 @@
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.csproj.AssemblyReference.cache
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.AssemblyInfoInputs.cache
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.AssemblyInfo.cs
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.csproj.CoreCompileInputs.cache
+C:\Users\scoobych\Desktop\belfProctor\client\obj\Release\net8.0-windows\win-x64\BelfProctor.sourcelink.json
