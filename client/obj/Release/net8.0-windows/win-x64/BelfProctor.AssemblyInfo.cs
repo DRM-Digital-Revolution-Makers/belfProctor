@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("BelfProctor")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bba94705c264aeac7602cf4af95265e79a2c58e8")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+463353ab3d846ea2f8ae466fae6405e530e160d3")]
 [assembly: System.Reflection.AssemblyProductAttribute("BelfProctor")]
 [assembly: System.Reflection.AssemblyTitleAttribute("BelfProctor")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

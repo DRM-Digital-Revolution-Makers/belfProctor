@@ -46,7 +46,9 @@ function Test-DotNetRuntimeInstalled {
             if ($v.StartsWith($majorMinor)) { return $true }
         }
         return $false
-    } catch { return $false }
+    } catch {
+        return $false
+    }
 }
 
 function Install-DotNetRuntime8 {
@@ -126,7 +128,6 @@ try {
         "$InstallPath\Logs",
         "$InstallPath\Reports"
     )
-
     foreach ($dir in $dataDirectories) {
         if (-not (Test-Path $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -137,11 +138,10 @@ try {
     # Update appsettings.json with correct paths
     $configPath = Join-Path $InstallPath "appsettings.json"
     if (Test-Path $configPath) {
-        $config = Get-Content $configPath | ConvertFrom-Json
+        $config = Get-Content $configPath -Raw | ConvertFrom-Json
         $config.ProctorSettings.ScreenshotPath = "$InstallPath\Screenshots"
         $config.ProctorSettings.LogPath = "$InstallPath\Logs"
         $config.ProctorSettings.ReportsPath = "$InstallPath\Reports"
-        
         $config | ConvertTo-Json -Depth 10 | Set-Content $configPath
         Write-Host "Updated configuration file with installation paths" -ForegroundColor Gray
     }
@@ -158,20 +158,14 @@ try {
         StartupType = "Automatic"
         Credential = $null
     }
-    
     New-Service @serviceParams | Out-Null
 
-    # Set service to restart on failure
-    Write-Host "Configuring service recovery options..." -ForegroundColor Yellow
+    # Configure recovery and account
     sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/30000
-
-    # Set service to run as Local System
     sc.exe config $ServiceName obj= "LocalSystem"
 
-    # Grant necessary permissions
+    # Permissions
     Write-Host "Setting up service permissions..." -ForegroundColor Yellow
-    
-    # Grant full control to the service directory
     icacls $InstallPath /grant "NT AUTHORITY\SYSTEM:(OI)(CI)F" /T | Out-Null
     icacls $InstallPath /grant "BUILTIN\Administrators:(OI)(CI)F" /T | Out-Null
 
@@ -206,21 +200,14 @@ if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 Write-Host "Uninstalling BelfProctor Service..." -ForegroundColor Yellow
 
 try {
-    # Stop service
     Stop-Service -Name "$ServiceName" -Force -ErrorAction SilentlyContinue
-    
-    # Remove service
     sc.exe delete "$ServiceName"
-    
-    # Remove installation directory (optional - uncomment if you want to remove all files)
     # Remove-Item "$InstallPath" -Recurse -Force -ErrorAction SilentlyContinue
-    
     Write-Host "✓ Service uninstalled successfully!" -ForegroundColor Green
 } catch {
     Write-Error "Failed to uninstall service: `$_"
 }
 "@
-
     $uninstallPath = Join-Path $InstallPath "Uninstall-Service.ps1"
     $uninstallScript | Set-Content $uninstallPath
     Write-Host "Created uninstall script: $uninstallPath" -ForegroundColor Gray

@@ -1,9 +1,11 @@
+// Класс: StabilityService
 using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
 using System.Net.NetworkInformation;
+using Timer = System.Threading.Timer;
 
 namespace BelfProctor.Services;
 
@@ -65,7 +67,7 @@ public class StabilityService : BackgroundService, IStabilityService
         }
     }
 
-    public Task StartAsync()
+    public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting stability monitoring");
         IsHealthy = true;
@@ -73,7 +75,7 @@ public class StabilityService : BackgroundService, IStabilityService
         return Task.CompletedTask;
     }
 
-    public Task StopAsync()
+    public Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Stopping stability monitoring");
         _healthCheckTimer?.Dispose();
