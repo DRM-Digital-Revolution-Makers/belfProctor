@@ -15,6 +15,65 @@ if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     exit 1
 }
 
+# Detect if framework-dependent build requires .NET Runtime and install if missing
+$runtimeConfigPath = Join-Path (Get-Location) "BelfProctor.runtimeconfig.json"
+$RequireDotNetRuntime = $false
+$RequiredFxMajorMinor = "8.0"
+
+if (Test-Path $runtimeConfigPath) {
+    try {
+        $rc = Get-Content $runtimeConfigPath -Raw | ConvertFrom-Json
+        if ($rc.runtimeOptions -and $rc.runtimeOptions.framework) {
+            $RequireDotNetRuntime = $true
+            Write-Host "Detected framework-dependent package. .NET Runtime is required." -ForegroundColor Yellow
+        } else {
+            Write-Host "Detected self-contained package. .NET Runtime not required." -ForegroundColor Gray
+        }
+    } catch {
+        Write-Warning "Failed to read runtimeconfig.json. Assuming self-contained."
+        $RequireDotNetRuntime = $false
+    }
+} else {
+    Write-Host "No runtimeconfig.json found. Assuming self-contained." -ForegroundColor Gray
+}
+
+function Test-DotNetRuntimeInstalled {
+    param([string]$majorMinor = "8.0")
+    try {
+        $regPath = "HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
+        $versions = Get-ChildItem $regPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSChildName
+        foreach ($v in $versions) {
+            if ($v.StartsWith($majorMinor)) { return $true }
+        }
+        return $false
+    } catch { return $false }
+}
+
+function Install-DotNetRuntime8 {
+    Write-Host "Installing .NET 8 Runtime..." -ForegroundColor Yellow
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($wingetCmd) {
+        winget install --id Microsoft.DotNet.Runtime.8 --silent --accept-package-agreements --accept-source-agreements
+        if (-not (Test-DotNetRuntimeInstalled $RequiredFxMajorMinor)) {
+            Write-Warning "Winget reported success but runtime not detected. Please install manually."
+            Start-Process "https://dotnet.microsoft.com/download/dotnet/8.0/runtime"
+            throw "Missing .NET 8 Runtime"
+        }
+    } else {
+        Write-Warning "winget not found. Opening .NET Runtime download page..."
+        Start-Process "https://dotnet.microsoft.com/download/dotnet/8.0/runtime"
+        throw "Automatic install unavailable without winget. Install .NET 8 Runtime and rerun."
+    }
+}
+
+if ($RequireDotNetRuntime) {
+    if (-not (Test-DotNetRuntimeInstalled $RequiredFxMajorMinor)) {
+        Install-DotNetRuntime8
+    } else {
+        Write-Host ".NET $RequiredFxMajorMinor Runtime already installed." -ForegroundColor Gray
+    }
+}
+
 Write-Host "Installing BelfProctor Service..." -ForegroundColor Green
 
 try {
