@@ -37,6 +37,29 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
+REM Run tests
+echo Running unit, integration, and system tests...
+dotnet test "tests\BelfProctor.UnitTests\BelfProctor.UnitTests.csproj" -c Release --logger "trx;LogFileName=TestResults_Unit.trx" --collect:"XPlat Code Coverage"
+if %errorLevel% neq 0 (
+    echo ERROR: Unit tests failed.
+    pause
+    exit /b 1
+)
+
+dotnet test "tests\BelfProctor.IntegrationTests\BelfProctor.IntegrationTests.csproj" -c Release --logger "trx;LogFileName=TestResults_Integration.trx"
+if %errorLevel% neq 0 (
+    echo ERROR: Integration tests failed.
+    pause
+    exit /b 1
+)
+
+dotnet test "tests\BelfProctor.SystemTests\BelfProctor.SystemTests.csproj" -c Release --logger "trx;LogFileName=TestResults_System.trx"
+if %errorLevel% neq 0 (
+    echo ERROR: System tests failed.
+    pause
+    exit /b 1
+)
+
 REM Publish self-contained executable
 echo Publishing self-contained executable...
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish

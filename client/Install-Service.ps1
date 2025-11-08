@@ -6,8 +6,22 @@ param(
     [string]$DisplayName = "Belf Proctor Service",
     [string]$Description = "Proctor service for monitoring system activities and taking screenshots",
     [string]$InstallPath = "C:\Program Files\BelfProctor",
-    [string]$ExecutableName = "BelfProctor.exe"
+    [string]$ExecutableName = "BelfProctor.exe",
+    [string]$LogPath = "$env:ProgramData\BelfProctor\Install\install.log"
 )
+
+# Global logging to file (transcript)
+$ErrorActionPreference = "Stop"
+try {
+    $logDir = Split-Path $LogPath -Parent
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+    Start-Transcript -Path $LogPath -Append -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Transcript started: $LogPath" -ForegroundColor Gray
+} catch {
+    Write-Warning "Failed to start transcript: $_"
+}
 
 # Check if running as Administrator
 if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
@@ -57,17 +71,29 @@ function Install-DotNetRuntime8 {
     if ($wingetCmd) {
         winget install --id Microsoft.DotNet.Runtime.8 --silent --accept-package-agreements --accept-source-agreements
         if (-not (Test-DotNetRuntimeInstalled $RequiredFxMajorMinor)) {
-            Write-Warning "Winget reported success but runtime not detected. Please install manually."
-            Start-Process "https://dotnet.microsoft.com/download/dotnet/8.0/runtime"
-            throw "Missing .NET 8 Runtime"
+            Write-Warning "Winget did not validate runtime install. Falling back to dotnet-install.ps1"
+            try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+            $installer = Join-Path $env:TEMP "dotnet-install.ps1"
+            Write-Host "Downloading dotnet-install.ps1..." -ForegroundColor Gray
+            Invoke-WebRequest -UseBasicParsing -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer
+            Write-Host "Running dotnet-install.ps1 for channel $RequiredFxMajorMinor..." -ForegroundColor Gray
+            & $installer -Channel $RequiredFxMajorMinor -Runtime "dotnet" -InstallDir "C:\Program Files\dotnet"
         }
     } else {
-        Write-Warning "winget not found. Opening .NET Runtime download page..."
+        Write-Host "winget не найден. Использую dotnet-install.ps1..." -ForegroundColor Yellow
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        } catch {}
+        $installer = Join-Path $env:TEMP "dotnet-install.ps1"
+        Invoke-WebRequest -UseBasicParsing -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer
+        & $installer -Channel "8.0" -Runtime "dotnet" -InstallDir "C:\Program Files\dotnet"
+    }
+    if (-not (Test-DotNetRuntimeInstalled $RequiredFxMajorMinor)) {
+        Write-Warning "Установка .NET Runtime не подтвердилась по реестру."
         Start-Process "https://dotnet.microsoft.com/download/dotnet/8.0/runtime"
-        throw "Automatic install unavailable without winget. Install .NET 8 Runtime and rerun."
+        throw "Missing .NET $RequiredFxMajorMinor Runtime after installation attempt."
     }
 }
-
 if ($RequireDotNetRuntime) {
     if (-not (Test-DotNetRuntimeInstalled $RequiredFxMajorMinor)) {
         Install-DotNetRuntime8
@@ -223,3 +249,9 @@ Write-Host "  - Services.msc (Windows Services Manager)" -ForegroundColor Gray
 Write-Host "  - PowerShell: Get-Service $ServiceName" -ForegroundColor Gray
 Write-Host "  - PowerShell: Stop-Service $ServiceName" -ForegroundColor Gray
 Write-Host "  - PowerShell: Start-Service $ServiceName" -ForegroundColor Gray
+
+# Stop transcript if started
+try {
+    Stop-Transcript | Out-Null
+    Write-Host "Transcript stopped: $LogPath" -ForegroundColor Gray
+} catch {}

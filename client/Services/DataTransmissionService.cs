@@ -186,7 +186,7 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    private byte[] EncryptData(byte[] data)
+    internal byte[] EncryptData(byte[] data)
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
@@ -220,7 +220,7 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    private byte[] DecryptData(byte[] encryptedData)
+    internal byte[] DecryptData(byte[] encryptedData)
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
@@ -252,7 +252,7 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    private byte[] DeriveKeyFromPassword(string password)
+    internal byte[] DeriveKeyFromPassword(string password)
     {
         using var rfc2898 = new Rfc2898DeriveBytes(password, Encoding.UTF8.GetBytes("BelfProctorSalt"), 10000, HashAlgorithmName.SHA256);
         return rfc2898.GetBytes(32); // 256-bit key
