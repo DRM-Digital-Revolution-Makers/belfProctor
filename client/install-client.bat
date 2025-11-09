@@ -21,6 +21,7 @@ if %errorLevel% neq 0 (
     call :log "Please right-click and select 'Run as administrator'"
     echo ===== INSTALL END (admin required) %date% %time% =====>> "%LOGFILE%"
     pause
+    timeout /t 20 /nobreak >nul
     goto :end
 )
 call :log "Admin check passed."
@@ -63,6 +64,7 @@ echo ===== INSTALL END %date% %time% =====>> "%LOGFILE%"
 call :log "Press any key to close..."
 call :log
 pause
+timeout /t 20 /nobreak >nul
 goto :end
 
 :log
