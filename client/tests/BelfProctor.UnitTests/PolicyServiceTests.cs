@@ -2,7 +2,6 @@ using BelfProctor.Models;
 using BelfProctor.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Moq;
 using Newtonsoft.Json;
 using Xunit;
 
@@ -19,11 +18,8 @@ public class PolicyServiceTests
         try
         {
             var settings = Options.Create(new ProctorSettings { LogPath = tempLog });
-
-            var dtMock = new Mock<IDataTransmissionService>(MockBehavior.Strict);
-            dtMock.Setup(m => m.SendSystemEventAsync(It.IsAny<SystemEvent>())).Returns(Task.CompletedTask).Verifiable();
-
-            var svc = new PolicyService(new NullLogger<PolicyService>(), settings, dtMock.Object);
+            var dt = new StubTransmission();
+            var svc = new PolicyService(new NullLogger<PolicyService>(), settings, dt);
 
             // Apply a policy with a simple process rule
             var policy = new SecurityPolicy
@@ -37,8 +33,9 @@ public class PolicyServiceTests
                     {
                         Id = "r1",
                         Type = PolicyRuleType.ProcessControl,
-                        IsEnabled = true,
-                        Parameters = new Dictionary<string, object> { ["blocked"] = new List<string> { "cmd.exe" } }
+                        Action = PolicyAction.Block,
+                        Target = "cmd.exe",
+                        IsEnabled = true
                     }
                 }
             };
@@ -54,11 +51,23 @@ public class PolicyServiceTests
 
             var violated = await svc.CheckPolicyViolationAsync(evt);
             Assert.True(violated);
-            dtMock.Verify(m => m.SendSystemEventAsync(It.IsAny<SystemEvent>()), Times.Once);
+            Assert.Equal(1, dt.SystemEventCount);
         }
         finally
         {
             try { Directory.Delete(tempLog, true); } catch { }
         }
+    }
+
+    private class StubTransmission : IDataTransmissionService
+    {
+        public int SystemEventCount { get; private set; }
+        public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
+        public Task SendSystemEventAsync(SystemEvent systemEvent) { SystemEventCount++; return Task.CompletedTask; }
+        public Task SendHeartbeatAsync() => Task.CompletedTask;
+        public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
+        public Task SendReportAsync(string reportPath) => Task.CompletedTask;
+        public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
+        public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
     }
 }

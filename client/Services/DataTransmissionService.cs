@@ -220,6 +220,67 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
+    public async Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes)
+    {
+        try
+        {
+            var encryptedData = EncryptData(jsonBytes);
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var url = $"{_settings.ServerUrl}/commands/{commandId}/result";
+            var response = await _httpClient.PostAsync(url, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send command result json. Status: {StatusCode}", response.StatusCode);
+            }
+            else
+            {
+                _logger.LogDebug("Command result json sent successfully: {CommandId}", commandId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending command result json");
+        }
+    }
+
+    public async Task SendCommandResultFileAsync(string commandId, string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                _logger.LogWarning("Command result file not found: {FilePath}", filePath);
+                return;
+            }
+
+            var fileBytes = await File.ReadAllBytesAsync(filePath);
+            var encryptedData = EncryptData(fileBytes);
+            using var content = new MultipartFormDataContent();
+            content.Add(new ByteArrayContent(encryptedData), "file", Path.GetFileName(filePath));
+            content.Add(new StringContent(_settings.ClientId), "clientId");
+            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+
+            var url = $"{_settings.ServerUrl}/commands/{commandId}/result";
+            var response = await _httpClient.PostAsync(url, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send command result file. Status: {StatusCode}", response.StatusCode);
+            }
+            else
+            {
+                _logger.LogDebug("Command result file sent successfully: {CommandId}", commandId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending command result file");
+        }
+    }
+
     internal byte[] DecryptData(byte[] encryptedData)
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))

@@ -23,7 +23,8 @@ public class PolicyService : IPolicyService
         _logger = logger;
         _settings = settings.Value;
         _dataTransmissionService = dataTransmissionService;
-        _policiesFilePath = Path.Combine(_settings.LogPath, "policies.json");
+        var logBase = Environment.ExpandEnvironmentVariables(_settings.LogPath);
+        _policiesFilePath = Path.Combine(logBase, "policies.json");
     }
 
     public async Task LoadPoliciesAsync()

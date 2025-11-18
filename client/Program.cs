@@ -28,8 +28,10 @@ public class Program
         builder.Services.AddSingleton<IPolicyService, PolicyService>();
         builder.Services.AddSingleton<IReportingService, ReportingService>();
         builder.Services.AddSingleton<IStabilityService, StabilityService>();
+        builder.Services.AddSingleton<CommandHandler>();
         
         builder.Services.AddHostedService<ProctorWorker>();
+        builder.Services.AddHostedService<CommandChannelWorker>();
 
         // Настройка логирования
         builder.Services.AddLogging(logging =>

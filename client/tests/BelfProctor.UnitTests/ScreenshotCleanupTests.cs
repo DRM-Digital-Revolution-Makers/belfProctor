@@ -50,6 +50,8 @@ public class ScreenshotCleanupTests
         public Task SendHeartbeatAsync() => Task.CompletedTask;
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
+        public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
+        public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
         public void Dispose() {}
     }
 }

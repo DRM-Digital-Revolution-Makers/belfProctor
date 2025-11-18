@@ -9,4 +9,6 @@ public interface IDataTransmissionService
     Task SendHeartbeatAsync();
     Task<byte[]> DownloadPolicyAsync(string policyId);
     Task SendReportAsync(string reportPath);
+    Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes);
+    Task SendCommandResultFileAsync(string commandId, string filePath);
 }

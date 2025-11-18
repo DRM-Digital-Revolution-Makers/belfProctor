@@ -15,6 +15,8 @@ import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
 import { prisma } from "./prisma";
 import bcrypt from "bcryptjs";
+import { initWsServer } from "./ws";
+import commandsRouter from "./routes/commands";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "4000", 10);
@@ -46,6 +48,7 @@ app.use("/api/events", eventsRouter);
 app.use("/api/heartbeat", heartbeatRouter);
 app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
+app.use("/api/commands", commandsRouter);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
@@ -65,6 +68,8 @@ async function ensureAdmin() {
 
 ensureAdmin().catch(console.error);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
 });
+
+initWsServer(server);
