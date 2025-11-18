@@ -48,6 +48,7 @@ app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
 // Seed default admin if not exists
 async function ensureAdmin() {
