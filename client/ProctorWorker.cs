@@ -1,8 +1,10 @@
+// Класс: ProctorWorker
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
 using BelfProctor.Services;
+using Timer = System.Threading.Timer;
 
 namespace BelfProctor;
 
@@ -107,9 +109,9 @@ public class ProctorWorker : BackgroundService
     {
         var directories = new[]
         {
-            _settings.ScreenshotPath,
-            _settings.LogPath,
-            _settings.ReportsPath
+            Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath),
+            Environment.ExpandEnvironmentVariables(_settings.LogPath),
+            Environment.ExpandEnvironmentVariables(_settings.ReportsPath)
         };
 
         foreach (var directory in directories)

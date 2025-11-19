@@ -47,8 +47,9 @@ public class ScreenshotService : IScreenshotService
         return await Task.Run(() =>
         {
             var bounds = GetScreenBounds();
+            var basePath = Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath);
             var fileName = $"screenshot_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
-            var filePath = Path.Combine(_settings.ScreenshotPath, fileName);
+            var filePath = Path.Combine(basePath, fileName);
 
             using var bitmap = new Bitmap(bounds.Width, bounds.Height);
             using var graphics = Graphics.FromImage(bitmap);
@@ -81,7 +82,8 @@ public class ScreenshotService : IScreenshotService
             try
             {
                 var cutoffDate = DateTime.Now.AddDays(-_settings.MaxScreenshotAge);
-                var screenshotFiles = Directory.GetFiles(_settings.ScreenshotPath, "screenshot_*.jpg");
+                var basePath = Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath);
+                var screenshotFiles = Directory.GetFiles(basePath, "screenshot_*.jpg");
 
                 foreach (var file in screenshotFiles)
                 {

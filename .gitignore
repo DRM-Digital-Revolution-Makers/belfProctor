@@ -1,0 +1,60 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE/Editor
+.vscode/
+.idea/
+.vs/
+
+# Logs and temp
+logs/
+**/*.log
+*.log
+*.tmp
+*.temp
+*.bak
+
+# Environment files (keep examples)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# --- .NET / C# (client) ---
+**/bin/
+**/obj/
+**/out/
+**/publish/
+TestResults/
+*.user
+*.suo
+*.userprefs
+*.nupkg
+
+# --- Node / TypeScript (server) ---
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+coverage/
+.nyc_output/
+
+# Vite / Next / Nuxt (generic)
+.vite/
+.next/
+.nuxt/
+out/
+
+# Prisma generated cache inside node_modules
+**/node_modules/.prisma/
+
+# NPM/Yarn/Pnpm logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Docker local artifacts (if any)
+*.tar

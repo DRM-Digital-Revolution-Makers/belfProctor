@@ -24,7 +24,7 @@ BelfProctor - это Windows служба для мониторинга сист
 ### Автоматическая установка
 
 1. Скачайте все файлы проекта
-2. Запустите `install.bat` **от имени администратора**
+2. Запустите `install-client.bat` **от имени администратора**
 3. Дождитесь завершения установки
 
 ### Ручная установка
@@ -35,10 +35,10 @@ BelfProctor - это Windows служба для мониторинга сист
    ```
 
 2. Запустите PowerShell от имени администратора:
-   ```powershell
-   Set-ExecutionPolicy Bypass -Scope Process
-   .\Install-Service.ps1
-   ```
+  ```powershell
+  Set-ExecutionPolicy Bypass -Scope Process
+  .\install-windows-service.ps1
+  ```
 
 ## Конфигурация
 
