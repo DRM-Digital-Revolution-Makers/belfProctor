@@ -10,8 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@refinedev/antd": "^6.0.3",
     "@refinedev/core": "^5.0.5",
+    "@refinedev/react-router": "^2.0.3",
     "@refinedev/simple-rest": "^6.0.1",
     "@tanstack/react-query": "^5.90.5",
     "antd": "^5.27.6",

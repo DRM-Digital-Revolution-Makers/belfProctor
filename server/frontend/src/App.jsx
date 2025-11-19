@@ -1,20 +1,21 @@
 import React from "react";
 import { Refine } from "@refinedev/core";
+import routerProvider from "@refinedev/react-router";
 //
 import { RefineThemes } from "@refinedev/antd";
-import { ConfigProvider } from "antd";
-import { useNavigate, Routes, Route } from "react-router-dom";
+import { ConfigProvider, Layout } from "antd";
+import { Routes, Route } from "react-router-dom";
+import NavBar from "./components/NavBar.jsx";
 
 import ClientsList from "./pages/ClientsList.jsx";
 import EventsList from "./pages/EventsList.jsx";
-import HeartbeatsList from "./pages/HeartbeatsList.jsx";
 import ScreenshotsList from "./pages/ScreenshotsList.jsx";
 import ReportsList from "./pages/ReportsList.jsx";
 import PoliciesList from "./pages/PoliciesList.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
+const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
 
 const authProvider = {
   login: async ({ email, password }) => {
@@ -43,27 +44,46 @@ const authProvider = {
 };
 
 export default function App() {
-  const navigate = useNavigate();
+  const [authed, setAuthed] = React.useState(Boolean(localStorage.getItem("token")));
+  if (!authed) {
+    return (
+      <ConfigProvider theme={RefineThemes.Blue}>
+        <Layout style={{ minHeight: "100vh" }}>
+          <Layout.Content style={{ padding: 24 }}>
+            <LoginPage onSuccess={() => setAuthed(true)} />
+          </Layout.Content>
+        </Layout>
+      </ConfigProvider>
+    );
+  }
   return (
     <ConfigProvider theme={RefineThemes.Blue}>
-      <Routes>
-        <Route
-          path="/login"
-          element={<LoginPage onSuccess={() => navigate("/")} />}
-        />
-      </Routes>
       <Refine
+        routerProvider={routerProvider}
         dataProvider={customDataProvider(API_URL)}
-        authProvider={authProvider}
+        // authProvider disabled to skip login temporarily
         resources={[
-          { name: "clients", list: ClientsList },
-          { name: "events", list: EventsList },
-          { name: "heartbeats", list: HeartbeatsList },
-          { name: "screenshots", list: ScreenshotsList },
-          { name: "reports", list: ReportsList },
-          { name: "policies", list: PoliciesList },
+          { name: "clients", list: "/clients" },
+          { name: "events", list: "/events" },
+          { name: "screenshots", list: "/screenshots" },
+          { name: "reports", list: "/reports" },
+          { name: "policies", list: "/policies" },
         ]}
-      />
+      >
+        <Layout style={{ minHeight: "100vh" }}>
+          <NavBar />
+          <Layout.Content style={{ padding: 24 }}>
+            <Routes>
+              <Route path="/" element={<EventsList />} />
+              <Route path="clients" element={<ClientsList />} />
+              <Route path="events" element={<EventsList />} />
+              <Route path="screenshots" element={<ScreenshotsList />} />
+              <Route path="reports" element={<ReportsList />} />
+              <Route path="policies" element={<PoliciesList />} />
+            </Routes>
+          </Layout.Content>
+        </Layout>
+      </Refine>
     </ConfigProvider>
   );
 }

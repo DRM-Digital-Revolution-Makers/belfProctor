@@ -3,24 +3,27 @@ import { List } from "@refinedev/antd";
 import { Table, Button } from "antd";
 
 export default function ReportsList() {
-  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
+  const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const [page, setPage] = React.useState(1);
-  const pageSize = 20;
+  const pageSize = 50;
 
   const load = () => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    fetch(`${API_URL}/reports?${params.toString()}`, { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } })
+    const token = localStorage.getItem("token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    fetch(`${API_URL}/reports?${params.toString()}`, { headers })
       .then((r) => r.json())
-      .then((json) => { setItems(json.data || []); setTotal(json.total || 0); });
+      .then((json) => { setItems(json.data || []); setTotal(json.total || 0); })
+      .catch(() => { setItems([]); setTotal(0); });
   };
   React.useEffect(load, [page]);
 
   const openFile = async (id) => {
-    const res = await fetch(`${API_URL}/reports/${id}/file`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    });
+    const token = localStorage.getItem("token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`${API_URL}/reports/${id}/file`, { headers });
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
@@ -30,7 +33,8 @@ export default function ReportsList() {
     <List title="Отчёты">
       <Table
         rowKey="id"
-        dataSource={items}
+        dataSource={Array.isArray(items) ? items : []}
+        size="large"
         pagination={{ current: page, pageSize, total, onChange: (p) => setPage(p) }}
         columns={[
           { title: "Время", dataIndex: "timestamp" },
