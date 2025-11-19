@@ -77,7 +77,7 @@ public class ProctorWorker : BackgroundService
             TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.HeartbeatInterval));
         
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            TimeSpan.FromMinutes(1), TimeSpan.FromMilliseconds(_settings.PolicyUpdateInterval));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.PolicyUpdateInterval));
 
         try
         {

@@ -91,6 +91,8 @@ public class WorkerSystemTests
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
         public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
         public Task SendSystemEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
+        public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
+        public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
         public void Dispose() { }
     }
 
@@ -110,6 +112,7 @@ public class WorkerSystemTests
         public Task GenerateStatusReportAsync() => Task.CompletedTask;
         public Task LogEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
         public Task<string> GetSystemStatusAsync() => Task.FromResult("{}");
+        public Task ArchiveOldLogsAsync() => Task.CompletedTask;
     }
 
     private class StabilityStub : IStabilityService
@@ -117,5 +120,7 @@ public class WorkerSystemTests
         public bool IsHealthy => true;
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<bool> CheckHealthAsync() => Task.FromResult(true);
+        public Task RestartServiceAsync() => Task.CompletedTask;
     }
 }

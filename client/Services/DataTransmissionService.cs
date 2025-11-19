@@ -19,7 +19,12 @@ public class DataTransmissionService : IDataTransmissionService
     {
         _logger = logger;
         _settings = settings.Value;
-        _httpClient = new HttpClient();
+        var handler = new SocketsHttpHandler
+        {
+            UseProxy = false,
+            AllowAutoRedirect = false,
+        };
+        _httpClient = new HttpClient(handler);
         
         // Настройка HTTP клиента
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "BelfProctor/1.0");
@@ -30,6 +35,7 @@ public class DataTransmissionService : IDataTransmissionService
         if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var baseUri))
         {
             _httpClient.BaseAddress = baseUri;
+            _logger.LogInformation("HTTP BaseAddress: {BaseAddress}", _httpClient.BaseAddress);
         }
         else
         {
@@ -323,8 +329,8 @@ public class DataTransmissionService : IDataTransmissionService
 
     internal byte[] DeriveKeyFromPassword(string password)
     {
-        using var rfc2898 = new Rfc2898DeriveBytes(password, Encoding.UTF8.GetBytes("BelfProctorSalt"), 10000, HashAlgorithmName.SHA256);
-        return rfc2898.GetBytes(32); // 256-bit key
+        var salt = Encoding.UTF8.GetBytes("BelfProctorSalt");
+        return Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, 10000, HashAlgorithmName.SHA256, 32);
     }
 
     private static string NormalizeServerUrl(string? raw)

@@ -13,11 +13,13 @@ public class Program
     {
         var builder = Host.CreateApplicationBuilder(args);
 
+        var environment = builder.Environment.EnvironmentName;
         var possibleConfigs = new[]
         {
-            Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
             Path.Combine(builder.Environment.ContentRootPath, "client", "appsettings.json"),
-            Path.Combine(AppContext.BaseDirectory, "appsettings.json")
+            Path.Combine(builder.Environment.ContentRootPath, "client", $"appsettings.{environment}.json"),
+            Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
+            Path.Combine(builder.Environment.ContentRootPath, $"appsettings.{environment}.json")
         };
 
         foreach (var cfg in possibleConfigs)
