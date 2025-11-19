@@ -29,6 +29,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="ProctorWorker.cs" />
     <Compile Include="CommandChannelWorker.cs" />

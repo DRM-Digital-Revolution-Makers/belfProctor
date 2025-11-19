@@ -107,15 +107,45 @@ public class ProctorWorker : BackgroundService
 
     private async Task InitializeDirectories()
     {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        var screenshotPath = _settings.ScreenshotPath;
+        var logPath = _settings.LogPath;
+        var reportsPath = _settings.ReportsPath;
+
+        if (string.IsNullOrWhiteSpace(screenshotPath))
+        {
+            screenshotPath = Path.Combine(localAppData, "BelfProctor", "Screenshots");
+            _settings.ScreenshotPath = screenshotPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(logPath))
+        {
+            logPath = Path.Combine(localAppData, "BelfProctor", "Logs");
+            _settings.LogPath = logPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(reportsPath))
+        {
+            reportsPath = Path.Combine(localAppData, "BelfProctor", "Reports");
+            _settings.ReportsPath = reportsPath;
+        }
+
         var directories = new[]
         {
-            Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath),
-            Environment.ExpandEnvironmentVariables(_settings.LogPath),
-            Environment.ExpandEnvironmentVariables(_settings.ReportsPath)
+            Environment.ExpandEnvironmentVariables(screenshotPath),
+            Environment.ExpandEnvironmentVariables(logPath),
+            Environment.ExpandEnvironmentVariables(reportsPath)
         };
 
         foreach (var directory in directories)
         {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                _logger.LogError("Directory path is empty. Please configure paths in appsettings.json");
+                continue;
+            }
+
             if (!Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);

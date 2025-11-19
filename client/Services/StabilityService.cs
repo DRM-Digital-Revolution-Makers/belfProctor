@@ -67,7 +67,7 @@ public class StabilityService : BackgroundService, IStabilityService
         }
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public new Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting stability monitoring");
         IsHealthy = true;
@@ -75,7 +75,7 @@ public class StabilityService : BackgroundService, IStabilityService
         return Task.CompletedTask;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public new Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Stopping stability monitoring");
         _healthCheckTimer?.Dispose();

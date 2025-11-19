@@ -1,0 +1,44 @@
+[
+  {
+    "Id": "4a6e4f3a-c3f8-4fe3-910b-b2230bede27d",
+    "Name": "Default Process Control",
+    "CreatedAt": "2025-11-19T13:33:18.6648361+03:00",
+    "UpdatedAt": "2025-11-19T13:33:18.6648799+03:00",
+    "IsActive": true,
+    "Rules": [
+      {
+        "Id": "31d7fa42-166c-4116-b459-5f41ed0835b0",
+        "Type": 0,
+        "Action": 1,
+        "Target": "cmd.exe",
+        "Parameters": {},
+        "IsEnabled": true
+      },
+      {
+        "Id": "f96e4bfa-bf18-4d88-9935-8286e19580ad",
+        "Type": 0,
+        "Action": 1,
+        "Target": "powershell.exe",
+        "Parameters": {},
+        "IsEnabled": true
+      }
+    ]
+  },
+  {
+    "Id": "b4047c74-9a05-4131-a8df-321b7d2c115a",
+    "Name": "USB Control",
+    "CreatedAt": "2025-11-19T13:33:18.6652544+03:00",
+    "UpdatedAt": "2025-11-19T13:33:18.6652547+03:00",
+    "IsActive": true,
+    "Rules": [
+      {
+        "Id": "92a4a559-389f-42c5-a964-ed79111a49f0",
+        "Type": 1,
+        "Action": 2,
+        "Target": "*",
+        "Parameters": {},
+        "IsEnabled": true
+      }
+    ]
+  }
+]
