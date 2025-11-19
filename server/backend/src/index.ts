@@ -17,7 +17,8 @@ import { prisma } from "./prisma";
 import bcrypt from "bcryptjs";
 
 const app = express();
-const PORT = parseInt(process.env.PORT || "4000", 10);
+const PORT = parseInt(process.env.PORT || "8080", 10);
+const HOST = process.env.HOST || "0.0.0.0";
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
 
 // Ensure upload directories
@@ -26,7 +27,14 @@ fs.mkdirSync(path.join(UPLOAD_DIR, "screenshots"), { recursive: true });
 fs.mkdirSync(path.join(UPLOAD_DIR, "reports"), { recursive: true });
 
 app.use(helmet());
-app.use(cors({ origin: true, credentials: true }));
+const corsOptions: cors.CorsOptions = {
+  origin: true,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(morgan("combined"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -65,6 +73,6 @@ async function ensureAdmin() {
 
 ensureAdmin().catch(console.error);
 
-app.listen(PORT, () => {
-  console.log(`Backend listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST as any, () => {
+  console.log(`Backend listening on http://${HOST}:${PORT}`);
 });
