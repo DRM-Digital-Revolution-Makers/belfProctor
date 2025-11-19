@@ -25,6 +25,16 @@ public class DataTransmissionService : IDataTransmissionService
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "BelfProctor/1.0");
         _httpClient.DefaultRequestHeaders.Add("X-Client-Id", _settings.ClientId);
         _httpClient.Timeout = TimeSpan.FromMinutes(5);
+
+        var serverUrl = NormalizeServerUrl(_settings.ServerUrl);
+        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var baseUri))
+        {
+            _httpClient.BaseAddress = baseUri;
+        }
+        else
+        {
+            _logger.LogWarning("ServerUrl is not configured or invalid: {ServerUrl}", _settings.ServerUrl);
+        }
     }
 
     public async Task SendScreenshotAsync(string filePath)
@@ -45,7 +55,7 @@ public class DataTransmissionService : IDataTransmissionService
             content.Add(new StringContent(_settings.ClientId), "clientId");
             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/screenshots", content);
+            var response = await _httpClient.PostAsync("screenshots", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -72,7 +82,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/events", content);
+            var response = await _httpClient.PostAsync("events", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -107,7 +117,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/heartbeat", content);
+            var response = await _httpClient.PostAsync("heartbeat", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -128,7 +138,7 @@ public class DataTransmissionService : IDataTransmissionService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"{_settings.ServerUrl}/policies/{policyId}");
+            var response = await _httpClient.GetAsync($"policies/{policyId}");
             
             if (response.IsSuccessStatusCode)
             {
@@ -169,7 +179,7 @@ public class DataTransmissionService : IDataTransmissionService
             content.Add(new StringContent(_settings.ClientId), "clientId");
             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/reports", content);
+            var response = await _httpClient.PostAsync("reports", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -220,6 +230,65 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
+    public async Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes)
+    {
+        try
+        {
+            var encryptedData = EncryptData(jsonBytes);
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send command result json. Status: {StatusCode}", response.StatusCode);
+            }
+            else
+            {
+                _logger.LogDebug("Command result json sent successfully: {CommandId}", commandId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending command result json");
+        }
+    }
+
+    public async Task SendCommandResultFileAsync(string commandId, string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                _logger.LogWarning("Command result file not found: {FilePath}", filePath);
+                return;
+            }
+
+            var fileBytes = await File.ReadAllBytesAsync(filePath);
+            var encryptedData = EncryptData(fileBytes);
+            using var content = new MultipartFormDataContent();
+            content.Add(new ByteArrayContent(encryptedData), "file", Path.GetFileName(filePath));
+            content.Add(new StringContent(_settings.ClientId), "clientId");
+            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+
+            var response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send command result file. Status: {StatusCode}", response.StatusCode);
+            }
+            else
+            {
+                _logger.LogDebug("Command result file sent successfully: {CommandId}", commandId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending command result file");
+        }
+    }
+
     internal byte[] DecryptData(byte[] encryptedData)
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
@@ -256,6 +325,14 @@ public class DataTransmissionService : IDataTransmissionService
     {
         using var rfc2898 = new Rfc2898DeriveBytes(password, Encoding.UTF8.GetBytes("BelfProctorSalt"), 10000, HashAlgorithmName.SHA256);
         return rfc2898.GetBytes(32); // 256-bit key
+    }
+
+    private static string NormalizeServerUrl(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        raw = raw.Trim();
+        if (!raw.EndsWith("/")) raw += "/";
+        return raw;
     }
 
     public void Dispose()
