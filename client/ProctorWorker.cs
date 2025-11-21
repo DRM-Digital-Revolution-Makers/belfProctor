@@ -205,9 +205,10 @@ public class ProctorWorker : BackgroundService
     private void OnActivityChanged(object? sender, bool isActive)
     {
         var ms = (long)_activityMonitorService.ActiveElapsed.TotalMilliseconds;
+        var ims = (long)_activityMonitorService.InactiveElapsed.TotalMilliseconds;
         _ = Task.Run(async () =>
         {
-            try { await _dataTransmissionService.SendActivityAsync(isActive, ms); }
+            try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
             catch { }
         });
     }

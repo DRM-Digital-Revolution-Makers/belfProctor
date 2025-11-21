@@ -119,6 +119,7 @@ model Activity {
   timestamp         DateTime
   isActive          Boolean
   activeMilliseconds Int
+  inactiveMilliseconds Int @default(0)
   createdAt         DateTime @default(now())
 
   @@index([clientId, timestamp])

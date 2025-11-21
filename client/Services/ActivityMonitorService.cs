@@ -21,6 +21,7 @@ public class ActivityMonitorService : IActivityMonitorService
     private System.Threading.Timer? _timer;
     private bool _active;
     private readonly System.Diagnostics.Stopwatch _activeStopwatch = new();
+    private readonly System.Diagnostics.Stopwatch _inactiveStopwatch = new();
 
     public ActivityMonitorService(ILogger<ActivityMonitorService> logger)
     {
@@ -29,11 +30,14 @@ public class ActivityMonitorService : IActivityMonitorService
 
     public bool IsUserActive => _active;
     public TimeSpan ActiveElapsed => _activeStopwatch.Elapsed;
+    public TimeSpan InactiveElapsed => _inactiveStopwatch.Elapsed;
     public event EventHandler<bool>? ActivityChanged;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         UpdateState();
+        if (_active) { _activeStopwatch.Start(); _inactiveStopwatch.Stop(); }
+        else { _inactiveStopwatch.Start(); _activeStopwatch.Stop(); }
         _timer = new System.Threading.Timer(_ => UpdateState(), null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
         return Task.CompletedTask;
     }
@@ -42,10 +46,8 @@ public class ActivityMonitorService : IActivityMonitorService
     {
         _timer?.Dispose();
         _timer = null;
-        if (_active)
-        {
-            _activeStopwatch.Stop();
-        }
+        _activeStopwatch.Stop();
+        _inactiveStopwatch.Stop();
         return Task.CompletedTask;
     }
 
@@ -58,12 +60,14 @@ public class ActivityMonitorService : IActivityMonitorService
             if (nowActive != _active)
             {
                 _active = nowActive;
-                if (_active) _activeStopwatch.Start(); else _activeStopwatch.Stop();
+                if (_active) { _activeStopwatch.Start(); _inactiveStopwatch.Stop(); }
+                else { _activeStopwatch.Stop(); _inactiveStopwatch.Start(); }
                 ActivityChanged?.Invoke(this, _active);
             }
             else
             {
                 if (_active && !_activeStopwatch.IsRunning) _activeStopwatch.Start();
+                if (!_active && !_inactiveStopwatch.IsRunning) _inactiveStopwatch.Start();
             }
         }
     }

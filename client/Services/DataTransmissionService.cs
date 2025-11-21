@@ -105,7 +105,7 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    public async Task SendActivityAsync(bool isActive, long activeMilliseconds)
+    public async Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds)
     {
         try
         {
@@ -114,7 +114,8 @@ public class DataTransmissionService : IDataTransmissionService
                 ClientId = _settings.ClientId,
                 Timestamp = DateTime.UtcNow,
                 IsActive = isActive,
-                ActiveMilliseconds = activeMilliseconds
+                ActiveMilliseconds = activeMilliseconds,
+                InactiveMilliseconds = inactiveMilliseconds
             };
             var json = JsonConvert.SerializeObject(payload);
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));

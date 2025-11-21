@@ -24,6 +24,7 @@ router.post("/", async (req, res) => {
         timestamp: new Date(payload.Timestamp || payload.timestamp || Date.now()),
         isActive: Boolean(payload.IsActive ?? payload.isActive ?? false),
         activeMilliseconds: parseInt(String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0), 10),
+        inactiveMilliseconds: parseInt(String(payload.InactiveMilliseconds ?? payload.inactiveMilliseconds ?? 0), 10),
       },
     })
 
@@ -43,6 +44,11 @@ router.get("/", async (req, res) => {
     (prisma as any).activity.count({ where }),
   ])
   res.json({ data: items, total })
+})
+
+router.get("/latest", async (_req, res) => {
+  const items = await (prisma as any).activity.findMany({ orderBy: { timestamp: "desc" }, distinct: ["clientId"], take: 1000 })
+  res.json({ data: items })
 })
 
 export default router
