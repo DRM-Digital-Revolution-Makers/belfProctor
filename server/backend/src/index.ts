@@ -13,6 +13,7 @@ import eventsRouter from "./routes/events";
 import heartbeatRouter from "./routes/heartbeat";
 import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
+import activityRouter from "./routes/activity";
 import { prisma } from "./prisma";
 import bcrypt from "bcryptjs";
 
@@ -46,6 +47,7 @@ app.use("/api/", limiter);
 // Raw parser for octet-stream endpoints
 app.use("/api/events", express.raw({ type: "application/octet-stream", limit: "20mb" }));
 app.use("/api/heartbeat", express.raw({ type: "application/octet-stream", limit: "5mb" }));
+app.use("/api/activity", express.raw({ type: "application/octet-stream", limit: "2mb" }));
 
 // Routes
 app.use("/api/auth", authRouter);
@@ -54,6 +56,7 @@ app.use("/api/events", eventsRouter);
 app.use("/api/heartbeat", heartbeatRouter);
 app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
+app.use("/api/activity", activityRouter);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));

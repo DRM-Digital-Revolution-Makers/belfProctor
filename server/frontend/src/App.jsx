@@ -12,6 +12,7 @@ import EventsList from "./pages/EventsList.jsx";
 import ScreenshotsList from "./pages/ScreenshotsList.jsx";
 import ReportsList from "./pages/ReportsList.jsx";
 import PoliciesList from "./pages/PoliciesList.jsx";
+import ActivitiesList from "./pages/ActivitiesList.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
@@ -65,6 +66,7 @@ export default function App() {
         resources={[
           { name: "clients", list: "/clients" },
           { name: "events", list: "/events" },
+          { name: "activity", list: "/activity" },
           { name: "screenshots", list: "/screenshots" },
           { name: "reports", list: "/reports" },
           { name: "policies", list: "/policies" },
@@ -77,6 +79,7 @@ export default function App() {
               <Route path="/" element={<EventsList />} />
               <Route path="clients" element={<ClientsList />} />
               <Route path="events" element={<EventsList />} />
+              <Route path="activity" element={<ActivitiesList />} />
               <Route path="screenshots" element={<ScreenshotsList />} />
               <Route path="reports" element={<ReportsList />} />
               <Route path="policies" element={<PoliciesList />} />

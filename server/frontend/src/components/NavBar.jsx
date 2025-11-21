@@ -25,6 +25,7 @@ export default function NavBar() {
             items={[
               { key: "/events", label: <Link to="/events">События</Link> },
               { key: "/clients", label: <Link to="/clients">Клиенты</Link> },
+              { key: "/activity", label: <Link to="/activity">Активность</Link> },
               { key: "/screenshots", label: <Link to="/screenshots">Скриншоты</Link> },
               { key: "/reports", label: <Link to="/reports">Отчёты</Link> },
               { key: "/policies", label: <Link to="/policies">Политики</Link> },

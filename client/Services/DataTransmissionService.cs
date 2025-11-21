@@ -120,7 +120,7 @@ public class DataTransmissionService : IDataTransmissionService
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-            var response = await _httpClient.PostAsync("activity", content);
+            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/activity", content);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send activity. Status: {StatusCode}", response.StatusCode);
