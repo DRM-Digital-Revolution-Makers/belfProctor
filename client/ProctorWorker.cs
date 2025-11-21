@@ -75,9 +75,8 @@ public class ProctorWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var screenshotTimer = new Timer(async _ => await TakeScreenshot(), null, 
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.ScreenshotInterval));
-        
+        var screenshotLoop = RunScreenshotLoop(stoppingToken);
+
         var heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null,
             TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.HeartbeatInterval));
         
@@ -93,9 +92,20 @@ public class ProctorWorker : BackgroundService
         }
         finally
         {
-            screenshotTimer?.Dispose();
+            try { await screenshotLoop; } catch { }
             heartbeatTimer?.Dispose();
             policyUpdateTimer?.Dispose();
+        }
+    }
+
+    private async Task RunScreenshotLoop(CancellationToken ct)
+    {
+        var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(_settings.ScreenshotInterval));
+        // Немедленный снимок при старте
+        await TakeScreenshot();
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            await TakeScreenshot();
         }
     }
 
@@ -164,10 +174,7 @@ public class ProctorWorker : BackgroundService
     {
         try
         {
-            if (_activityMonitorService.IsUserActive)
-            {
-                await _screenshotService.CaptureScreenshotAsync();
-            }
+            await _screenshotService.CaptureScreenshotAsync();
         }
         catch (Exception ex)
         {
