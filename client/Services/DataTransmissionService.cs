@@ -61,7 +61,7 @@ public class DataTransmissionService : IDataTransmissionService
             content.Add(new StringContent(_settings.ClientId), "clientId");
             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync("screenshots", content);
+            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/screenshots", content);
             
             if (response.IsSuccessStatusCode)
             {
