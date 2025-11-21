@@ -42,6 +42,7 @@ public class Program
         
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
         builder.Services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
+        builder.Services.AddSingleton<IActivityMonitorService, ActivityMonitorService>();
         builder.Services.AddSingleton<IDataTransmissionService, DataTransmissionService>();
         builder.Services.AddSingleton<IPolicyService, PolicyService>();
         builder.Services.AddSingleton<IReportingService, ReportingService>();

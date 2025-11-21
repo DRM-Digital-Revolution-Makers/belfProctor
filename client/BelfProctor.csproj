@@ -45,6 +45,7 @@
     <Compile Include="Models\Command.cs" />
     <Compile Include="Services\DataTransmissionService.cs" />
     <Compile Include="Services\IDataTransmissionService.cs" />
+    <Compile Include="Services\IActivityMonitorService.cs" />
     <Compile Include="Services\IPolicyService.cs" />
     <Compile Include="Services\IReportingService.cs" />
     <Compile Include="Services\IScreenshotService.cs" />
@@ -56,6 +57,7 @@
     <Compile Include="Services\ScreenshotService.cs" />
     <Compile Include="Services\StabilityService.cs" />
     <Compile Include="Services\SystemMonitorService.cs" />
+    <Compile Include="Services\ActivityMonitorService.cs" />
   </ItemGroup>
 
 </Project>

@@ -18,6 +18,7 @@ public class ProctorWorker : BackgroundService
     private readonly IPolicyService _policyService;
     private readonly IReportingService _reportingService;
     private readonly IStabilityService _stabilityService;
+    private readonly IActivityMonitorService _activityMonitorService;
 
     public ProctorWorker(
         ILogger<ProctorWorker> logger,
@@ -27,7 +28,8 @@ public class ProctorWorker : BackgroundService
         IDataTransmissionService dataTransmissionService,
         IPolicyService policyService,
         IReportingService reportingService,
-        IStabilityService stabilityService)
+        IStabilityService stabilityService,
+        IActivityMonitorService activityMonitorService)
     {
         _logger = logger;
         _settings = settings.Value;
@@ -37,6 +39,7 @@ public class ProctorWorker : BackgroundService
         _policyService = policyService;
         _reportingService = reportingService;
         _stabilityService = stabilityService;
+        _activityMonitorService = activityMonitorService;
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -53,6 +56,8 @@ public class ProctorWorker : BackgroundService
             
             // Запуск системного мониторинга
             await _systemMonitorService.StartAsync(cancellationToken);
+            await _activityMonitorService.StartAsync(cancellationToken);
+            _activityMonitorService.ActivityChanged += OnActivityChanged;
             
             // Загрузка политик безопасности
             await _policyService.LoadPoliciesAsync();
@@ -100,6 +105,7 @@ public class ProctorWorker : BackgroundService
         
         await _systemMonitorService.StopAsync(cancellationToken);
         await _stabilityService.StopAsync(cancellationToken);
+        _activityMonitorService.ActivityChanged -= OnActivityChanged;
         
         _logger.LogInformation("BelfProctor service stopped");
         await base.StopAsync(cancellationToken);
@@ -158,7 +164,10 @@ public class ProctorWorker : BackgroundService
     {
         try
         {
-            await _screenshotService.CaptureScreenshotAsync();
+            if (_activityMonitorService.IsUserActive)
+            {
+                await _screenshotService.CaptureScreenshotAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -182,11 +191,24 @@ public class ProctorWorker : BackgroundService
     {
         try
         {
-            await _policyService.UpdatePoliciesFromServerAsync();
+            if (_activityMonitorService.IsUserActive)
+            {
+                await _policyService.UpdatePoliciesFromServerAsync();
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update policies");
         }
+    }
+
+    private void OnActivityChanged(object? sender, bool isActive)
+    {
+        var ms = (long)_activityMonitorService.ActiveElapsed.TotalMilliseconds;
+        _ = Task.Run(async () =>
+        {
+            try { await _dataTransmissionService.SendActivityAsync(isActive, ms); }
+            catch { }
+        });
     }
 }

@@ -105,6 +105,37 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
+    public async Task SendActivityAsync(bool isActive, long activeMilliseconds)
+    {
+        try
+        {
+            var payload = new
+            {
+                ClientId = _settings.ClientId,
+                Timestamp = DateTime.UtcNow,
+                IsActive = isActive,
+                ActiveMilliseconds = activeMilliseconds
+            };
+            var json = JsonConvert.SerializeObject(payload);
+            var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+            var response = await _httpClient.PostAsync("activity", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send activity. Status: {StatusCode}", response.StatusCode);
+            }
+            else
+            {
+                _logger.LogDebug("Activity sent: {IsActive} {Ms}", isActive, activeMilliseconds);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending activity");
+        }
+    }
+
     public async Task SendHeartbeatAsync()
     {
         try

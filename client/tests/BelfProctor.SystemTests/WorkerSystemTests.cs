@@ -35,6 +35,7 @@ public class WorkerSystemTests
         var policyStub = new PolicyStub();
         var reportingStub = new ReportingStub();
         var stabilityStub = new StabilityStub();
+        var activityStub = new ActivityStub();
 
         var worker = new BelfProctor.ProctorWorker(
             new NullLogger<BelfProctor.ProctorWorker>(),
@@ -44,7 +45,8 @@ public class WorkerSystemTests
             transmissionStub,
             policyStub,
             reportingStub,
-            stabilityStub
+            stabilityStub,
+            activityStub
         );
 
         using var cts = new CancellationTokenSource();
@@ -93,6 +95,7 @@ public class WorkerSystemTests
         public Task SendSystemEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
         public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
+        public Task SendActivityAsync(bool isActive, long activeMilliseconds) => Task.CompletedTask;
         public void Dispose() { }
     }
 
@@ -122,5 +125,14 @@ public class WorkerSystemTests
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<bool> CheckHealthAsync() => Task.FromResult(true);
         public Task RestartServiceAsync() => Task.CompletedTask;
+    }
+
+    private class ActivityStub : IActivityMonitorService
+    {
+        public bool IsUserActive { get; set; } = true;
+        public TimeSpan ActiveElapsed => TimeSpan.Zero;
+        public event EventHandler<bool>? ActivityChanged;
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
