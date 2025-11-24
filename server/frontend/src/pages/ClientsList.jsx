@@ -5,6 +5,7 @@ import { Table, Modal, Form, Input, Button, message, Alert } from "antd";
 export default function ClientsList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
   const [data, setData] = React.useState([]);
+  const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [lastCreated, setLastCreated] = React.useState(null);
@@ -22,6 +23,10 @@ export default function ClientsList() {
         setData(Array.isArray(json) ? json : []);
       })
       .catch(() => setData([]));
+    fetch(`${API_URL}/heartbeat/latest`, { headers })
+      .then((r) => r.json())
+      .then((json) => { setLatestHeartbeats(json.data || []); })
+      .catch(() => { setLatestHeartbeats([]); });
   }, [API_URL]);
 
   React.useEffect(() => { load(); }, [load]);
@@ -73,6 +78,11 @@ export default function ClientsList() {
         { title: "ClientId", dataIndex: "id" },
         { title: "Создан", dataIndex: "createdAt" },
         { title: "Обновлён", dataIndex: "updatedAt" },
+        { title: "Статус", render: (_, r) => {
+          const hb = latestHeartbeats.find((h) => h.clientId === r.id);
+          const online = hb && (Date.now() - new Date(hb.timestamp).getTime()) < 3 * 60 * 1000;
+          return online ? <span style={{ color: "#52c41a" }}>Подключен</span> : <span style={{ color: "#ff4d4f" }}>Отключен</span>;
+        } },
       ]} />
       <Modal open={open} title="Новый клиент" onCancel={() => setOpen(false)} onOk={onCreate} confirmLoading={loading} okText="Создать">
         <Form form={form} layout="vertical">

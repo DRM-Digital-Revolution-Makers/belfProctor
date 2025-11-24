@@ -45,4 +45,9 @@ router.get("/", async (req, res) => {
   res.json({ data: items, total });
 });
 
+router.get("/latest", async (_req, res) => {
+  const items = await prisma.heartbeat.findMany({ orderBy: { timestamp: "desc" }, distinct: ["clientId"], take: 1000 });
+  res.json({ data: items });
+});
+
 export default router;

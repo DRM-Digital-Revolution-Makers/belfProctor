@@ -5,14 +5,33 @@ import { Table, Tag } from "antd"
 export default function ActivitiesList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`
   const [items, setItems] = React.useState([])
+  const [latestHeartbeats, setLatestHeartbeats] = React.useState([])
 
   const fetchLatest = React.useCallback(() => {
     const token = localStorage.getItem("token")
     const headers = token ? { Authorization: `Bearer ${token}` } : {}
-    fetch(`${API_URL}/activity/latest`, { headers })
-      .then((r) => r.json())
-      .then((json) => { setItems(json.data || []) })
-      .catch(() => { setItems([]) })
+    const ts = Date.now()
+    fetch(`${API_URL}/activity/latest?ts=${ts}`, { headers, cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => { if (json) setItems(json.data || []) })
+      .catch(() => { /* keep previous items */ })
+    fetch(`${API_URL}/heartbeat/latest?ts=${ts}`, { headers, cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => { if (json) setLatestHeartbeats(json.data || []) })
+      .catch(() => { /* keep previous hb */ })
+    fetch(`${API_URL}/activity?page=1&pageSize=50&ts=${ts}`, { headers, cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (json && (!items || items.length === 0)) {
+          const arr = Array.isArray(json.data) ? json.data : []
+          const map = new Map()
+          for (const rec of arr) {
+            if (!map.has(rec.clientId)) map.set(rec.clientId, rec)
+          }
+          setItems(Array.from(map.values()))
+        }
+      })
+      .catch(() => { /* keep previous items */ })
   }, [API_URL])
 
   React.useEffect(() => {
@@ -47,7 +66,7 @@ export default function ActivitiesList() {
   return (
     <List title="Активность (реальное время)">
       <Table
-        rowKey={(r) => `${r.clientId}-${r.id}`}
+        rowKey="clientId"
         dataSource={Array.isArray(items) ? items : []}
         size="large"
         pagination={false}
@@ -55,6 +74,11 @@ export default function ActivitiesList() {
           { title: "ClientId", dataIndex: "clientId" },
           { title: "Время", dataIndex: "timestamp" },
           { title: "Активность", dataIndex: "isActive", render: (v) => v ? <Tag color="green">Активен</Tag> : <Tag color="red">Неактивен</Tag> },
+          { title: "Статус", render: (_, r) => {
+            const hb = latestHeartbeats.find((h) => h.clientId === r.clientId)
+            const online = hb && (Date.now() - new Date(hb.timestamp).getTime()) < 3 * 60 * 1000
+            return online ? <Tag color="green">Подключен</Tag> : <Tag color="red">Отключен</Tag>
+          } },
           { title: "Таймеры", render: (_, r) => renderDuration(r) },
         ]}
       />
