@@ -95,7 +95,7 @@ public class WorkerSystemTests
         public Task SendSystemEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
         public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
-        public Task SendActivityAsync(bool isActive, long activeMilliseconds) => Task.CompletedTask;
+        public Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds) => Task.CompletedTask;
         public void Dispose() { }
     }
 
@@ -131,6 +131,8 @@ public class WorkerSystemTests
     {
         public bool IsUserActive { get; set; } = true;
         public TimeSpan ActiveElapsed => TimeSpan.Zero;
+        public TimeSpan InactiveElapsed => TimeSpan.Zero;
+        public event EventHandler<bool>? ActivityChanged;
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }

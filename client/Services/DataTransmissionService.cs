@@ -12,6 +12,15 @@ public class DataTransmissionService : IDataTransmissionService
     private readonly ILogger<DataTransmissionService> _logger;
     private readonly ProctorSettings _settings;
     private readonly HttpClient _httpClient;
+    private readonly string _pendingBase;
+    private readonly string _pendingScreenshots;
+    private readonly string _pendingReports;
+    private readonly string _pendingEvents;
+    private readonly string _pendingActivity;
+    private readonly string _pendingHeartbeats;
+    private readonly string _pendingCmdJson;
+    private readonly string _pendingCmdFiles;
+    private System.Threading.Timer? _retryTimer;
 
     public DataTransmissionService(
         ILogger<DataTransmissionService> logger,
@@ -41,6 +50,24 @@ public class DataTransmissionService : IDataTransmissionService
         {
             _logger.LogWarning("ServerUrl is not configured or invalid: {ServerUrl}", _settings.ServerUrl);
         }
+
+        var logBase = Environment.ExpandEnvironmentVariables(_settings.LogPath);
+        _pendingBase = Path.Combine(logBase, "Pending");
+        _pendingScreenshots = Path.Combine(_pendingBase, "Screenshots");
+        _pendingReports = Path.Combine(_pendingBase, "Reports");
+        _pendingEvents = Path.Combine(_pendingBase, "Events");
+        _pendingActivity = Path.Combine(_pendingBase, "Activity");
+        _pendingHeartbeats = Path.Combine(_pendingBase, "Heartbeats");
+        _pendingCmdJson = Path.Combine(_pendingBase, "CmdJson");
+        _pendingCmdFiles = Path.Combine(_pendingBase, "CmdFiles");
+        Directory.CreateDirectory(_pendingScreenshots);
+        Directory.CreateDirectory(_pendingReports);
+        Directory.CreateDirectory(_pendingEvents);
+        Directory.CreateDirectory(_pendingActivity);
+        Directory.CreateDirectory(_pendingHeartbeats);
+        Directory.CreateDirectory(_pendingCmdJson);
+        Directory.CreateDirectory(_pendingCmdFiles);
+        _retryTimer = new System.Threading.Timer(_ => { try { FlushPendingAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
     }
 
     public async Task SendScreenshotAsync(string filePath)
@@ -61,7 +88,7 @@ public class DataTransmissionService : IDataTransmissionService
             content.Add(new StringContent(_settings.ClientId), "clientId");
             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/screenshots", content);
+            var response = await _httpClient.PostAsync("screenshots", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -70,11 +97,15 @@ public class DataTransmissionService : IDataTransmissionService
             else
             {
                 _logger.LogWarning("Failed to send screenshot. Status: {StatusCode}", response.StatusCode);
+                var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
+                try { File.Move(filePath, dest, true); } catch { }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending screenshot: {FilePath}", filePath);
+            var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
+            try { if (File.Exists(filePath)) File.Move(filePath, dest, true); } catch { }
         }
     }
 
@@ -97,11 +128,14 @@ public class DataTransmissionService : IDataTransmissionService
             else
             {
                 _logger.LogWarning("Failed to send system event. Status: {StatusCode}", response.StatusCode);
+                var name = Path.Combine(_pendingEvents, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json");
+                try { await File.WriteAllTextAsync(name, json); } catch { }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending system event: {EventType}", systemEvent.EventType);
+            try { var name = Path.Combine(_pendingEvents, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(systemEvent)); } catch { }
         }
     }
 
@@ -121,10 +155,11 @@ public class DataTransmissionService : IDataTransmissionService
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-            var response = await _httpClient.PostAsync($"{_settings.ServerUrl}/activity", content);
+            var response = await _httpClient.PostAsync("activity", content);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send activity. Status: {StatusCode}", response.StatusCode);
+                try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
             }
             else
             {
@@ -134,6 +169,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending activity");
+            try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { IsActive = isActive, ActiveMilliseconds = activeMilliseconds, InactiveMilliseconds = inactiveMilliseconds })); } catch { }
         }
     }
 
@@ -164,11 +200,13 @@ public class DataTransmissionService : IDataTransmissionService
             else
             {
                 _logger.LogWarning("Failed to send heartbeat. Status: {StatusCode}", response.StatusCode);
+                try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
+            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.UtcNow, Status = "Online", Version = "1.0.0" })); } catch { }
         }
     }
 
@@ -226,11 +264,15 @@ public class DataTransmissionService : IDataTransmissionService
             else
             {
                 _logger.LogWarning("Failed to send report. Status: {StatusCode}", response.StatusCode);
+                var dest = Path.Combine(_pendingReports, Path.GetFileName(reportPath));
+                try { File.Move(reportPath, dest, true); } catch { }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending report: {ReportPath}", reportPath);
+            var dest = Path.Combine(_pendingReports, Path.GetFileName(reportPath));
+            try { if (File.Exists(reportPath)) File.Move(reportPath, dest, true); } catch { }
         }
     }
 
@@ -281,6 +323,8 @@ public class DataTransmissionService : IDataTransmissionService
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send command result json. Status: {StatusCode}", response.StatusCode);
+                var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
+                try { await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
             }
             else
             {
@@ -290,6 +334,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending command result json");
+            try { var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
         }
     }
 
@@ -315,6 +360,8 @@ public class DataTransmissionService : IDataTransmissionService
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send command result file. Status: {StatusCode}", response.StatusCode);
+                var destName = Path.Combine(_pendingCmdFiles, $"cmd_{commandId}_{Path.GetFileName(filePath)}");
+                try { File.Move(filePath, destName, true); } catch { }
             }
             else
             {
@@ -324,6 +371,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending command result file");
+            try { var destName = Path.Combine(_pendingCmdFiles, $"cmd_{commandId}_{Path.GetFileName(filePath)}"); if (File.Exists(filePath)) File.Move(filePath, destName, true); } catch { }
         }
     }
 
@@ -376,5 +424,129 @@ public class DataTransmissionService : IDataTransmissionService
     public void Dispose()
     {
         _httpClient?.Dispose();
+        _retryTimer?.Dispose();
+    }
+
+    private async Task FlushPendingAsync()
+    {
+        try
+        {
+            foreach (var file in Directory.GetFiles(_pendingScreenshots))
+            {
+                try
+                {
+                    var fileBytes = await File.ReadAllBytesAsync(file);
+                    var encrypted = EncryptData(fileBytes);
+                    using var content = new MultipartFormDataContent();
+                    content.Add(new ByteArrayContent(encrypted), "screenshot", Path.GetFileName(file));
+                    content.Add(new StringContent(_settings.ClientId), "clientId");
+                    content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                    var resp = await _httpClient.PostAsync("screenshots", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingReports))
+            {
+                try
+                {
+                    var fileBytes = await File.ReadAllBytesAsync(file);
+                    var encrypted = EncryptData(fileBytes);
+                    using var content = new MultipartFormDataContent();
+                    content.Add(new ByteArrayContent(encrypted), "report", Path.GetFileName(file));
+                    content.Add(new StringContent(_settings.ClientId), "clientId");
+                    content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                    var resp = await _httpClient.PostAsync("reports", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingEvents, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await _httpClient.PostAsync("events", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingActivity, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await _httpClient.PostAsync("activity", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingHeartbeats, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await _httpClient.PostAsync("heartbeat", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingCmdJson, "cmd_*.json"))
+            {
+                try
+                {
+                    var name = Path.GetFileName(file);
+                    var parts = name.Split('_');
+                    if (parts.Length >= 3)
+                    {
+                        var cmdId = parts[1];
+                        var jsonBytes = await File.ReadAllBytesAsync(file);
+                        var encrypted = EncryptData(jsonBytes);
+                        using var content = new ByteArrayContent(encrypted);
+                        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
+                        if (resp.IsSuccessStatusCode) File.Delete(file);
+                    }
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingCmdFiles, "cmd_*"))
+            {
+                try
+                {
+                    var name = Path.GetFileName(file);
+                    var parts = name.Split('_');
+                    if (parts.Length >= 3)
+                    {
+                        var cmdId = parts[1];
+                        var fileBytes = await File.ReadAllBytesAsync(file);
+                        var encrypted = EncryptData(fileBytes);
+                        using var content = new MultipartFormDataContent();
+                        content.Add(new ByteArrayContent(encrypted), "file", Path.GetFileName(file));
+                        content.Add(new StringContent(_settings.ClientId), "clientId");
+                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
+                        if (resp.IsSuccessStatusCode) File.Delete(file);
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 }
