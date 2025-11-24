@@ -6,7 +6,8 @@ import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
+import { IncomingMessage } from "http";
 
 import authRouter from "./routes/auth";
 import clientsRouter from "./routes/clients";
@@ -113,9 +114,9 @@ const server = app.listen(PORT, HOST as any, () => {
 });
 
 // WebSocket server for commands
-const clients = new Map<string, import("ws").WebSocket>();
+const clients = new Map<string, WebSocket>();
 const wss = new WebSocketServer({ server });
-wss.on("connection", (socket, req) => {
+wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const clientId = url.searchParams.get("clientId") || "";
