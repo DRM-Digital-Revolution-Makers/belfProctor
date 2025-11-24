@@ -93,5 +93,6 @@ public class CommandHandlerTests
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) { JsonCalls++; return Task.CompletedTask; }
         public Task SendCommandResultFileAsync(string commandId, string filePath) { FileCalls.Add((commandId, filePath)); return Task.CompletedTask; }
+        public Task SendActivityAsync(bool isActive, long cpuUsage, long memoryUsage) => Task.CompletedTask;
     }
 }

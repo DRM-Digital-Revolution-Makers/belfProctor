@@ -71,16 +71,17 @@ public class SystemMonitorService : ISystemMonitorService
         await Task.CompletedTask;
     }
 
-    public async Task<List<SystemEvent>> GetRecentEventsAsync(TimeSpan timeSpan)
+    public Task<List<SystemEvent>> GetRecentEventsAsync(TimeSpan timeSpan)
     {
         var cutoffTime = DateTime.Now - timeSpan;
         
         lock (_eventsLock)
         {
-            return _recentEvents
+            var list = _recentEvents
                 .Where(e => e.Timestamp >= cutoffTime)
                 .OrderByDescending(e => e.Timestamp)
                 .ToList();
+            return Task.FromResult(list);
         }
     }
 

@@ -131,7 +131,6 @@ public class WorkerSystemTests
     {
         public bool IsUserActive { get; set; } = true;
         public TimeSpan ActiveElapsed => TimeSpan.Zero;
-        public event EventHandler<bool>? ActivityChanged;
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }

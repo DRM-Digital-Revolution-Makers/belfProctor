@@ -134,11 +134,11 @@ public class PolicyService : IPolicyService
         }
     }
 
-    public async Task<List<SecurityPolicy>> GetActivePoliciesAsync()
+    public Task<List<SecurityPolicy>> GetActivePoliciesAsync()
     {
         lock (_policiesLock)
         {
-            return _activePolicies.ToList();
+            return Task.FromResult(_activePolicies.ToList());
         }
     }
 
@@ -169,32 +169,32 @@ public class PolicyService : IPolicyService
         }
     }
 
-    private async Task<bool> IsRuleViolatedAsync(PolicyRule rule, SystemEvent systemEvent)
+    private Task<bool> IsRuleViolatedAsync(PolicyRule rule, SystemEvent systemEvent)
     {
         try
         {
             switch (rule.Type)
             {
                 case PolicyRuleType.ProcessControl:
-                    return CheckProcessRule(rule, systemEvent);
+                    return Task.FromResult(CheckProcessRule(rule, systemEvent));
                 
                 case PolicyRuleType.USBControl:
-                    return CheckUSBRule(rule, systemEvent);
+                    return Task.FromResult(CheckUSBRule(rule, systemEvent));
                 
                 case PolicyRuleType.NetworkControl:
-                    return CheckNetworkRule(rule, systemEvent);
+                    return Task.FromResult(CheckNetworkRule(rule, systemEvent));
                 
                 case PolicyRuleType.FileAccess:
-                    return CheckFileAccessRule(rule, systemEvent);
+                    return Task.FromResult(CheckFileAccessRule(rule, systemEvent));
                 
                 default:
-                    return false;
+                    return Task.FromResult(false);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error checking rule violation: {RuleId}", rule.Id);
-            return false;
+            return Task.FromResult(false);
         }
     }
 

@@ -217,7 +217,7 @@ public class StabilityService : BackgroundService, IStabilityService
         _lastHeartbeat = DateTime.UtcNow;
     }
 
-    private async Task<bool> CheckServiceResponsiveness()
+    private Task<bool> CheckServiceResponsiveness()
     {
         try
         {
@@ -226,15 +226,15 @@ public class StabilityService : BackgroundService, IStabilityService
             if (timeSinceLastHeartbeat > TimeSpan.FromMinutes(2))
             {
                 _logger.LogWarning("Service appears unresponsive. Last heartbeat: {LastHeartbeat}", _lastHeartbeat);
-                return false;
+                return Task.FromResult(false);
             }
 
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error checking service responsiveness");
-            return false;
+            return Task.FromResult(false);
         }
     }
 
@@ -263,7 +263,7 @@ public class StabilityService : BackgroundService, IStabilityService
         }
     }
 
-    private async Task<bool> CheckMemoryUsage()
+    private Task<bool> CheckMemoryUsage()
     {
         try
         {
@@ -274,19 +274,19 @@ public class StabilityService : BackgroundService, IStabilityService
             if (memoryUsageMB > 800)
             {
                 _logger.LogWarning("High memory usage: {MemoryMB} MB", memoryUsageMB);
-                return false;
+                return Task.FromResult(false);
             }
 
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error checking memory usage");
-            return false;
+            return Task.FromResult(false);
         }
     }
 
-    private async Task<bool> CheckCriticalFiles()
+    private Task<bool> CheckCriticalFiles()
     {
         try
         {
@@ -306,12 +306,12 @@ public class StabilityService : BackgroundService, IStabilityService
                 }
             }
 
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error checking critical files");
-            return false;
+            return Task.FromResult(false);
         }
     }
 
@@ -428,7 +428,7 @@ public class StabilityService : BackgroundService, IStabilityService
         }
     }
 
-    private async Task CleanupOldFilesAsync()
+    private Task CleanupOldFilesAsync()
     {
         try
         {
@@ -458,6 +458,7 @@ public class StabilityService : BackgroundService, IStabilityService
         {
             _logger.LogError(ex, "Error during cleanup");
         }
+        return Task.CompletedTask;
     }
 
     public override void Dispose()

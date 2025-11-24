@@ -69,5 +69,6 @@ public class PolicyServiceTests
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;
         public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
+        public Task SendActivityAsync(bool isActive, long timestamp, long sessionId) => Task.CompletedTask;
     }
 }

@@ -208,7 +208,7 @@ public class ReportingService : IReportingService
         });
     }
 
-    private async Task<object> GetStatisticsAsync()
+private Task<object> GetStatisticsAsync()
     {
         try
         {
@@ -216,18 +216,18 @@ public class ReportingService : IReportingService
             var logFiles = Directory.GetFiles(_settings.LogPath, "events_*.log");
             var totalLogSize = logFiles.Sum(f => new FileInfo(f).Length);
 
-            return new
+            return Task.FromResult<object>(new
             {
                 ScreenshotsCount = screenshotCount,
                 LogFilesCount = logFiles.Length,
                 TotalLogSize = totalLogSize,
                 UptimeHours = (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalHours
-            };
+            });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get statistics");
-            return new { Error = "Failed to retrieve statistics" };
+            return Task.FromResult<object>(new { Error = "Failed to retrieve statistics" });
         }
     }
 
@@ -304,41 +304,41 @@ public class ReportingService : IReportingService
         return DateTime.MinValue;
     }
 
-    private async Task<object> GetDiskSpaceInfoAsync()
+private Task<object> GetDiskSpaceInfoAsync()
     {
         try
         {
             var drive = new DriveInfo(Path.GetPathRoot(_settings.LogPath) ?? "C:\\");
-            return new
+            return Task.FromResult<object>(new
             {
                 TotalSize = drive.TotalSize,
                 AvailableSpace = drive.AvailableFreeSpace,
                 UsedSpace = drive.TotalSize - drive.AvailableFreeSpace
-            };
+            });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get disk space info");
-            return new { Error = "Failed to retrieve disk space info" };
+            return Task.FromResult<object>(new { Error = "Failed to retrieve disk space info" });
         }
     }
 
-    private async Task<object> GetMemoryInfoAsync()
+private Task<object> GetMemoryInfoAsync()
     {
         try
         {
             var process = Process.GetCurrentProcess();
-            return new
+            return Task.FromResult<object>(new
             {
                 WorkingSet = process.WorkingSet64,
                 PrivateMemorySize = process.PrivateMemorySize64,
                 VirtualMemorySize = process.VirtualMemorySize64
-            };
+            });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get memory info");
-            return new { Error = "Failed to retrieve memory info" };
+            return Task.FromResult<object>(new { Error = "Failed to retrieve memory info" });
         }
     }
 
@@ -362,7 +362,7 @@ public class ReportingService : IReportingService
         return 0;
     }
 
-    private async Task CheckLogFileSizeAsync()
+private Task CheckLogFileSizeAsync()
     {
         try
         {
@@ -385,5 +385,6 @@ public class ReportingService : IReportingService
         {
             _logger.LogError(ex, "Failed to check log file size");
         }
+        return Task.CompletedTask;
     }
 }
