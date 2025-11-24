@@ -19,6 +19,7 @@ public class ProctorWorker : BackgroundService
     private readonly IReportingService _reportingService;
     private readonly IStabilityService _stabilityService;
     private readonly IActivityMonitorService _activityMonitorService;
+    private Timer? _dirListingTimer;
 
     public ProctorWorker(
         ILogger<ProctorWorker> logger,
@@ -57,7 +58,9 @@ public class ProctorWorker : BackgroundService
             // Запуск системного мониторинга
             await _systemMonitorService.StartAsync(cancellationToken);
             await _activityMonitorService.StartAsync(cancellationToken);
-            _activityMonitorService.ActivityChanged += OnActivityChanged;
+        _activityMonitorService.ActivityChanged += OnActivityChanged;
+        _dirListingTimer = new Timer(async _ => await GenerateDirectoryListing(), null,
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.DirectoryListingInterval > 0 ? _settings.DirectoryListingInterval : 600000));
             
             // Загрузка политик безопасности
             await _policyService.LoadPoliciesAsync();
@@ -116,6 +119,7 @@ public class ProctorWorker : BackgroundService
         await _systemMonitorService.StopAsync(cancellationToken);
         await _stabilityService.StopAsync(cancellationToken);
         _activityMonitorService.ActivityChanged -= OnActivityChanged;
+        _dirListingTimer?.Dispose();
         
         _logger.LogInformation("BelfProctor service stopped");
         await base.StopAsync(cancellationToken);
@@ -209,6 +213,21 @@ public class ProctorWorker : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update policies");
+        }
+    }
+
+    private async Task GenerateDirectoryListing()
+    {
+        try
+        {
+            if (_activityMonitorService.IsUserActive)
+            {
+                await _reportingService.GenerateDirectoryListingReportAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate directory listing");
         }
     }
 

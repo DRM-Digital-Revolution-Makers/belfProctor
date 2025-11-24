@@ -195,6 +195,52 @@ public class ReportingService : IReportingService
         }
     }
 
+    public async Task GenerateDirectoryListingReportAsync()
+    {
+        try
+        {
+            var roots = (_settings.DirectoryRoots != null && _settings.DirectoryRoots.Count > 0)
+                ? _settings.DirectoryRoots
+                : new List<string> { _settings.ScreenshotPath, _settings.LogPath, _settings.ReportsPath };
+
+            var result = new List<object>();
+            foreach (var root in roots)
+            {
+                var basePath = Environment.ExpandEnvironmentVariables(root ?? "");
+                if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(basePath)) continue;
+                var dirs = Directory.EnumerateDirectories(basePath).Select(d =>
+                {
+                    var di = new DirectoryInfo(d);
+                    return new { name = di.Name, fullPath = di.FullName, lastWriteTime = di.LastWriteTimeUtc };
+                }).ToList();
+                var files = Directory.EnumerateFiles(basePath).Select(f =>
+                {
+                    var fi = new FileInfo(f);
+                    return new { name = fi.Name, fullPath = fi.FullName, size = fi.Length, lastWriteTime = fi.LastWriteTimeUtc };
+                }).ToList();
+                result.Add(new { root = basePath, directories = dirs, files = files });
+            }
+
+            var report = new
+            {
+                Timestamp = DateTime.UtcNow,
+                ClientId = _settings.ClientId,
+                Type = "DirectoryListing",
+                Roots = roots,
+                Entries = result
+            };
+
+            var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
+            var reportPath = Path.Combine(_settings.ReportsPath, $"dir_listing_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            await File.WriteAllTextAsync(reportPath, reportJson);
+            await _dataTransmissionService.SendReportAsync(reportPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate directory listing report");
+        }
+    }
+
     private async Task<object> GetSystemInfoAsync()
     {
         return await Task.FromResult(new

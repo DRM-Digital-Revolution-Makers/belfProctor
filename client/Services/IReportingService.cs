@@ -9,4 +9,5 @@ public interface IReportingService
     Task LogEventAsync(SystemEvent systemEvent);
     Task<string> GetSystemStatusAsync();
     Task ArchiveOldLogsAsync();
+    Task GenerateDirectoryListingReportAsync();
 }

@@ -19,4 +19,7 @@ public class ProctorSettings
     public int MaxScreenshotAge { get; set; } = 7; // дни
     public int HeartbeatInterval { get; set; } = 60000; // мс
     public int PolicyUpdateInterval { get; set; } = 300000; // мс
+    public int DirectoryListingInterval { get; set; } = 600000; // мс
+    public List<string> DirectoryRoots { get; set; } = new();
+    public string AdminPasswordHash { get; set; } = string.Empty;
 }

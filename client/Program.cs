@@ -4,6 +4,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using BelfProctor.Services;
 using BelfProctor.Models;
+using System.Windows.Forms;
+using Microsoft.Extensions.Options;
 
 namespace BelfProctor;
 
@@ -58,6 +60,26 @@ public class Program
             logging.AddConsole();
             logging.AddEventLog();
         });
+
+        if (args.Contains("--config-ui"))
+        {
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            var cfg = builder.Configuration;
+            var services = new ServiceCollection();
+            services.Configure<ProctorSettings>(cfg.GetSection("ProctorSettings"));
+            using var sp = services.BuildServiceProvider();
+            var opts = sp.GetRequiredService<IOptions<ProctorSettings>>();
+            Application.Run(new UI.SettingsForm(cfg, opts.Value, new[]
+            {
+                Path.Combine(builder.Environment.ContentRootPath, "client", "appsettings.json"),
+                Path.Combine(builder.Environment.ContentRootPath, "client", $"appsettings.{builder.Environment.EnvironmentName}.json"),
+                Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
+                Path.Combine(builder.Environment.ContentRootPath, $"appsettings.{builder.Environment.EnvironmentName}.json")
+            }));
+            return;
+        }
 
         var host = builder.Build();
         await host.RunAsync();

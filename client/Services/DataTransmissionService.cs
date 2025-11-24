@@ -182,7 +182,15 @@ public class DataTransmissionService : IDataTransmissionService
                 ClientId = _settings.ClientId,
                 Timestamp = DateTime.UtcNow,
                 Status = "Online",
-                Version = "1.0.0"
+                Version = "1.0.0",
+                Machine = Environment.MachineName,
+                OS = Environment.OSVersion.ToString(),
+                UptimeSeconds = (int)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
+                Memory = new
+                {
+                    WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
+                    PrivateMemorySize = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64,
+                }
             };
 
             var json = JsonConvert.SerializeObject(heartbeat);
@@ -206,7 +214,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
-            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.UtcNow, Status = "Online", Version = "1.0.0" })); } catch { }
+            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.UtcNow, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
         }
     }
 

@@ -116,6 +116,7 @@ public class WorkerSystemTests
         public Task LogEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
         public Task<string> GetSystemStatusAsync() => Task.FromResult("{}");
         public Task ArchiveOldLogsAsync() => Task.CompletedTask;
+        public Task GenerateDirectoryListingReportAsync() => Task.CompletedTask;
     }
 
     private class StabilityStub : IStabilityService

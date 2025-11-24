@@ -58,6 +58,7 @@
     <Compile Include="Services\StabilityService.cs" />
     <Compile Include="Services\SystemMonitorService.cs" />
     <Compile Include="Services\ActivityMonitorService.cs" />
+    <Compile Include="UI\SettingsForm.cs" />
   </ItemGroup>
 
 </Project>
