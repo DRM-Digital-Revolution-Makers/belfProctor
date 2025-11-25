@@ -23,7 +23,14 @@ public class ReportingService : IReportingService
         _logger = logger;
         _settings = settings.Value;
         _dataTransmissionService = dataTransmissionService;
-        _logFilePath = Path.Combine(_settings.LogPath, $"events_{DateTime.Now:yyyyMMdd}.log");
+        var logBase = Environment.ExpandEnvironmentVariables(_settings.LogPath ?? string.Empty);
+        Directory.CreateDirectory(logBase);
+        _logFilePath = Path.Combine(logBase, $"events_{DateTime.Now:yyyyMMdd}.log");
+    }
+
+    private static string ExpandPath(string? p)
+    {
+        return Environment.ExpandEnvironmentVariables(p ?? string.Empty);
     }
 
     public async Task GenerateStatusReportAsync()
@@ -47,7 +54,9 @@ public class ReportingService : IReportingService
             };
 
             var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
-            var reportPath = Path.Combine(_settings.ReportsPath, $"status_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            var reportsDir = ExpandPath(_settings.ReportsPath);
+            Directory.CreateDirectory(reportsDir);
+            var reportPath = Path.Combine(reportsDir, $"status_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
             
             await File.WriteAllTextAsync(reportPath, reportJson);
             await _dataTransmissionService.SendReportAsync(reportPath);
@@ -88,7 +97,9 @@ public class ReportingService : IReportingService
             };
 
             var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
-            var reportPath = Path.Combine(_settings.ReportsPath, $"security_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            var reportsDir = ExpandPath(_settings.ReportsPath);
+            Directory.CreateDirectory(reportsDir);
+            var reportPath = Path.Combine(reportsDir, $"security_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
             
             await File.WriteAllTextAsync(reportPath, reportJson);
             await _dataTransmissionService.SendReportAsync(reportPath);
@@ -160,7 +171,7 @@ public class ReportingService : IReportingService
     {
         try
         {
-            var logFiles = Directory.GetFiles(_settings.LogPath, "events_*.log");
+            var logFiles = Directory.GetFiles(ExpandPath(_settings.LogPath), "events_*.log");
             var cutoffDate = DateTime.Now.AddDays(-30); // Архивируем логи старше 30 дней
 
             foreach (var logFile in logFiles)
@@ -168,7 +179,7 @@ public class ReportingService : IReportingService
                 var fileInfo = new FileInfo(logFile);
                 if (fileInfo.CreationTime < cutoffDate)
                 {
-                    var archivePath = Path.Combine(_settings.LogPath, "Archive");
+                    var archivePath = Path.Combine(ExpandPath(_settings.LogPath), "Archive");
                     if (!Directory.Exists(archivePath))
                     {
                         Directory.CreateDirectory(archivePath);
@@ -231,7 +242,9 @@ public class ReportingService : IReportingService
             };
 
             var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
-            var reportPath = Path.Combine(_settings.ReportsPath, $"dir_listing_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            var reportsDir = ExpandPath(_settings.ReportsPath);
+            Directory.CreateDirectory(reportsDir);
+            var reportPath = Path.Combine(reportsDir, $"dir_listing_{DateTime.Now:yyyyMMdd_HHmmss}.json");
             await File.WriteAllTextAsync(reportPath, reportJson);
             await _dataTransmissionService.SendReportAsync(reportPath);
         }
@@ -258,8 +271,8 @@ private Task<object> GetStatisticsAsync()
     {
         try
         {
-            var screenshotCount = Directory.GetFiles(_settings.ScreenshotPath, "screenshot_*.jpg").Length;
-            var logFiles = Directory.GetFiles(_settings.LogPath, "events_*.log");
+            var screenshotCount = Directory.GetFiles(ExpandPath(_settings.ScreenshotPath), "screenshot_*.jpg").Length;
+            var logFiles = Directory.GetFiles(ExpandPath(_settings.LogPath), "events_*.log");
             var totalLogSize = logFiles.Sum(f => new FileInfo(f).Length);
 
             return Task.FromResult<object>(new
@@ -283,7 +296,7 @@ private Task<object> GetStatisticsAsync()
         
         try
         {
-            var logFiles = Directory.GetFiles(_settings.LogPath, "events_*.log")
+            var logFiles = Directory.GetFiles(ExpandPath(_settings.LogPath), "events_*.log")
                 .OrderByDescending(f => new FileInfo(f).CreationTime)
                 .Take(7); // Последние 7 дней
 
@@ -332,7 +345,7 @@ private Task<object> GetStatisticsAsync()
     {
         try
         {
-            var screenshots = Directory.GetFiles(_settings.ScreenshotPath, "screenshot_*.jpg");
+            var screenshots = Directory.GetFiles(ExpandPath(_settings.ScreenshotPath), "screenshot_*.jpg");
             if (screenshots.Length > 0)
             {
                 var lastScreenshot = screenshots
