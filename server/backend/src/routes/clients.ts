@@ -9,6 +9,13 @@ router.get("/", requireAuth, async (req, res) => {
   res.json(clients);
 });
 
+router.get("/:id", requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) return res.status(404).json({ message: "Not found" });
+  res.json(client);
+});
+
 // Optional: register client with encryption key
 router.post("/register", requireAuth, async (req, res) => {
   const { id, encryptionKey } = req.body as { id: string; encryptionKey: string };
@@ -19,6 +26,16 @@ router.post("/register", requireAuth, async (req, res) => {
     update: { encryptionKey },
   });
   res.json(client);
+});
+
+router.delete("/:id", requireAuth, async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    await prisma.client.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(404).json({ message: "Not found" });
+  }
 });
 
 export default router;

@@ -8,11 +8,15 @@ export interface AuthRequest extends Request {
 }
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  let token = "";
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ")) {
+  if (auth && auth.startsWith("Bearer ")) {
+    token = auth.slice("Bearer ".length);
+  } else if (typeof req.query.token === "string" && req.query.token) {
+    token = String(req.query.token);
+  } else {
     return res.status(401).json({ message: "Unauthorized" });
   }
-  const token = auth.slice("Bearer ".length);
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;
     req.user = { id: payload.id, role: payload.role, email: payload.email };

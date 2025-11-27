@@ -17,6 +17,9 @@
     "@refinedev/simple-rest": "^6.0.1",
     "@tanstack/react-query": "^5.90.5",
     "antd": "^5.27.6",
+    "apexcharts": "^5.3.6",
+    "flyonui": "^2.4.1",
+    "lodash": "^4.17.21",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.4"

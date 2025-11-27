@@ -10,6 +10,19 @@ export default function ClientsList() {
   const [loading, setLoading] = React.useState(false);
   const [lastCreated, setLastCreated] = React.useState(null);
   const [form] = Form.useForm();
+  const [selected, setSelected] = React.useState([]);
+  const [bulkOpen, setBulkOpen] = React.useState(false);
+  const [bulkLoading, setBulkLoading] = React.useState(false);
+  const [bulkForm] = Form.useForm();
+  const genId = React.useCallback(() => {
+    const n = Math.floor(Math.random() * 1e6).toString().padStart(6, "0");
+    return `CLIENT${n}`;
+  }, []);
+  const genKey = React.useCallback(() => {
+    const arr = new Uint8Array(32);
+    (window.crypto || crypto).getRandomValues(arr);
+    return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }, []);
 
   const load = React.useCallback(() => {
     const token = localStorage.getItem("token");
@@ -59,10 +72,72 @@ export default function ClientsList() {
       setLoading(false);
     }
   };
+  const autoCreate = async () => {
+    try {
+      setLoading(true);
+      const id = genId();
+      const encryptionKey = genKey();
+      const token = localStorage.getItem("token");
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      const res = await fetch(`${API_URL}/clients/register`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id, encryptionKey }),
+      });
+      if (!res.ok) {
+        message.error("Не удалось создать клиента");
+        return;
+      }
+      const client = await res.json();
+      setLastCreated(client);
+      Modal.success({ title: "Клиент создан", content: `ClientId: ${client.id}\nEncryptionKey: ${client.encryptionKey}` });
+      load();
+    } finally {
+      setLoading(false);
+    }
+  };
+  const bulkDelete = async () => {
+    if (!selected.length) return;
+    const token = localStorage.getItem("token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    await Promise.allSettled(selected.map((id) => fetch(`${API_URL}/clients/${id}`, { method: "DELETE", headers })));
+    message.success("Удаление завершено");
+    setSelected([]);
+    load();
+  };
+  const bulkIntervals = async () => {
+    try {
+      const vals = await bulkForm.validateFields();
+      setBulkLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      await Promise.allSettled(selected.map((id) => fetch(`${API_URL}/commands/send`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ clientId: id, type: "setIntervals", payload: vals }),
+      })));
+      message.success("Интервалы отправлены");
+      setBulkOpen(false);
+      bulkForm.resetFields();
+    } finally {
+      setBulkLoading(false);
+    }
+  };
   return (
     <List title="Клиенты">
-      <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button onClick={autoCreate}>Автосоздать клиента</Button>
         <Button type="primary" onClick={() => setOpen(true)}>Добавить клиента</Button>
+      </div>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button disabled={!selected.length} onClick={() => setBulkOpen(true)}>Установить интервалы выбранным</Button>
+        <Button danger disabled={!selected.length} onClick={bulkDelete}>Удалить выбранных</Button>
       </div>
       {lastCreated && (
         <Alert
@@ -74,7 +149,7 @@ export default function ClientsList() {
           onClose={() => setLastCreated(null)}
         />
       )}
-      <Table rowKey="id" dataSource={Array.isArray(data) ? data : []} pagination={false} size="small" columns={[
+      <Table rowKey="id" dataSource={Array.isArray(data) ? data : []} pagination={false} size="small" rowSelection={{ selectedRowKeys: selected, onChange: setSelected }} columns={[
         { title: "ClientId", dataIndex: "id" },
         { title: "Создан", dataIndex: "createdAt" },
         { title: "Обновлён", dataIndex: "updatedAt" },
@@ -83,7 +158,70 @@ export default function ClientsList() {
           const online = hb && (Date.now() - new Date(hb.timestamp).getTime()) < 3 * 60 * 1000;
           return online ? <span style={{ color: "#52c41a" }}>Подключен</span> : <span style={{ color: "#ff4d4f" }}>Отключен</span>;
         } },
+        { title: "Действия", render: (_, r) => (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button onClick={async () => {
+              const token = localStorage.getItem("token");
+              const headers = token ? { Authorization: `Bearer ${token}` } : {};
+              const resp = await fetch(`${API_URL}/clients/${r.id}`, { headers });
+              if (!resp.ok) return;
+              const info = await resp.json();
+              Modal.info({
+                title: `Клиент ${info.id}`,
+                content: (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div>EncryptionKey: <Input readOnly value={info.encryptionKey || ""} /></div>
+                    <Form layout="vertical" onFinish={async (vals) => {
+                      const token2 = localStorage.getItem("token");
+                      const headers2 = {
+                        "Content-Type": "application/json",
+                        ...(token2 ? { Authorization: `Bearer ${token2}` } : {}),
+                      };
+                      await fetch(`${API_URL}/commands/send`, {
+                        method: "POST",
+                        headers: headers2,
+                        body: JSON.stringify({ clientId: r.id, type: "setIntervals", payload: vals }),
+                      });
+                      message.success("Команда отправлена");
+                    }}>
+                      <Form.Item name="heartbeatMs" label="Heartbeat ms">
+                        <Input placeholder="например 5000" />
+                      </Form.Item>
+                      <Form.Item name="activityMs" label="Activity ms">
+                        <Input placeholder="например 3000" />
+                      </Form.Item>
+                      <Form.Item name="screenshotMs" label="Screenshot ms">
+                        <Input placeholder="например 60000" />
+                      </Form.Item>
+                      <Button htmlType="submit" type="primary">Установить интервалы</Button>
+                    </Form>
+                  </div>
+                ),
+                okText: "Закрыть",
+              });
+            }}>Инфо</Button>
+            <Button danger onClick={async () => {
+              const token = localStorage.getItem("token");
+              const headers = token ? { Authorization: `Bearer ${token}` } : {};
+              const resp = await fetch(`${API_URL}/clients/${r.id}`, { method: "DELETE", headers });
+              if (resp.ok) { message.success("Удалено"); load(); } else { message.error("Ошибка удаления"); }
+            }}>Удалить</Button>
+          </div>
+        ) },
       ]} />
+      <Modal open={bulkOpen} title="Интервалы для выбранных" onCancel={() => setBulkOpen(false)} onOk={bulkIntervals} confirmLoading={bulkLoading} okText="Установить">
+        <Form form={bulkForm} layout="vertical">
+          <Form.Item name="heartbeatMs" label="Heartbeat ms">
+            <Input placeholder="например 5000" />
+          </Form.Item>
+          <Form.Item name="activityMs" label="Activity ms">
+            <Input placeholder="например 3000" />
+          </Form.Item>
+          <Form.Item name="screenshotMs" label="Screenshot ms">
+            <Input placeholder="например 60000" />
+          </Form.Item>
+        </Form>
+      </Modal>
       <Modal open={open} title="Новый клиент" onCancel={() => setOpen(false)} onOk={onCreate} confirmLoading={loading} okText="Создать">
         <Form form={form} layout="vertical">
           <Form.Item name="id" label="ClientId" rules={[{ required: true }]}> 

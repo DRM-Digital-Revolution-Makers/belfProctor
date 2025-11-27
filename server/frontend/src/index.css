@@ -1,3 +1,8 @@
+/* FlyonUI Apex vendor depends on Tailwind; removed to avoid @apply. */
+
+@import "apexcharts/dist/apexcharts.css";
+@import "flyonui/src/vendor/apexcharts.css";
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -28,3 +33,6 @@ body {
 .ant-table .ant-table-tbody > tr > td {
   padding: 14px 18px;
 }
+
+/* Fallback styles for ApexCharts tooltip without Tailwind */
+/* Inline area chart base styles handled in component. */

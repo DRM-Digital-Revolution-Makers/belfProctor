@@ -13,6 +13,7 @@ import ScreenshotsList from "./pages/ScreenshotsList.jsx";
 import ReportsList from "./pages/ReportsList.jsx";
 import PoliciesList from "./pages/PoliciesList.jsx";
 import ActivitiesList from "./pages/ActivitiesList.jsx";
+import ActivityDetail from "./pages/ActivityDetail.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
@@ -80,6 +81,7 @@ export default function App() {
               <Route path="clients" element={<ClientsList />} />
               <Route path="events" element={<EventsList />} />
               <Route path="activity" element={<ActivitiesList />} />
+              <Route path="activity/:clientId" element={<ActivityDetail />} />
               <Route path="screenshots" element={<ScreenshotsList />} />
               <Route path="reports" element={<ReportsList />} />
               <Route path="policies" element={<PoliciesList />} />

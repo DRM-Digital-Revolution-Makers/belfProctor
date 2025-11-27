@@ -1,6 +1,7 @@
 import React from "react"
 import { List } from "@refinedev/antd"
-import { Table, Tag } from "antd"
+import { Table, Tag, Button } from "antd"
+import { Link } from "react-router-dom"
 
 export default function ActivitiesList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`
@@ -39,6 +40,7 @@ export default function ActivitiesList() {
     const id = setInterval(fetchLatest, 3000)
     return () => clearInterval(id)
   }, [fetchLatest])
+
 
   const renderDuration = (record) => {
     const now = Date.now()
@@ -80,6 +82,7 @@ export default function ActivitiesList() {
             return online ? <Tag color="green">Подключен</Tag> : <Tag color="red">Отключен</Tag>
           } },
           { title: "Таймеры", render: (_, r) => renderDuration(r) },
+          { title: "Действие", render: (_, r) => (<Link to={`/activity/${r.clientId}`}><Button>Подробнее</Button></Link>) },
         ]}
       />
     </List>

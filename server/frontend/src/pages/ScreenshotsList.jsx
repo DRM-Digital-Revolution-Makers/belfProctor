@@ -10,23 +10,42 @@ export default function ScreenshotsList() {
   const pageSize = 50;
 
   const load = () => {
-    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ts: String(Date.now()) });
     const token = localStorage.getItem("token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    fetch(`${API_URL}/screenshots?${params.toString()}`, { headers })
-      .then((r) => r.json())
-      .then((json) => { setItems(json.data || []); setTotal(json.total || 0); })
-      .catch(() => { setItems([]); setTotal(0); });
+    fetch(`${API_URL}/screenshots?${params.toString()}`, { headers, cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => { if (json) { setItems(json.data || []); setTotal(json.total || 0); } })
+      .catch(() => { /* keep previous */ });
   };
   React.useEffect(load, [page]);
 
   const openFile = async (id) => {
     const token = localStorage.getItem("token");
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`${API_URL}/screenshots/${id}/file`, { headers });
+    const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok) return;
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
+    const objUrl = URL.createObjectURL(blob);
+    window.open(objUrl, "_blank");
+  };
+
+  const downloadFile = async (id, filename) => {
+    const token = localStorage.getItem("token");
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename || `screenshot_${id}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
   };
 
   return (
@@ -40,7 +59,12 @@ export default function ScreenshotsList() {
           { title: "Время", dataIndex: "timestamp" },
           { title: "Клиент", dataIndex: "clientId" },
           { title: "Файл", dataIndex: "filename" },
-          { title: "Действие", render: (_, rec) => (<Button onClick={() => openFile(rec.id)}>Открыть</Button>) },
+          { title: "Действие", render: (_, rec) => (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button onClick={() => openFile(rec.id)}>Открыть</Button>
+              <Button onClick={() => downloadFile(rec.id, rec.filename)}>Скачать</Button>
+            </div>
+          ) },
         ]}
       />
     </List>

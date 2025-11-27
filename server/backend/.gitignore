@@ -3,4 +3,5 @@ node_modules
 .env
 
 /generated/prisma
-storage/screenshots/
+
+storage/

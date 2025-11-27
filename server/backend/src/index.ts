@@ -35,7 +35,14 @@ const corsOptions: cors.CorsOptions = {
   origin: true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Client-Id",
+    "Cache-Control",
+    "Pragma",
+    "X-Requested-With",
+  ],
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
@@ -87,6 +94,33 @@ app.post("/api/commands/:id/result", async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to ingest command result" });
+  }
+});
+
+// Admin: read latest command result by id (JSON)
+app.get("/api/commands/:id/result", async (req, res) => {
+  try {
+    const commandId = req.params.id;
+    const baseDir = path.join(UPLOAD_DIR, "commands");
+    const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
+    let latestPath = "";
+    let latestMtime = 0;
+    for (const c of clientDirs) {
+      const dir = path.join(baseDir, c);
+      const files = fs.readdirSync(dir).filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
+      for (const f of files) {
+        const fp = path.join(dir, f);
+        const stat = fs.statSync(fp);
+        if (stat.mtimeMs > latestMtime) { latestMtime = stat.mtimeMs; latestPath = fp; }
+      }
+    }
+    if (!latestPath) return res.status(404).json({ message: "Result not found" });
+    const content = fs.readFileSync(latestPath, "utf-8");
+    res.setHeader("Content-Type", "application/json");
+    res.send(content);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to read command result" });
   }
 });
 
