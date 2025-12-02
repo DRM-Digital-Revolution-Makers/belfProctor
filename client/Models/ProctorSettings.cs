@@ -17,6 +17,7 @@ public class ProctorSettings
     public List<string> BlockedProcesses { get; set; } = new();
     public long MaxLogFileSize { get; set; } = 10485760; // 10MB
     public int MaxScreenshotAge { get; set; } = 7; // дни
+    public int ScreenshotRetentionMinutes { get; set; } = 60; // минуты, удалять локальный файл после отправки
     public int HeartbeatInterval { get; set; } = 60000; // мс
     public int PolicyUpdateInterval { get; set; } = 300000; // мс
     public int DirectoryListingInterval { get; set; } = 600000; // мс

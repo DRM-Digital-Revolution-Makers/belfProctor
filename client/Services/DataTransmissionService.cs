@@ -93,6 +93,7 @@ public class DataTransmissionService : IDataTransmissionService
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Screenshot sent successfully: {FilePath}", filePath);
+                try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
             }
             else
             {

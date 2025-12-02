@@ -30,6 +30,20 @@ public class ScreenshotService : IScreenshotService
             
             // Отправляем скриншот на сервер
             await _dataTransmissionService.SendScreenshotAsync(filePath);
+            // Планируем удаление локального файла спустя заданное время
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(_settings.ScreenshotRetentionMinutes));
+                    if (File.Exists(filePath))
+                    {
+                        File.Delete(filePath);
+                        _logger.LogDebug("Screenshot deleted after retention: {FilePath}", filePath);
+                    }
+                }
+                catch { }
+            });
             
             // Очищаем старые скриншоты
             await CleanupOldScreenshotsAsync();
@@ -48,7 +62,9 @@ public class ScreenshotService : IScreenshotService
         {
             var bounds = GetScreenBounds();
             var basePath = Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath);
-            var fileName = $"screenshot_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
+            Directory.CreateDirectory(basePath);
+            var cid = string.IsNullOrWhiteSpace(_settings.ClientId) ? "client" : new string(_settings.ClientId.Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c).ToArray());
+            var fileName = $"screenshot_{cid}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
             var filePath = Path.Combine(basePath, fileName);
 
             using var bitmap = new Bitmap(bounds.Width, bounds.Height);

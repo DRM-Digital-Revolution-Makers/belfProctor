@@ -10,6 +10,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnableDefaultItems>false</EnableDefaultItems>
     <UseWindowsForms>true</UseWindowsForms>
+    <NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
 
   <ItemGroup>

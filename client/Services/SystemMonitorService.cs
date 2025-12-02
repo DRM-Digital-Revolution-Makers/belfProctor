@@ -16,6 +16,8 @@ public class SystemMonitorService : ISystemMonitorService
     private ManagementEventWatcher? _processWatcher;
     private ManagementEventWatcher? _usbWatcher;
     private CancellationTokenSource? _cancellationTokenSource;
+    private Task? _processPollingTask;
+    private readonly HashSet<int> _seenPids = new();
 
     public event EventHandler<SystemEvent>? SystemEventOccurred;
 
@@ -102,6 +104,57 @@ public class SystemMonitorService : ISystemMonitorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to start process monitoring");
+                if (_processPollingTask == null)
+                {
+                    _processPollingTask = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            while (!(_cancellationTokenSource?.IsCancellationRequested ?? true))
+                            {
+                                try
+                                {
+                                    var processes = Process.GetProcesses();
+                                    foreach (var p in processes)
+                                    {
+                                        if (!_seenPids.Contains(p.Id))
+                                        {
+                                            _seenPids.Add(p.Id);
+                                            var systemEvent = new SystemEvent
+                                            {
+                                                Timestamp = DateTime.Now,
+                                                EventType = SystemEventType.ProcessStarted,
+                                                Description = $"Process started: {p.ProcessName}",
+                                                ProcessName = p.ProcessName,
+                                                AdditionalData = new Dictionary<string, object> { ["ProcessId"] = p.Id }
+                                            };
+                                            AddEvent(systemEvent);
+                                            SystemEventOccurred?.Invoke(this, systemEvent);
+                                        }
+                                    }
+                                    if (_seenPids.Count > 50000)
+                                    {
+                                        _seenPids.Clear();
+                                        foreach (var x in Process.GetProcesses()) _seenPids.Add(x.Id);
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    _logger.LogDebug(e, "Process polling iteration failed");
+                                }
+                                await Task.Delay(5000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+                        catch (Exception e)
+                        {
+                            _logger.LogError(e, "Process polling failed");
+                        }
+                    });
+                    _logger.LogInformation("Process polling fallback started");
+                }
             }
         });
     }

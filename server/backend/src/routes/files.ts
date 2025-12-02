@@ -55,7 +55,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       },
     });
 
-    res.json({ id: rec.id });
+    res.json({ ok: true, id: rec.id, filename, path: filepath, timestamp: now.toISOString() });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to ingest screenshot" });
