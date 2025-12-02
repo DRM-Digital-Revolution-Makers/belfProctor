@@ -191,4 +191,29 @@ router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
   }
 });
 
+// Admin: download latest file result for a command id
+router.get("/commands/:id/file/latest", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const baseDir = path.join(UPLOAD_DIR, "commands");
+    const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
+    let latestPath = "";
+    let latestMtime = 0;
+    for (const c of clientDirs) {
+      const dir = path.join(baseDir, c);
+      const files = fs.readdirSync(dir).filter((f) => f.startsWith(`${id}_`));
+      for (const f of files) {
+        const fp = path.join(dir, f);
+        const stat = fs.statSync(fp);
+        if (stat.mtimeMs > latestMtime) { latestMtime = stat.mtimeMs; latestPath = fp; }
+      }
+    }
+    if (!latestPath) return res.status(404).json({ message: "Not found" });
+    res.sendFile(latestPath);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to fetch command file" });
+  }
+});
+
 export default router;

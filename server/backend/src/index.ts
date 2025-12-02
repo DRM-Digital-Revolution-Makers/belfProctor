@@ -17,6 +17,7 @@ import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
 import { prisma } from "./prisma";
+import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
 
@@ -181,5 +182,40 @@ app.post("/api/commands/send", async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to send command" });
+  }
+});
+// Admin convenience: request directory listing from client
+app.post("/api/commands/list", requireAuth, async (req, res) => {
+  try {
+    const { clientId, basePath, pattern = "*", recursive = false, maxEntries = 1000, includeDirs = true } = req.body as any;
+    if (!clientId || !basePath) return res.status(400).json({ message: "clientId and basePath required" });
+    const socket = clients.get(String(clientId));
+    if (!socket || socket.readyState !== 1) return res.status(404).json({ message: "client not connected" });
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const payload = { basePath, pattern, recursive, maxEntries, includeDirs };
+    const cmd = { id, type: "list", payload };
+    socket.send(JSON.stringify(cmd));
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to request directory listing" });
+  }
+});
+
+// Admin convenience: request a file from client
+app.post("/api/commands/file", requireAuth, async (req, res) => {
+  try {
+    const { clientId, path: filePath } = req.body as any;
+    if (!clientId || !filePath) return res.status(400).json({ message: "clientId and path required" });
+    const socket = clients.get(String(clientId));
+    if (!socket || socket.readyState !== 1) return res.status(404).json({ message: "client not connected" });
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const payload = { path: filePath };
+    const cmd = { id, type: "file", payload };
+    socket.send(JSON.stringify(cmd));
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to request file from client" });
   }
 });
