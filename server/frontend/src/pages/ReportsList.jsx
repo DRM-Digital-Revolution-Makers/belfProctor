@@ -1,6 +1,7 @@
 import React from "react";
 import { List } from "@refinedev/antd";
 import { Table, Button } from "antd";
+import { authFetch } from "../dataProvider.js";
 
 export default function ReportsList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
@@ -11,9 +12,7 @@ export default function ReportsList() {
 
   const load = () => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    fetch(`${API_URL}/reports?${params.toString()}`, { headers })
+    authFetch(`${API_URL}/reports?${params.toString()}`)
       .then((r) => r.json())
       .then((json) => { setItems(json.data || []); setTotal(json.total || 0); })
       .catch(() => { setItems([]); setTotal(0); });
@@ -21,9 +20,7 @@ export default function ReportsList() {
   React.useEffect(load, [page]);
 
   const openFile = async (id) => {
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`${API_URL}/reports/${id}/file`, { headers });
+    const res = await authFetch(`${API_URL}/reports/${id}/file`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");

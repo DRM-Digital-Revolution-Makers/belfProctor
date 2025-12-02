@@ -1,6 +1,7 @@
 import React from "react";
 import { List } from "@refinedev/antd";
 import { Table } from "antd";
+import { authFetch } from "../dataProvider.js";
 
 export default function PoliciesList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
@@ -11,9 +12,7 @@ export default function PoliciesList() {
 
   const load = () => {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    fetch(`${API_URL}/policies?${params.toString()}`, { headers })
+    authFetch(`${API_URL}/policies?${params.toString()}`)
       .then((r) => r.json())
       .then((json) => { setItems(json.data || []); setTotal(json.total || 0); })
       .catch(() => { setItems([]); setTotal(0); });

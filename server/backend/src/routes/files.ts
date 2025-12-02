@@ -10,30 +10,83 @@ const router = Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+const UPLOAD_DIR =
+  process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+
+function normalizeTimestamp(timestampStr: string): Date {
+  try {
+    const s = String(timestampStr || "").trim();
+    if (!s) return new Date();
+    // Normalize separators in time portion
+    const dashTime = s.replace(
+      /(T|\s)(\d{2})-(\d{2})-(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/,
+      (_m, sep, h, m, sec, ms = "", tz = "") =>
+        `${sep}${h}:${m}:${sec}${ms}${tz || ""}`
+    );
+    // Convert compact date-time "YYYYMMDD_HHMMSS" to ISO-like
+    const compact = dashTime.replace(
+      /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/,
+      (_m, y, mo, d, h, mi, s2) => `${y}-${mo}-${d}T${h}:${mi}:${s2}`
+    );
+    const cleaned = compact.replace(" ", "T");
+    // If timezone present (Z or offset), respect it
+    if (/Z|[+-]\d{2}:\d{2}/.test(cleaned)) {
+      const d0 = new Date(cleaned);
+      if (!isNaN(d0.getTime())) return d0;
+    }
+    // Ensure seconds exist
+    const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(cleaned)
+      ? `${cleaned}:00`
+      : cleaned;
+    // No timezone -> assume Asia/Tashkent (+05:00)
+    const withTz = `${withSeconds}+05:00`;
+    const d1 = new Date(withTz);
+    if (!isNaN(d1.getTime())) return d1;
+    const d2 = new Date(cleaned);
+    if (!isNaN(d2.getTime())) return d2;
+    return new Date();
+  } catch {
+    return new Date();
+  }
+}
 
 router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
   try {
-    const clientId = (req.body.clientId as string) || (req.headers["x-client-id"] as string) || "";
-    const timestampStr = (req.body.timestamp as string) || new Date().toISOString();
-    if (!clientId || !req.file) return res.status(400).json({ message: "clientId and screenshot required" });
+    const clientId =
+      (req.body.clientId as string) ||
+      (req.headers["x-client-id"] as string) ||
+      "";
+    const timestampStr =
+      (req.body.timestamp as string) || new Date().toISOString();
+    if (!clientId || !req.file)
+      return res
+        .status(400)
+        .json({ message: "clientId and screenshot required" });
 
     const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client || !client.encryptionKey) {
-      return res.status(400).json({ message: "Client not registered or missing key" });
+      return res
+        .status(400)
+        .json({ message: "Client not registered or missing key" });
     }
 
-    const decrypted = decryptAes256CbcPrefixedIv(req.file.buffer, client.encryptionKey);
+    const decrypted = decryptAes256CbcPrefixedIv(
+      req.file.buffer,
+      client.encryptionKey
+    );
+    const tsDate = normalizeTimestamp(timestampStr);
     const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const filename = `${timestampStr.replace(/[:]/g, "-")}_${Date.now()}.jpg`;
+    const filename = `${tsDate
+      .toISOString()
+      .replace(/[:]/g, "-")}_${Date.now()}.jpg`;
     const filepath = path.join(clientDir, filename);
     fs.writeFileSync(filepath, decrypted);
 
     const rec = await prisma.screenshot.create({
       data: {
         clientId,
-        timestamp: new Date(timestampStr),
+        timestamp: tsDate,
         filename,
         path: filepath,
       },
@@ -48,26 +101,39 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
 
 router.post("/reports", upload.single("report"), async (req, res) => {
   try {
-    const clientId = (req.body.clientId as string) || (req.headers["x-client-id"] as string) || "";
-    const timestampStr = (req.body.timestamp as string) || new Date().toISOString();
-    if (!clientId || !req.file) return res.status(400).json({ message: "clientId and report required" });
+    const clientId =
+      (req.body.clientId as string) ||
+      (req.headers["x-client-id"] as string) ||
+      "";
+    const timestampStr =
+      (req.body.timestamp as string) || new Date().toISOString();
+    if (!clientId || !req.file)
+      return res.status(400).json({ message: "clientId and report required" });
 
     const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client || !client.encryptionKey) {
-      return res.status(400).json({ message: "Client not registered or missing key" });
+      return res
+        .status(400)
+        .json({ message: "Client not registered or missing key" });
     }
 
-    const decrypted = decryptAes256CbcPrefixedIv(req.file.buffer, client.encryptionKey);
+    const decrypted = decryptAes256CbcPrefixedIv(
+      req.file.buffer,
+      client.encryptionKey
+    );
+    const tsDate = normalizeTimestamp(timestampStr);
     const clientDir = path.join(UPLOAD_DIR, "reports", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const filename = `${timestampStr.replace(/[:]/g, "-")}_${Date.now()}`;
+    const filename = `${tsDate
+      .toISOString()
+      .replace(/[:]/g, "-")}_${Date.now()}`;
     const filepath = path.join(clientDir, filename);
     fs.writeFileSync(filepath, decrypted);
 
     const rec = await prisma.report.create({
       data: {
         clientId,
-        timestamp: new Date(timestampStr),
+        timestamp: tsDate,
         filename,
         path: filepath,
       },
@@ -86,7 +152,12 @@ router.get("/screenshots", requireAuth, async (req, res) => {
   const skip = (parseInt(page) - 1) * parseInt(pageSize);
   const where = clientId ? { clientId: String(clientId) } : {};
   const [items, total] = await Promise.all([
-    prisma.screenshot.findMany({ where, orderBy: { timestamp: "desc" }, skip, take: parseInt(pageSize) }),
+    prisma.screenshot.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
+      skip,
+      take: parseInt(pageSize),
+    }),
     prisma.screenshot.count({ where }),
   ]);
   res.json({ data: items, total });
@@ -97,7 +168,12 @@ router.get("/reports", requireAuth, async (req, res) => {
   const skip = (parseInt(page) - 1) * parseInt(pageSize);
   const where = clientId ? { clientId: String(clientId) } : {};
   const [items, total] = await Promise.all([
-    prisma.report.findMany({ where, orderBy: { timestamp: "desc" }, skip, take: parseInt(pageSize) }),
+    prisma.report.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
+      skip,
+      take: parseInt(pageSize),
+    }),
     prisma.report.count({ where }),
   ]);
   res.json({ data: items, total });
@@ -108,6 +184,8 @@ router.get("/screenshots/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.screenshot.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.type("image/jpeg");
   res.sendFile(rec.path);
 });
 
@@ -115,6 +193,7 @@ router.get("/reports/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.report.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.sendFile(rec.path);
 });
 
@@ -122,16 +201,26 @@ router.get("/reports/:id/file", requireAuth, async (req, res) => {
 router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
   try {
     const id = req.params.id;
-    const clientId = (req.body.clientId as string) || (req.headers["x-client-id"] as string) || "";
-    const timestampStr = (req.body.timestamp as string) || new Date().toISOString();
-    if (!clientId || !req.file) return res.status(400).json({ message: "clientId and file required" });
+    const clientId =
+      (req.body.clientId as string) ||
+      (req.headers["x-client-id"] as string) ||
+      "";
+    const timestampStr =
+      (req.body.timestamp as string) || new Date().toISOString();
+    if (!clientId || !req.file)
+      return res.status(400).json({ message: "clientId and file required" });
 
     const client = await prisma.client.findUnique({ where: { id: clientId } });
     if (!client || !client.encryptionKey) {
-      return res.status(400).json({ message: "Client not registered or missing key" });
+      return res
+        .status(400)
+        .json({ message: "Client not registered or missing key" });
     }
 
-    const decrypted = decryptAes256CbcPrefixedIv(req.file.buffer, client.encryptionKey);
+    const decrypted = decryptAes256CbcPrefixedIv(
+      req.file.buffer,
+      client.encryptionKey
+    );
     const clientDir = path.join(UPLOAD_DIR, "commands", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
     const filename = `${id}_${timestampStr.replace(/[:]/g, "-")}_${Date.now()}`;

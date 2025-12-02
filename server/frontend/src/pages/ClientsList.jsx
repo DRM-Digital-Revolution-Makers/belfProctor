@@ -1,6 +1,7 @@
 import React from "react";
 import { List } from "@refinedev/antd";
 import { Table, Modal, Form, Input, Button, message, Alert } from "antd";
+import { authFetch } from "../dataProvider.js";
 
 export default function ClientsList() {
   const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
@@ -25,9 +26,7 @@ export default function ClientsList() {
   }, []);
 
   const load = React.useCallback(() => {
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    fetch(`${API_URL}/clients`, { headers })
+    authFetch(`${API_URL}/clients`)
       .then(async (r) => {
         if (!r.ok) throw new Error("unauthorized");
         return r.json();
@@ -36,7 +35,7 @@ export default function ClientsList() {
         setData(Array.isArray(json) ? json : []);
       })
       .catch(() => setData([]));
-    fetch(`${API_URL}/heartbeat/latest`, { headers })
+    authFetch(`${API_URL}/heartbeat/latest`)
       .then((r) => r.json())
       .then((json) => { setLatestHeartbeats(json.data || []); })
       .catch(() => { setLatestHeartbeats([]); });
@@ -48,12 +47,8 @@ export default function ClientsList() {
     try {
       const values = await form.validateFields();
       setLoading(true);
-      const token = localStorage.getItem("token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-      const res = await fetch(`${API_URL}/clients/register`, {
+      const headers = { "Content-Type": "application/json" };
+      const res = await authFetch(`${API_URL}/clients/register`, {
         method: "POST",
         headers,
         body: JSON.stringify({ id: values.id, encryptionKey: values.encryptionKey }),
@@ -77,12 +72,8 @@ export default function ClientsList() {
       setLoading(true);
       const id = genId();
       const encryptionKey = genKey();
-      const token = localStorage.getItem("token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-      const res = await fetch(`${API_URL}/clients/register`, {
+      const headers = { "Content-Type": "application/json" };
+      const res = await authFetch(`${API_URL}/clients/register`, {
         method: "POST",
         headers,
         body: JSON.stringify({ id, encryptionKey }),
@@ -101,9 +92,7 @@ export default function ClientsList() {
   };
   const bulkDelete = async () => {
     if (!selected.length) return;
-    const token = localStorage.getItem("token");
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    await Promise.allSettled(selected.map((id) => fetch(`${API_URL}/clients/${id}`, { method: "DELETE", headers })));
+    await Promise.allSettled(selected.map((id) => authFetch(`${API_URL}/clients/${id}`, { method: "DELETE" })));
     message.success("Удаление завершено");
     setSelected([]);
     load();
@@ -112,12 +101,8 @@ export default function ClientsList() {
     try {
       const vals = await bulkForm.validateFields();
       setBulkLoading(true);
-      const token = localStorage.getItem("token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-      await Promise.allSettled(selected.map((id) => fetch(`${API_URL}/commands/send`, {
+      const headers = { "Content-Type": "application/json" };
+      await Promise.allSettled(selected.map((id) => authFetch(`${API_URL}/commands/send`, {
         method: "POST",
         headers,
         body: JSON.stringify({ clientId: id, type: "setIntervals", payload: vals }),
@@ -161,9 +146,7 @@ export default function ClientsList() {
         { title: "Действия", render: (_, r) => (
           <div style={{ display: "flex", gap: 8 }}>
             <Button onClick={async () => {
-              const token = localStorage.getItem("token");
-              const headers = token ? { Authorization: `Bearer ${token}` } : {};
-              const resp = await fetch(`${API_URL}/clients/${r.id}`, { headers });
+              const resp = await authFetch(`${API_URL}/clients/${r.id}`);
               if (!resp.ok) return;
               const info = await resp.json();
               Modal.info({
@@ -172,12 +155,8 @@ export default function ClientsList() {
                   <div style={{ display: "grid", gap: 8 }}>
                     <div>EncryptionKey: <Input readOnly value={info.encryptionKey || ""} /></div>
                     <Form layout="vertical" onFinish={async (vals) => {
-                      const token2 = localStorage.getItem("token");
-                      const headers2 = {
-                        "Content-Type": "application/json",
-                        ...(token2 ? { Authorization: `Bearer ${token2}` } : {}),
-                      };
-                      await fetch(`${API_URL}/commands/send`, {
+                      const headers2 = { "Content-Type": "application/json" };
+                      await authFetch(`${API_URL}/commands/send`, {
                         method: "POST",
                         headers: headers2,
                         body: JSON.stringify({ clientId: r.id, type: "setIntervals", payload: vals }),
@@ -201,9 +180,7 @@ export default function ClientsList() {
               });
             }}>Инфо</Button>
             <Button danger onClick={async () => {
-              const token = localStorage.getItem("token");
-              const headers = token ? { Authorization: `Bearer ${token}` } : {};
-              const resp = await fetch(`${API_URL}/clients/${r.id}`, { method: "DELETE", headers });
+              const resp = await authFetch(`${API_URL}/clients/${r.id}`, { method: "DELETE" });
               if (resp.ok) { message.success("Удалено"); load(); } else { message.error("Ошибка удаления"); }
             }}>Удалить</Button>
           </div>

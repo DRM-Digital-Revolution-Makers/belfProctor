@@ -17,7 +17,8 @@ import ActivityDetail from "./pages/ActivityDetail.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
+const API_URL =
+  import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
 
 const authProvider = {
   login: async ({ email, password }) => {
@@ -46,7 +47,18 @@ const authProvider = {
 };
 
 export default function App() {
-  const [authed, setAuthed] = React.useState(Boolean(localStorage.getItem("token")));
+  const [authed, setAuthed] = React.useState(
+    Boolean(localStorage.getItem("token"))
+  );
+  React.useEffect(() => {
+    const handler = () => setAuthed(Boolean(localStorage.getItem("token")));
+    window.addEventListener("auth:changed", handler);
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener("auth:changed", handler);
+      window.removeEventListener("storage", handler);
+    };
+  }, []);
   if (!authed) {
     return (
       <ConfigProvider theme={RefineThemes.Blue}>
