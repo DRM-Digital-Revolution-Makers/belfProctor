@@ -55,7 +55,13 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       },
     });
 
-    res.json({ ok: true, id: rec.id, filename, path: filepath, timestamp: now.toISOString() });
+    res.json({
+      ok: true,
+      id: rec.id,
+      filename,
+      path: filepath,
+      timestamp: now.toISOString(),
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to ingest screenshot" });
@@ -109,18 +115,17 @@ router.post("/reports", upload.single("report"), async (req, res) => {
 // Listings for admin
 router.get("/screenshots", requireAuth, async (req, res) => {
   const { page = "1", pageSize = "20", clientId } = req.query as any;
-  const skip = (parseInt(page) - 1) * parseInt(pageSize);
   const where = clientId ? { clientId: String(clientId) } : {};
-  const [items, total] = await Promise.all([
-    prisma.screenshot.findMany({
-      where,
-      orderBy: { timestamp: "desc" },
-      skip,
-      take: parseInt(pageSize),
-    }),
-    prisma.screenshot.count({ where }),
-  ]);
-  res.json({ data: items, total });
+  const all = await prisma.screenshot.findMany({
+    where,
+    orderBy: { timestamp: "desc" },
+  });
+  const filtered = all.filter((it) => it.path && fs.existsSync(it.path));
+  const total = filtered.length;
+  const start = (parseInt(page) - 1) * parseInt(pageSize);
+  const end = start + parseInt(pageSize);
+  const data = filtered.slice(start, end);
+  res.json({ data, total });
 });
 
 router.get("/reports", requireAuth, async (req, res) => {
@@ -144,6 +149,8 @@ router.get("/screenshots/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.screenshot.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
+  if (!rec.path || !fs.existsSync(rec.path))
+    return res.status(404).json({ message: "Not found" });
   res.sendFile(rec.path);
 });
 
@@ -151,6 +158,8 @@ router.get("/reports/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.report.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
+  if (!rec.path || !fs.existsSync(rec.path))
+    return res.status(404).json({ message: "Not found" });
   res.sendFile(rec.path);
 });
 
@@ -205,7 +214,10 @@ router.get("/commands/:id/file/latest", requireAuth, async (req, res) => {
       for (const f of files) {
         const fp = path.join(dir, f);
         const stat = fs.statSync(fp);
-        if (stat.mtimeMs > latestMtime) { latestMtime = stat.mtimeMs; latestPath = fp; }
+        if (stat.mtimeMs > latestMtime) {
+          latestMtime = stat.mtimeMs;
+          latestPath = fp;
+        }
       }
     }
     if (!latestPath) return res.status(404).json({ message: "Not found" });

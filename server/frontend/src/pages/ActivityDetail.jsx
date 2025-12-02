@@ -287,27 +287,61 @@ export default function ActivityDetail() {
       try {
         setDirError(false);
         const headers = { "Content-Type": "application/json" };
-        const res = await authFetch(`${API_URL}/commands/send`, {
+        const res = await authFetch(`${API_URL}/commands/list`, {
           method: "POST",
           headers,
           body: JSON.stringify({
             clientId,
-            type: "listDir",
-            payload: { path: "~" },
+            basePath: "~",
+            pattern: "*",
+            recursive: false,
+            maxEntries: 1000,
+            includeDirs: true,
           }),
         });
+        if (!res.ok) {
+          setDirError(true);
+          return;
+        }
         const json = await res.json();
         const cmdId = json.id;
+        if (!cmdId) {
+          setDirError(true);
+          return;
+        }
         let got = false;
         for (let i = 0; i < 15; i++) {
           if (cancelled) return;
           await new Promise((r) => setTimeout(r, 1000));
           const r2 = await authFetch(`${API_URL}/commands/${cmdId}/result`);
+          if (r2.status === 404) {
+            setDirError(true);
+            break;
+          }
           if (r2.ok) {
             const j2 = await r2.json();
-            const tree = Array.isArray(j2.tree) ? j2.tree : [];
-            if (tree.length) {
-              setDirTree(tree);
+            const treeArr = Array.isArray(j2.tree) ? j2.tree : null;
+            let built = Array.isArray(treeArr) ? treeArr : [];
+            if (!built.length) {
+              const files = Array.isArray(j2.files) ? j2.files : [];
+              const dirs = Array.isArray(j2.directories) ? j2.directories : [];
+              built = [
+                ...dirs.map((d) => ({
+                  title: d.name,
+                  key: d.fullPath,
+                  path: d.fullPath,
+                  isLeaf: false,
+                })),
+                ...files.map((f) => ({
+                  title: f.name,
+                  key: f.fullPath,
+                  path: f.fullPath,
+                  isLeaf: true,
+                })),
+              ];
+            }
+            if (built.length) {
+              setDirTree(built);
               got = true;
               break;
             }
@@ -419,13 +453,12 @@ export default function ActivityDetail() {
                   size="small"
                   onClick={async () => {
                     const headers = { "Content-Type": "application/json" };
-                    const res = await authFetch(`${API_URL}/commands/send`, {
+                    const res = await authFetch(`${API_URL}/commands/file`, {
                       method: "POST",
                       headers,
                       body: JSON.stringify({
                         clientId,
-                        type: "fetchFile",
-                        payload: { path: node.path },
+                        path: node.path,
                       }),
                     });
                     const { id: cmdId } = await res.json();

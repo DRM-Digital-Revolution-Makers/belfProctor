@@ -327,7 +327,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
+            var response = await _httpClient.PostAsync($"commands/{commandId}/json", content);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -527,7 +527,7 @@ public class DataTransmissionService : IDataTransmissionService
                         var encrypted = EncryptData(jsonBytes);
                         using var content = new ByteArrayContent(encrypted);
                         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
+                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/json", content);
                         if (resp.IsSuccessStatusCode) File.Delete(file);
                     }
                 }

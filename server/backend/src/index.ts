@@ -24,14 +24,19 @@ import { decryptAes256CbcPrefixedIv } from "./encryption";
 const app = express();
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = process.env.HOST || "0.0.0.0";
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+const UPLOAD_DIR =
+  process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
 
 // Ensure upload directories
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(path.join(UPLOAD_DIR, "screenshots"), { recursive: true });
 fs.mkdirSync(path.join(UPLOAD_DIR, "reports"), { recursive: true });
 
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
 const corsOptions: cors.CorsOptions = {
   origin: true,
   credentials: true,
@@ -56,10 +61,19 @@ const limiter = rateLimit({ windowMs: 60 * 1000, max: 200 });
 app.use("/api/", limiter);
 
 // Raw parser for octet-stream endpoints
-app.use("/api/events", express.raw({ type: "application/octet-stream", limit: "20mb" }));
-app.use("/api/heartbeat", express.raw({ type: "application/octet-stream", limit: "5mb" }));
-app.use("/api/activity", express.raw({ type: "application/octet-stream", limit: "2mb" }));
-app.use("/api/commands", express.raw({ type: "application/octet-stream", limit: "20mb" }));
+app.use(
+  "/api/events",
+  express.raw({ type: "application/octet-stream", limit: "20mb" })
+);
+app.use(
+  "/api/heartbeat",
+  express.raw({ type: "application/octet-stream", limit: "5mb" })
+);
+app.use(
+  "/api/activity",
+  express.raw({ type: "application/octet-stream", limit: "2mb" })
+);
+// Use raw parser only for the specific octet-stream endpoint to avoid breaking JSON admin endpoints under /api/commands
 
 // Routes
 app.use("/api/auth", authRouter);
@@ -71,34 +85,81 @@ app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 
 // Command results (JSON, encrypted octet-stream)
-app.post("/api/commands/:id/result", async (req, res) => {
+app.post(
+  "/api/commands/:id/json",
+  express.raw({ type: "application/octet-stream", limit: "20mb" }),
+  async (req, res) => {
+    try {
+      const commandId = req.params.id;
+      const clientId = (req.headers["x-client-id"] as string) || "";
+      if (!clientId)
+        return res.status(400).json({ message: "X-Client-Id header required" });
+
+      const client = await prisma.client.findUnique({
+        where: { id: clientId },
+      });
+      if (!client || !client.encryptionKey) {
+        return res
+          .status(400)
+          .json({ message: "Client not registered or missing key" });
+      }
+
+      const encrypted: Buffer = Buffer.isBuffer(req.body)
+        ? (req.body as Buffer)
+        : Buffer.from([]);
+      const decryptedJson = decryptAes256CbcPrefixedIv(
+        encrypted,
+        client.encryptionKey
+      ).toString("utf-8");
+
+      const dir = path.join(UPLOAD_DIR, "commands", clientId);
+      fs.mkdirSync(dir, { recursive: true });
+      const filename = `${commandId}_${Date.now()}.json`;
+      const filepath = path.join(dir, filename);
+      fs.writeFileSync(filepath, decryptedJson);
+
+      res.json({ ok: true, path: filepath });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ message: "Failed to ingest command result" });
+    }
+  }
+);
+
+// Admin: read latest command result by id (JSON)
+app.get("/api/commands/:id/json", async (req, res) => {
   try {
     const commandId = req.params.id;
-    const clientId = (req.headers["x-client-id"] as string) || "";
-    if (!clientId) return res.status(400).json({ message: "X-Client-Id header required" });
-
-    const client = await prisma.client.findUnique({ where: { id: clientId } });
-    if (!client || !client.encryptionKey) {
-      return res.status(400).json({ message: "Client not registered or missing key" });
+    const baseDir = path.join(UPLOAD_DIR, "commands");
+    const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
+    let latestPath = "";
+    let latestMtime = 0;
+    for (const c of clientDirs) {
+      const dir = path.join(baseDir, c);
+      const files = fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
+      for (const f of files) {
+        const fp = path.join(dir, f);
+        const stat = fs.statSync(fp);
+        if (stat.mtimeMs > latestMtime) {
+          latestMtime = stat.mtimeMs;
+          latestPath = fp;
+        }
+      }
     }
-
-    const encrypted: Buffer = Buffer.isBuffer(req.body) ? (req.body as Buffer) : Buffer.from([]);
-    const decryptedJson = decryptAes256CbcPrefixedIv(encrypted, client.encryptionKey).toString("utf-8");
-
-    const dir = path.join(UPLOAD_DIR, "commands", clientId);
-    fs.mkdirSync(dir, { recursive: true });
-    const filename = `${commandId}_${Date.now()}.json`;
-    const filepath = path.join(dir, filename);
-    fs.writeFileSync(filepath, decryptedJson);
-
-    res.json({ ok: true, path: filepath });
+    if (!latestPath)
+      return res.status(404).json({ message: "Result not found" });
+    const content = fs.readFileSync(latestPath, "utf-8");
+    res.setHeader("Content-Type", "application/json");
+    res.send(content);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ message: "Failed to ingest command result" });
+    res.status(500).json({ message: "Failed to read command result" });
   }
 });
 
-// Admin: read latest command result by id (JSON)
+// Back-compat: read latest command result by id (JSON) on legacy path
 app.get("/api/commands/:id/result", async (req, res) => {
   try {
     const commandId = req.params.id;
@@ -108,14 +169,20 @@ app.get("/api/commands/:id/result", async (req, res) => {
     let latestMtime = 0;
     for (const c of clientDirs) {
       const dir = path.join(baseDir, c);
-      const files = fs.readdirSync(dir).filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
+      const files = fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
       for (const f of files) {
         const fp = path.join(dir, f);
         const stat = fs.statSync(fp);
-        if (stat.mtimeMs > latestMtime) { latestMtime = stat.mtimeMs; latestPath = fp; }
+        if (stat.mtimeMs > latestMtime) {
+          latestMtime = stat.mtimeMs;
+          latestPath = fp;
+        }
       }
     }
-    if (!latestPath) return res.status(404).json({ message: "Result not found" });
+    if (!latestPath)
+      return res.status(404).json({ message: "Result not found" });
     const content = fs.readFileSync(latestPath, "utf-8");
     res.setHeader("Content-Type", "application/json");
     res.send(content);
@@ -172,9 +239,11 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
 app.post("/api/commands/send", async (req, res) => {
   try {
     const { clientId, type, payload } = req.body as any;
-    if (!clientId || !type) return res.status(400).json({ message: "clientId and type required" });
+    if (!clientId || !type)
+      return res.status(400).json({ message: "clientId and type required" });
     const socket = clients.get(String(clientId));
-    if (!socket || socket.readyState !== 1) return res.status(404).json({ message: "client not connected" });
+    if (!socket || socket.readyState !== 1)
+      return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const cmd = { id, type, payload: payload ?? {} };
     socket.send(JSON.stringify(cmd));
@@ -187,10 +256,21 @@ app.post("/api/commands/send", async (req, res) => {
 // Admin convenience: request directory listing from client
 app.post("/api/commands/list", requireAuth, async (req, res) => {
   try {
-    const { clientId, basePath, pattern = "*", recursive = false, maxEntries = 1000, includeDirs = true } = req.body as any;
-    if (!clientId || !basePath) return res.status(400).json({ message: "clientId and basePath required" });
+    const {
+      clientId,
+      basePath,
+      pattern = "*",
+      recursive = false,
+      maxEntries = 1000,
+      includeDirs = true,
+    } = req.body as any;
+    if (!clientId || !basePath)
+      return res
+        .status(400)
+        .json({ message: "clientId and basePath required" });
     const socket = clients.get(String(clientId));
-    if (!socket || socket.readyState !== 1) return res.status(404).json({ message: "client not connected" });
+    if (!socket || socket.readyState !== 1)
+      return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const payload = { basePath, pattern, recursive, maxEntries, includeDirs };
     const cmd = { id, type: "list", payload };
@@ -206,9 +286,11 @@ app.post("/api/commands/list", requireAuth, async (req, res) => {
 app.post("/api/commands/file", requireAuth, async (req, res) => {
   try {
     const { clientId, path: filePath } = req.body as any;
-    if (!clientId || !filePath) return res.status(400).json({ message: "clientId and path required" });
+    if (!clientId || !filePath)
+      return res.status(400).json({ message: "clientId and path required" });
     const socket = clients.get(String(clientId));
-    if (!socket || socket.readyState !== 1) return res.status(404).json({ message: "client not connected" });
+    if (!socket || socket.readyState !== 1)
+      return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const payload = { path: filePath };
     const cmd = { id, type: "file", payload };
