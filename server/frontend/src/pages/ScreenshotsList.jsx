@@ -4,33 +4,18 @@ import { Table, Button } from "antd";
 import { authFetch } from "../dataProvider.js";
 
 export default function ScreenshotsList() {
-  const API_URL =
-    import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+  const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const [page, setPage] = React.useState(1);
   const pageSize = 50;
 
   const load = () => {
-    const params = new URLSearchParams({
-      page: String(page),
-      pageSize: String(pageSize),
-      ts: String(Date.now()),
-    });
-    authFetch(`${API_URL}/screenshots?${params.toString()}`, {
-      cache: "no-store",
-    })
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), ts: String(Date.now()) });
+    authFetch(`${API_URL}/screenshots?${params.toString()}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (json) {
-          setItems(json.data || []);
-          setTotal(json.total || 0);
-        }
-      })
-      .catch(() => {
-        /* keep previous */
-      });
+      .then((json) => { if (json) { setItems(json.data || []); setTotal(json.total || 0); } })
+      .catch(() => { /* keep previous */ });
   };
   React.useEffect(load, [page]);
 
@@ -64,38 +49,17 @@ export default function ScreenshotsList() {
         rowKey="id"
         dataSource={Array.isArray(items) ? items : []}
         size="large"
-        pagination={{
-          current: page,
-          pageSize,
-          total,
-          onChange: (p) => setPage(p),
-        }}
+        pagination={{ current: page, pageSize, total, onChange: (p) => setPage(p) }}
         columns={[
-          {
-            title: "Время",
-            dataIndex: "timestamp",
-            render: (value) =>
-              new Date(value).toLocaleString("ru-RU", {
-                timeZone: "Asia/Tashkent",
-                day: "2-digit",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-          },
+          { title: "Время", dataIndex: "timestamp" },
           { title: "Клиент", dataIndex: "clientId" },
           { title: "Файл", dataIndex: "filename" },
-          {
-            title: "Действие",
-            render: (_, rec) => (
-              <div style={{ display: "flex", gap: 8 }}>
-                <Button onClick={() => openFile(rec.id)}>Открыть</Button>
-                <Button onClick={() => downloadFile(rec.id, rec.filename)}>
-                  Скачать
-                </Button>
-              </div>
-            ),
-          },
+          { title: "Действие", render: (_, rec) => (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button onClick={() => openFile(rec.id)}>Открыть</Button>
+              <Button onClick={() => downloadFile(rec.id, rec.filename)}>Скачать</Button>
+            </div>
+          ) },
         ]}
       />
     </List>

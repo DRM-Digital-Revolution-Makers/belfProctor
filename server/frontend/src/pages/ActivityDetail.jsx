@@ -383,7 +383,15 @@ export default function ActivityDetail() {
                 Нет доступа
               </div>
             )}
-            <div style={{ marginTop: 8, fontSize: 12 }}>{s.timestamp}</div>
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              {new Date(s.timestamp).toLocaleString("ru-RU", {
+                timeZone: "Asia/Tashkent",
+                day: "2-digit",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </div>
           </div>
         ))}
       </div>

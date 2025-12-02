@@ -13,43 +13,6 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 const UPLOAD_DIR =
   process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
 
-function normalizeTimestamp(timestampStr: string): Date {
-  try {
-    const s = String(timestampStr || "").trim();
-    if (!s) return new Date();
-    // Normalize separators in time portion
-    const dashTime = s.replace(
-      /(T|\s)(\d{2})-(\d{2})-(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/,
-      (_m, sep, h, m, sec, ms = "", tz = "") =>
-        `${sep}${h}:${m}:${sec}${ms}${tz || ""}`
-    );
-    // Convert compact date-time "YYYYMMDD_HHMMSS" to ISO-like
-    const compact = dashTime.replace(
-      /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/,
-      (_m, y, mo, d, h, mi, s2) => `${y}-${mo}-${d}T${h}:${mi}:${s2}`
-    );
-    const cleaned = compact.replace(" ", "T");
-    // If timezone present (Z or offset), respect it
-    if (/Z|[+-]\d{2}:\d{2}/.test(cleaned)) {
-      const d0 = new Date(cleaned);
-      if (!isNaN(d0.getTime())) return d0;
-    }
-    // Ensure seconds exist
-    const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(cleaned)
-      ? `${cleaned}:00`
-      : cleaned;
-    // No timezone -> assume Asia/Tashkent (+05:00)
-    const withTz = `${withSeconds}+05:00`;
-    const d1 = new Date(withTz);
-    if (!isNaN(d1.getTime())) return d1;
-    const d2 = new Date(cleaned);
-    if (!isNaN(d2.getTime())) return d2;
-    return new Date();
-  } catch {
-    return new Date();
-  }
-}
-
 router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
   try {
     const clientId =
@@ -74,10 +37,10 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       req.file.buffer,
       client.encryptionKey
     );
-    const tsDate = normalizeTimestamp(timestampStr);
     const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const filename = `${tsDate
+    const now = new Date();
+    const filename = `${now
       .toISOString()
       .replace(/[:]/g, "-")}_${Date.now()}.jpg`;
     const filepath = path.join(clientDir, filename);
@@ -86,7 +49,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     const rec = await prisma.screenshot.create({
       data: {
         clientId,
-        timestamp: tsDate,
+        timestamp: now,
         filename,
         path: filepath,
       },
@@ -105,8 +68,7 @@ router.post("/reports", upload.single("report"), async (req, res) => {
       (req.body.clientId as string) ||
       (req.headers["x-client-id"] as string) ||
       "";
-    const timestampStr =
-      (req.body.timestamp as string) || new Date().toISOString();
+    const timestampStr = new Date().toISOString();
     if (!clientId || !req.file)
       return res.status(400).json({ message: "clientId and report required" });
 
@@ -121,19 +83,17 @@ router.post("/reports", upload.single("report"), async (req, res) => {
       req.file.buffer,
       client.encryptionKey
     );
-    const tsDate = normalizeTimestamp(timestampStr);
     const clientDir = path.join(UPLOAD_DIR, "reports", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const filename = `${tsDate
-      .toISOString()
-      .replace(/[:]/g, "-")}_${Date.now()}`;
+    const now2 = new Date();
+    const filename = `${now2.toISOString().replace(/[:]/g, "-")}_${Date.now()}`;
     const filepath = path.join(clientDir, filename);
     fs.writeFileSync(filepath, decrypted);
 
     const rec = await prisma.report.create({
       data: {
         clientId,
-        timestamp: tsDate,
+        timestamp: new Date(timestampStr),
         filename,
         path: filepath,
       },
@@ -184,8 +144,6 @@ router.get("/screenshots/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.screenshot.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.type("image/jpeg");
   res.sendFile(rec.path);
 });
 
@@ -193,7 +151,6 @@ router.get("/reports/:id/file", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const rec = await prisma.report.findUnique({ where: { id } });
   if (!rec) return res.status(404).json({ message: "Not found" });
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.sendFile(rec.path);
 });
 
