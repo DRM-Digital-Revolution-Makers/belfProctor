@@ -39,17 +39,17 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     );
     const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const now = new Date();
-    const filename = `${now
-      .toISOString()
-      .replace(/[:]/g, "-")}_${Date.now()}.jpg`;
+    const tsParsed = new Date(timestampStr);
+    const sendTs = isNaN(tsParsed.getTime()) ? new Date() : tsParsed;
+    const iso = sendTs.toISOString().replace(/[:]/g, "-");
+    const filename = `${clientId}_${iso}.jpg`;
     const filepath = path.join(clientDir, filename);
     fs.writeFileSync(filepath, decrypted);
 
     const rec = await prisma.screenshot.create({
       data: {
         clientId,
-        timestamp: now,
+        timestamp: sendTs,
         filename,
         path: filepath,
       },
@@ -60,7 +60,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       id: rec.id,
       filename,
       path: filepath,
-      timestamp: now.toISOString(),
+      timestamp: sendTs.toISOString(),
     });
   } catch (e) {
     console.error(e);

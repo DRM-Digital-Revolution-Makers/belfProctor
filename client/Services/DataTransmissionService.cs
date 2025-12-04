@@ -84,7 +84,8 @@ public class DataTransmissionService : IDataTransmissionService
             var encryptedData = EncryptData(fileBytes);
             
             using var content = new MultipartFormDataContent();
-            content.Add(new ByteArrayContent(encryptedData), "screenshot", Path.GetFileName(filePath));
+            var sendName = $"{_settings.ClientId}_{DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss.fffZ")}.jpg";
+            content.Add(new ByteArrayContent(encryptedData), "screenshot", sendName);
             content.Add(new StringContent(_settings.ClientId), "clientId");
             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
@@ -447,7 +448,8 @@ public class DataTransmissionService : IDataTransmissionService
                     var fileBytes = await File.ReadAllBytesAsync(file);
                     var encrypted = EncryptData(fileBytes);
                     using var content = new MultipartFormDataContent();
-                    content.Add(new ByteArrayContent(encrypted), "screenshot", Path.GetFileName(file));
+                    var sendName = $"{_settings.ClientId}_{DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss.fffZ")}.jpg";
+                    content.Add(new ByteArrayContent(encrypted), "screenshot", sendName);
                     content.Add(new StringContent(_settings.ClientId), "clientId");
                     content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
                     var resp = await _httpClient.PostAsync("screenshots", content);
