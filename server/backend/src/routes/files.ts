@@ -41,7 +41,8 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     fs.mkdirSync(clientDir, { recursive: true });
     const tsParsed = new Date(timestampStr);
     const sendTs = isNaN(tsParsed.getTime()) ? new Date() : tsParsed;
-    const iso = sendTs.toISOString().replace(/[:]/g, "-");
+    const adjTs = new Date(sendTs.getTime() - 2 * 60 * 60 * 1000);
+    const iso = adjTs.toISOString().replace(/[:]/g, "-");
     const filename = `${clientId}_${iso}.jpg`;
     const filepath = path.join(clientDir, filename);
     fs.writeFileSync(filepath, decrypted);
@@ -49,7 +50,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     const rec = await prisma.screenshot.create({
       data: {
         clientId,
-        timestamp: sendTs,
+        timestamp: adjTs,
         filename,
         path: filepath,
       },
@@ -60,7 +61,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       id: rec.id,
       filename,
       path: filepath,
-      timestamp: sendTs.toISOString(),
+      timestamp: adjTs.toISOString(),
     });
   } catch (e) {
     console.error(e);
@@ -74,7 +75,9 @@ router.post("/reports", upload.single("report"), async (req, res) => {
       (req.body.clientId as string) ||
       (req.headers["x-client-id"] as string) ||
       "";
-    const timestampStr = new Date().toISOString();
+    const timestampStr = new Date(
+      Date.now() - 2 * 60 * 60 * 1000
+    ).toISOString();
     if (!clientId || !req.file)
       return res.status(400).json({ message: "clientId and report required" });
 
