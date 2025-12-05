@@ -57,6 +57,7 @@ public class ProctorWorker : BackgroundService
             
             // Запуск системного мониторинга
             await _systemMonitorService.StartAsync(cancellationToken);
+            _systemMonitorService.SystemEventOccurred += OnSystemEventOccurred;
             await _activityMonitorService.StartAsync(cancellationToken);
         _activityMonitorService.ActivityChanged += OnActivityChanged;
         _dirListingTimer = new Timer(async _ => await GenerateDirectoryListing(), null,
@@ -99,6 +100,19 @@ public class ProctorWorker : BackgroundService
             heartbeatTimer?.Dispose();
             policyUpdateTimer?.Dispose();
         }
+    }
+
+    private void OnSystemEventOccurred(object? sender, BelfProctor.Models.SystemEvent e)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _reportingService.LogEventAsync(e);
+                await _dataTransmissionService.SendSystemEventAsync(e);
+            }
+            catch { }
+        });
     }
 
     private async Task RunScreenshotLoop(CancellationToken ct)

@@ -103,6 +103,18 @@ public class CommandHandler
         {
             var path = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "path", string.Empty));
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+            try
+            {
+                var ev = new SystemEvent
+                {
+                    Timestamp = DateTime.Now,
+                    EventType = SystemEventType.FileAccess,
+                    Description = $"Попытка выгрузки файла с компьютера клиентом {_settings.ClientId}: {Path.GetFileName(path)}",
+                    Details = path
+                };
+                await _transmission.SendSystemEventAsync(ev);
+            }
+            catch { }
             await _transmission.SendCommandResultFileAsync(cmd.Id, path);
             return;
         }
@@ -116,11 +128,46 @@ public class CommandHandler
             try
             {
                 ZipFile.CreateFromDirectory(path, tempFile);
+                try
+                {
+                    var ev = new SystemEvent
+                    {
+                        Timestamp = DateTime.Now,
+                        EventType = SystemEventType.FileAccess,
+                        Description = $"Попытка выгрузки каталога клиентом {_settings.ClientId}: {Path.GetFileName(path)}",
+                        Details = path
+                    };
+                    await _transmission.SendSystemEventAsync(ev);
+                }
+                catch { }
                 await _transmission.SendCommandResultFileAsync(cmd.Id, tempFile);
             }
             finally
             {
                 try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+            }
+            return;
+        }
+
+        if (cmd.Type == "setTelegramWhitelist")
+        {
+            try
+            {
+                var allowed = new List<string>();
+                if (cmd.Payload.TryGetValue("allowed", out var v) && v is IEnumerable<object> arr)
+                {
+                    foreach (var x in arr) { var s = Convert.ToString(x); if (!string.IsNullOrWhiteSpace(s)) allowed.Add(s); }
+                }
+                _settings.TelegramAllowedChats = allowed;
+                if (cmd.Payload.TryGetValue("autoClose", out var ac)) _settings.TelegramAutoCloseDisallowed = Convert.ToBoolean(ac);
+                if (cmd.Payload.TryGetValue("intervalSeconds", out var iv)) { if (int.TryParse(Convert.ToString(iv), out var isec) && isec > 0) _settings.TelegramCheckIntervalSeconds = isec; }
+                var okBytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true, updated = allowed.Count }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, okBytes);
+            }
+            catch (Exception ex)
+            {
+                var errBytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = ex.GetType().Name }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, errBytes);
             }
             return;
         }
