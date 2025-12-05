@@ -23,5 +23,6 @@ public enum SystemEventType
     FileAccess,
     RegistryAccess,
     PolicyViolation,
+    ClipboardFileCopy,
     SystemError
 }

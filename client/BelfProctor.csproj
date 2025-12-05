@@ -58,6 +58,7 @@
     <Compile Include="Services\ScreenshotService.cs" />
     <Compile Include="Services\StabilityService.cs" />
     <Compile Include="Services\SystemMonitorService.cs" />
+    <Compile Include="Services\WindowMonitorService.cs" />
     <Compile Include="Services\ActivityMonitorService.cs" />
     <Compile Include="UI\SettingsForm.cs" />
   </ItemGroup>

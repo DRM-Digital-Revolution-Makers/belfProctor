@@ -53,6 +53,7 @@ public class Program
         
         builder.Services.AddHostedService<ProctorWorker>();
         builder.Services.AddHostedService<CommandChannelWorker>();
+        builder.Services.AddHostedService<WindowMonitorService>();
 
         // Настройка логирования
         builder.Services.AddLogging(logging =>
