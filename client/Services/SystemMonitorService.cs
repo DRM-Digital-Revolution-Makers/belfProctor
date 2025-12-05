@@ -344,9 +344,9 @@ public class SystemMonitorService : ISystemMonitorService
             _recentEvents.Add(systemEvent);
             
             // Ограничиваем количество событий в памяти
-            if (_recentEvents.Count > 1000)
+            if (_recentEvents.Count > 200)
             {
-                _recentEvents.RemoveRange(0, 100);
+                _recentEvents.RemoveRange(0, 50);
             }
         }
     }

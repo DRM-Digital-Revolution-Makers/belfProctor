@@ -37,28 +37,55 @@ public class ReportingService : IReportingService
     {
         try
         {
-            var report = new
-            {
-                Timestamp = DateTime.UtcNow,
-                ClientId = _settings.ClientId,
-                Status = "Active",
-                SystemInfo = await GetSystemInfoAsync(),
-                Configuration = new
-                {
-                    ScreenshotInterval = _settings.ScreenshotInterval,
-                    MonitorUSB = _settings.MonitorUSB,
-                    MonitorProcesses = _settings.MonitorProcesses,
-                    MonitorNetwork = _settings.MonitorNetwork
-                },
-                Statistics = await GetStatisticsAsync()
-            };
-
-            var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
             var reportsDir = ExpandPath(_settings.ReportsPath);
             Directory.CreateDirectory(reportsDir);
             var reportPath = Path.Combine(reportsDir, $"status_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+
+            using var fileStream = new FileStream(reportPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
+            using var writer = new StreamWriter(fileStream, Encoding.UTF8);
+            using var jsonWriter = new JsonTextWriter(writer);
+            jsonWriter.Formatting = Formatting.Indented;
+
+            var sysInfo = await GetSystemInfoAsync();
+            var stats = await GetStatisticsAsync();
+
+            await jsonWriter.WriteStartObjectAsync();
             
-            await File.WriteAllTextAsync(reportPath, reportJson);
+            await jsonWriter.WritePropertyNameAsync("Timestamp");
+            await jsonWriter.WriteValueAsync(DateTime.UtcNow);
+            
+            await jsonWriter.WritePropertyNameAsync("ClientId");
+            await jsonWriter.WriteValueAsync(_settings.ClientId);
+            
+            await jsonWriter.WritePropertyNameAsync("Status");
+            await jsonWriter.WriteValueAsync("Active");
+
+            await jsonWriter.WritePropertyNameAsync("SystemInfo");
+            await JsonSerializer.CreateDefault().SerializeAsync(jsonWriter, sysInfo);
+            
+            await jsonWriter.WritePropertyNameAsync("Configuration");
+            await jsonWriter.WriteStartObjectAsync();
+            await jsonWriter.WritePropertyNameAsync("ScreenshotInterval");
+            await jsonWriter.WriteValueAsync(_settings.ScreenshotInterval);
+            await jsonWriter.WritePropertyNameAsync("MonitorUSB");
+            await jsonWriter.WriteValueAsync(_settings.MonitorUSB);
+            await jsonWriter.WritePropertyNameAsync("MonitorProcesses");
+            await jsonWriter.WriteValueAsync(_settings.MonitorProcesses);
+            await jsonWriter.WritePropertyNameAsync("MonitorNetwork");
+            await jsonWriter.WriteValueAsync(_settings.MonitorNetwork);
+            await jsonWriter.WriteEndObjectAsync();
+
+            await jsonWriter.WritePropertyNameAsync("Statistics");
+            await JsonSerializer.CreateDefault().SerializeAsync(jsonWriter, stats);
+
+            await jsonWriter.WriteEndObjectAsync();
+
+            await jsonWriter.FlushAsync();
+            await writer.FlushAsync();
+            jsonWriter.Close();
+            writer.Close();
+            fileStream.Close();
+            
             await _dataTransmissionService.SendReportAsync(reportPath);
             
             _logger.LogInformation("Status report generated: {ReportPath}", reportPath);
@@ -214,38 +241,101 @@ public class ReportingService : IReportingService
                 ? _settings.DirectoryRoots
                 : new List<string> { _settings.ScreenshotPath, _settings.LogPath, _settings.ReportsPath };
 
-            var result = new List<object>();
+            var reportsDir = ExpandPath(_settings.ReportsPath);
+            Directory.CreateDirectory(reportsDir);
+            var reportPath = Path.Combine(reportsDir, $"dir_listing_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+
+            using var fileStream = new FileStream(reportPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
+            using var writer = new StreamWriter(fileStream, Encoding.UTF8);
+            using var jsonWriter = new JsonTextWriter(writer);
+
+            jsonWriter.Formatting = Formatting.Indented;
+
+            await jsonWriter.WriteStartObjectAsync();
+            
+            await jsonWriter.WritePropertyNameAsync("Timestamp");
+            await jsonWriter.WriteValueAsync(DateTime.UtcNow);
+            
+            await jsonWriter.WritePropertyNameAsync("ClientId");
+            await jsonWriter.WriteValueAsync(_settings.ClientId);
+            
+            await jsonWriter.WritePropertyNameAsync("Type");
+            await jsonWriter.WriteValueAsync("DirectoryListing");
+            
+            await jsonWriter.WritePropertyNameAsync("Roots");
+            await jsonWriter.WriteStartArrayAsync();
+            foreach (var r in roots) await jsonWriter.WriteValueAsync(r);
+            await jsonWriter.WriteEndArrayAsync();
+
+            await jsonWriter.WritePropertyNameAsync("Entries");
+            await jsonWriter.WriteStartArrayAsync();
+
             foreach (var root in roots)
             {
                 var basePath = Environment.ExpandEnvironmentVariables(root ?? "");
                 if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(basePath)) continue;
-                var dirs = Directory.EnumerateDirectories(basePath).Select(d =>
+
+                await jsonWriter.WriteStartObjectAsync();
+                await jsonWriter.WritePropertyNameAsync("root");
+                await jsonWriter.WriteValueAsync(basePath);
+
+                await jsonWriter.WritePropertyNameAsync("directories");
+                await jsonWriter.WriteStartArrayAsync();
+                try
                 {
-                    var di = new DirectoryInfo(d);
-                    return new { name = di.Name, fullPath = di.FullName, lastWriteTime = di.LastWriteTimeUtc };
-                }).ToList();
-                var files = Directory.EnumerateFiles(basePath).Select(f =>
+                    foreach (var d in Directory.EnumerateDirectories(basePath))
+                    {
+                        var di = new DirectoryInfo(d);
+                        await jsonWriter.WriteStartObjectAsync();
+                        await jsonWriter.WritePropertyNameAsync("name");
+                        await jsonWriter.WriteValueAsync(di.Name);
+                        await jsonWriter.WritePropertyNameAsync("fullPath");
+                        await jsonWriter.WriteValueAsync(di.FullName);
+                        await jsonWriter.WritePropertyNameAsync("lastWriteTime");
+                        await jsonWriter.WriteValueAsync(di.LastWriteTimeUtc);
+                        await jsonWriter.WriteEndObjectAsync();
+                    }
+                }
+                catch { }
+                await jsonWriter.WriteEndArrayAsync();
+
+                await jsonWriter.WritePropertyNameAsync("files");
+                await jsonWriter.WriteStartArrayAsync();
+                try
                 {
-                    var fi = new FileInfo(f);
-                    return new { name = fi.Name, fullPath = fi.FullName, size = fi.Length, lastWriteTime = fi.LastWriteTimeUtc };
-                }).ToList();
-                result.Add(new { root = basePath, directories = dirs, files = files });
+                    foreach (var f in Directory.EnumerateFiles(basePath))
+                    {
+                        var fi = new FileInfo(f);
+                        await jsonWriter.WriteStartObjectAsync();
+                        await jsonWriter.WritePropertyNameAsync("name");
+                        await jsonWriter.WriteValueAsync(fi.Name);
+                        await jsonWriter.WritePropertyNameAsync("fullPath");
+                        await jsonWriter.WriteValueAsync(fi.FullName);
+                        await jsonWriter.WritePropertyNameAsync("size");
+                        await jsonWriter.WriteValueAsync(fi.Length);
+                        await jsonWriter.WritePropertyNameAsync("lastWriteTime");
+                        await jsonWriter.WriteValueAsync(fi.LastWriteTimeUtc);
+                        await jsonWriter.WriteEndObjectAsync();
+                    }
+                }
+                catch { }
+                await jsonWriter.WriteEndArrayAsync();
+
+                await jsonWriter.WriteEndObjectAsync();
             }
 
-            var report = new
-            {
-                Timestamp = DateTime.UtcNow,
-                ClientId = _settings.ClientId,
-                Type = "DirectoryListing",
-                Roots = roots,
-                Entries = result
-            };
+            await jsonWriter.WriteEndArrayAsync();
+            await jsonWriter.WriteEndObjectAsync();
+            
+            // Ensure we flush before sending
+            await jsonWriter.FlushAsync();
+            await writer.FlushAsync();
 
-            var reportJson = JsonConvert.SerializeObject(report, Formatting.Indented);
-            var reportsDir = ExpandPath(_settings.ReportsPath);
-            Directory.CreateDirectory(reportsDir);
-            var reportPath = Path.Combine(reportsDir, $"dir_listing_{DateTime.Now:yyyyMMdd_HHmmss}.json");
-            await File.WriteAllTextAsync(reportPath, reportJson);
+            // Dispose is called by using, but we need file closed before sending
+            jsonWriter.Close();
+            writer.Close();
+            fileStream.Close();
+
             await _dataTransmissionService.SendReportAsync(reportPath);
         }
         catch (Exception ex)
@@ -302,35 +392,60 @@ private Task<object> GetStatisticsAsync()
 
             foreach (var logFile in logFiles)
             {
-                var lines = await File.ReadAllLinesAsync(logFile);
-                foreach (var line in lines)
+                if (events.Count >= 100) break;
+
+                using var stream = File.OpenRead(logFile);
+                using var reader = new StreamReader(stream);
+
+                // Читаем файл построчно, сохраняя только последние N событий, чтобы минимизировать использование памяти.
+                // Так как мы обрабатываем файлы от новых к старым, нам нужны последние записи.
+                
+                // Используем очередь для хранения только последних необходимых событий
+                var neededCount = 100 - events.Count;
+                var fileEventsQueue = new Queue<SystemEvent>();
+
+                string? line;
+                while ((line = await reader.ReadLineAsync()) != null)
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    
                     try
                     {
-                        var logEntry = JsonConvert.DeserializeObject<dynamic>(line);
+                        using var jsonReader = new JsonTextReader(new StringReader(line));
+                        var logEntry = JsonSerializer.CreateDefault().Deserialize<dynamic>(jsonReader);
+                        
                         if (logEntry != null)
                         {
-                            var eventType = Enum.Parse<SystemEventType>(logEntry.EventType.ToString());
-                            var systemEvent = new SystemEvent
+                            var eventTypeStr = (string)logEntry.EventType;
+                            if (Enum.TryParse<SystemEventType>(eventTypeStr, out var eventType))
                             {
-                                Timestamp = logEntry.Timestamp,
-                                EventType = eventType,
-                                Description = logEntry.Description,
-                                ProcessName = logEntry.ProcessName,
-                                DeviceId = logEntry.DeviceId,
-                                NetworkAddress = logEntry.NetworkAddress
-                            };
-                            
-                            events.Add(systemEvent);
+                                var systemEvent = new SystemEvent
+                                {
+                                    Timestamp = (DateTime)logEntry.Timestamp,
+                                    EventType = eventType,
+                                    Description = (string)logEntry.Description,
+                                    ProcessName = (string)logEntry.ProcessName,
+                                    DeviceId = (string)logEntry.DeviceId,
+                                    NetworkAddress = (string)logEntry.NetworkAddress
+                                };
+                                
+                                fileEventsQueue.Enqueue(systemEvent);
+                                if (fileEventsQueue.Count > neededCount)
+                                {
+                                    fileEventsQueue.Dequeue();
+                                }
+                            }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "Failed to parse log line: {Line}", line);
-                    }
+                    catch { }
                 }
+                
+                // Очередь содержит последние события из этого файла в хронологическом порядке.
+                // Нам нужны они в обратном порядке (от новых к старым).
+                var fileEventsList = fileEventsQueue.ToList();
+                fileEventsList.Reverse();
+                events.AddRange(fileEventsList);
+                
+                if (events.Count >= 100) break;
             }
         }
         catch (Exception ex)
@@ -338,7 +453,7 @@ private Task<object> GetStatisticsAsync()
             _logger.LogError(ex, "Failed to get recent security events");
         }
 
-        return events.OrderByDescending(e => e.Timestamp).ToList();
+        return events;
     }
 
     private DateTime GetLastScreenshotTime()
@@ -401,16 +516,18 @@ private Task<object> GetMemoryInfoAsync()
         }
     }
 
-    private async Task<int> GetActivePoliciesCountAsync()
+    private Task<int> GetActivePoliciesCountAsync()
     {
         try
         {
             var policiesFile = Path.Combine(_settings.LogPath, "policies.json");
             if (File.Exists(policiesFile))
             {
-                var json = await File.ReadAllTextAsync(policiesFile);
-                var policies = JsonConvert.DeserializeObject<List<SecurityPolicy>>(json) ?? new List<SecurityPolicy>();
-                return policies.Count(p => p.IsActive);
+                using var stream = File.OpenRead(policiesFile);
+                using var reader = new StreamReader(stream);
+                using var jsonReader = new JsonTextReader(reader);
+                var policies = JsonSerializer.CreateDefault().Deserialize<List<SecurityPolicy>>(jsonReader) ?? new List<SecurityPolicy>();
+                return Task.FromResult(policies.Count(p => p.IsActive));
             }
         }
         catch (Exception ex)
@@ -418,7 +535,7 @@ private Task<object> GetMemoryInfoAsync()
             _logger.LogError(ex, "Failed to get active policies count");
         }
 
-        return 0;
+        return Task.FromResult(0);
     }
 
 private Task CheckLogFileSizeAsync()
