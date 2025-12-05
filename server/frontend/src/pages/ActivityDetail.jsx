@@ -1,6 +1,12 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Button, Tree, Segmented } from "antd";
+import { Button, Segmented, Select, Breadcrumb, Table } from "antd";
+import {
+  FolderFilled,
+  FileTextOutlined,
+  DownloadOutlined,
+  HomeOutlined,
+} from "@ant-design/icons";
 import { authFetch } from "../dataProvider.js";
 import { useParams } from "react-router-dom";
 import ApexCharts from "apexcharts";
@@ -22,17 +28,34 @@ export default function ActivityDetail() {
   const [chartElIdInactive] = React.useState(
     () => `chart_inact_${Math.random().toString(36).slice(2)}`
   );
-  const [dirTree, setDirTree] = React.useState([]);
+  const [currentPath, setCurrentPath] = React.useState("");
+  const [dirItems, setDirItems] = React.useState([]);
+  const [dirLoading, setDirLoading] = React.useState(false);
   const [dirError, setDirError] = React.useState(false);
   const [range, setRange] = React.useState("7d");
   const [authToken, setAuthToken] = React.useState(
     () => localStorage.getItem("token") || ""
   );
   const [imgTs, setImgTs] = React.useState(() => Date.now());
+  const [driveOptions, setDriveOptions] = React.useState([]);
+  const [rootPath, setRootPath] = React.useState("%SYSTEMDRIVE%\\");
 
   const headersAuth = React.useMemo(() => {
     return authToken ? { Authorization: `Bearer ${authToken}` } : {};
   }, [authToken]);
+
+  // Initialize currentPath when rootPath is determined
+  React.useEffect(() => {
+    if (rootPath && !currentPath) {
+      setCurrentPath(rootPath);
+    }
+  }, [rootPath, currentPath]);
+
+  // Reset currentPath when drive changes manually
+  const handleDriveChange = (newRoot) => {
+    setRootPath(newRoot);
+    setCurrentPath(newRoot);
+  };
 
   React.useEffect(() => {
     if (!authToken) return;
@@ -48,7 +71,9 @@ export default function ActivityDetail() {
           window.dispatchEvent(new Event("auth:changed"));
         }
       }
-    } catch {}
+    } catch (e) {
+      void e;
+    }
   }, [authToken]);
 
   const loadData = React.useCallback(async () => {
@@ -92,6 +117,262 @@ export default function ActivityDetail() {
     return () => {};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadData]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const candidates = ["%SYSTEMDRIVE%\\", "C:\\", "D:\\", "E:\\"];
+      const headers = { ...headersAuth, "Content-Type": "application/json" };
+      const found = [];
+      for (const basePath of candidates) {
+        try {
+          const res = await authFetch(`${API_URL}/commands/list`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              clientId,
+              basePath,
+              pattern: "*",
+              recursive: false,
+              maxEntries: 1,
+              includeDirs: true,
+            }),
+          });
+          if (!res.ok) continue;
+          const json = await res.json();
+          const id = json.id;
+          if (!id) continue;
+          let ok = false;
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const r2 = await authFetch(`${API_URL}/commands/${id}/json`);
+            if (!r2.ok) continue;
+            const j2 = await r2.json();
+            const files = Array.isArray(j2.files) ? j2.files : [];
+            const dirs = Array.isArray(j2.directories) ? j2.directories : [];
+            if (files.length || dirs.length) {
+              ok = true;
+              break;
+            }
+          }
+          if (ok) found.push(basePath);
+        } catch (e) {
+          void e;
+        }
+      }
+      if (!cancelled) {
+        setDriveOptions(found.length ? found : candidates);
+        const newRoot = found.length ? found[0] : candidates[0];
+        // Only set root/current if not already set or invalid
+        setRootPath((prev) => {
+          const valid = found.length ? found : candidates;
+          if (valid.includes(prev)) return prev;
+          return valid[0];
+        });
+      }
+    };
+    probe();
+    return () => {
+      cancelled = true;
+    };
+  }, [API_URL, clientId, headersAuth]);
+
+  // Fetch directory contents when currentPath changes
+  React.useEffect(() => {
+    if (!currentPath) return;
+    let cancelled = false;
+    const fetchDir = async () => {
+      setDirLoading(true);
+      setDirError(false);
+      try {
+        const headers = { ...headersAuth, "Content-Type": "application/json" };
+        const res = await authFetch(`${API_URL}/commands/list`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            clientId,
+            basePath: currentPath,
+            pattern: "*",
+            recursive: false,
+            maxEntries: 1000,
+            includeDirs: true,
+          }),
+        });
+        if (!res.ok) throw new Error("Failed to list");
+        const json = await res.json();
+        const cmdId = json.id;
+        if (!cmdId) throw new Error("No command ID");
+
+        let items = [];
+        for (let i = 0; i < 15; i++) {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 1000));
+          const r2 = await authFetch(`${API_URL}/commands/${cmdId}/json`);
+          if (r2.status === 404) continue;
+          if (r2.ok) {
+            const j2 = await r2.json();
+            const files = Array.isArray(j2.files) ? j2.files : [];
+            const dirs = Array.isArray(j2.directories) ? j2.directories : [];
+
+            items = [
+              ...dirs.map((d) => ({ ...d, isDir: true, key: d.fullPath })),
+              ...files.map((f) => ({ ...f, isDir: false, key: f.fullPath })),
+            ];
+            // Sort: directories first, then files
+            items.sort((a, b) => {
+              if (a.isDir === b.isDir) return a.name.localeCompare(b.name);
+              return a.isDir ? -1 : 1;
+            });
+            break;
+          }
+        }
+        if (!cancelled) setDirItems(items);
+      } catch (e) {
+        if (!cancelled) setDirError(true);
+      } finally {
+        if (!cancelled) setDirLoading(false);
+      }
+    };
+    fetchDir();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath, API_URL, clientId, headersAuth]);
+
+  // Helper to parse path into breadcrumbs
+  const breadcrumbs = React.useMemo(() => {
+    if (!currentPath) return [];
+    // Handle Windows paths primarily as per context
+    // Split by \ or / but keep the drive letter attached to the first part if possible
+    const normalized = currentPath.replace(/\\/g, "/");
+    const parts = normalized.split("/").filter((p) => p);
+
+    // Reconstruct paths for each breadcrumb
+    return parts.map((part, index) => {
+      // Reconstruct the path up to this part
+      // If it's a Windows drive (e.g. "C:"), ensure trailing slash for root
+      // Actually, we can just join with backslashes since backend handles it
+      const pathParts = parts.slice(0, index + 1);
+      let path = pathParts.join("\\");
+      if (pathParts.length === 1 && path.includes(":")) {
+        path += "\\"; // Ensure C: becomes C:\
+      }
+      return { title: part, path };
+    });
+  }, [currentPath]);
+
+  const handleDownload = async (record) => {
+    const headers = {
+      ...headersAuth,
+      "Content-Type": "application/json",
+    };
+    const isFolder = record.isDir;
+    const endpoint = isFolder
+      ? `${API_URL}/commands/folder`
+      : `${API_URL}/commands/file`;
+    try {
+      const res = await authFetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          clientId,
+          path: record.fullPath,
+        }),
+      });
+      if (!res.ok) return;
+      const { id: cmdId } = await res.json();
+      const targetFilename = isFolder ? `${record.name}.zip` : record.name;
+
+      // Poll for file result
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const r2 = await authFetch(`${API_URL}/commands/${cmdId}/file/latest`);
+        if (r2.ok) {
+          const blob = await r2.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = targetFilename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          break;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const columns = [
+    {
+      title: "Имя",
+      dataIndex: "name",
+      key: "name",
+      render: (text, record) => (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            cursor: record.isDir ? "pointer" : "default",
+            gap: 8,
+          }}
+          onClick={() => record.isDir && setCurrentPath(record.fullPath)}
+        >
+          {record.isDir ? (
+            <FolderFilled style={{ color: "#54aeff", fontSize: 18 }} />
+          ) : (
+            <FileTextOutlined style={{ color: "#666", fontSize: 18 }} />
+          )}
+          <span
+            style={{
+              color: record.isDir ? "#1677ff" : "inherit",
+              fontWeight: record.isDir ? 500 : 400,
+            }}
+          >
+            {text}
+          </span>
+        </div>
+      ),
+    },
+    {
+      title: "Размер",
+      dataIndex: "length",
+      key: "length",
+      width: 100,
+      render: (text, record) => {
+        if (record.isDir) return "-";
+        if (typeof text !== "number") return "-";
+        if (text < 1024) return `${text} B`;
+        if (text < 1024 * 1024) return `${(text / 1024).toFixed(1)} KB`;
+        return `${(text / (1024 * 1024)).toFixed(1)} MB`;
+      },
+    },
+    {
+      title: "Дата изменения",
+      dataIndex: "lastWriteTime",
+      key: "lastWriteTime",
+      width: 200,
+      render: (text) => (text ? new Date(text).toLocaleString("ru-RU") : "-"),
+    },
+    {
+      title: "Действия",
+      key: "actions",
+      width: 100,
+      align: "right",
+      render: (_, record) => (
+        <Button
+          type="text"
+          icon={<DownloadOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDownload(record);
+          }}
+        />
+      ),
+    },
+  ];
 
   const now = Date.now();
   const spanMs =
@@ -281,83 +562,6 @@ export default function ActivityDetail() {
     };
   }, [dailyInactive, chartElIdInactive]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      try {
-        setDirError(false);
-        const headers = { "Content-Type": "application/json" };
-        const res = await authFetch(`${API_URL}/commands/list`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            clientId,
-            basePath: "~",
-            pattern: "*",
-            recursive: false,
-            maxEntries: 1000,
-            includeDirs: true,
-          }),
-        });
-        if (!res.ok) {
-          setDirError(true);
-          return;
-        }
-        const json = await res.json();
-        const cmdId = json.id;
-        if (!cmdId) {
-          setDirError(true);
-          return;
-        }
-        let got = false;
-        for (let i = 0; i < 15; i++) {
-          if (cancelled) return;
-          await new Promise((r) => setTimeout(r, 1000));
-          const r2 = await authFetch(`${API_URL}/commands/${cmdId}/result`);
-          if (r2.status === 404) {
-            setDirError(true);
-            break;
-          }
-          if (r2.ok) {
-            const j2 = await r2.json();
-            const treeArr = Array.isArray(j2.tree) ? j2.tree : null;
-            let built = Array.isArray(treeArr) ? treeArr : [];
-            if (!built.length) {
-              const files = Array.isArray(j2.files) ? j2.files : [];
-              const dirs = Array.isArray(j2.directories) ? j2.directories : [];
-              built = [
-                ...dirs.map((d) => ({
-                  title: d.name,
-                  key: d.fullPath,
-                  path: d.fullPath,
-                  isLeaf: false,
-                })),
-                ...files.map((f) => ({
-                  title: f.name,
-                  key: f.fullPath,
-                  path: f.fullPath,
-                  isLeaf: true,
-                })),
-              ];
-            }
-            if (built.length) {
-              setDirTree(built);
-              got = true;
-              break;
-            }
-          }
-        }
-        if (!got) setDirError(true);
-      } catch {
-        setDirError(true);
-      }
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [API_URL, clientId, headersAuth]);
-
   return (
     <List title={`Клиент ${clientId}`}>
       <div
@@ -432,71 +636,69 @@ export default function ActivityDetail() {
       <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>
         Файлы клиента
       </div>
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <span style={{ color: "#666" }}>Диск:</span>
+        <Select
+          style={{ minWidth: 160 }}
+          value={rootPath}
+          options={(driveOptions.length ? driveOptions : [rootPath]).map(
+            (d) => ({ label: d, value: d })
+          )}
+          onChange={handleDriveChange}
+        />
+      </div>
       {dirError ? (
         <div style={{ color: "#999" }}>
           рабочие директории клиента не отображаются
         </div>
       ) : (
-        <Tree
-          treeData={dirTree}
-          titleRender={(node) => (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <span>{node.title}</span>
-              {node.isLeaf && (
-                <Button
-                  size="small"
-                  onClick={async () => {
-                    const headers = { "Content-Type": "application/json" };
-                    const res = await authFetch(`${API_URL}/commands/file`, {
-                      method: "POST",
-                      headers,
-                      body: JSON.stringify({
-                        clientId,
-                        path: node.path,
-                      }),
-                    });
-                    const { id: cmdId } = await res.json();
-                    for (let i = 0; i < 20; i++) {
-                      await new Promise((r) => setTimeout(r, 1000));
-                      const r2 = await authFetch(
-                        `${API_URL}/commands/${cmdId}/result`
-                      );
-                      if (r2.ok) {
-                        const j2 = await r2.json();
-                        const b64 = j2.base64 || "";
-                        const fname = j2.filename || node.title;
-                        if (b64) {
-                          const bin = atob(b64);
-                          const arr = new Uint8Array(bin.length);
-                          for (let i2 = 0; i2 < bin.length; i2++)
-                            arr[i2] = bin.charCodeAt(i2);
-                          const blob = new Blob([arr]);
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = fname;
-                          document.body.appendChild(a);
-                          a.click();
-                          a.remove();
-                          URL.revokeObjectURL(url);
-                        }
-                        break;
-                      }
-                    }
-                  }}
-                >
-                  Скачать
-                </Button>
-              )}
-            </div>
-          )}
-        />
+        <>
+          <Breadcrumb
+            style={{ marginBottom: 16 }}
+            items={[
+              {
+                title: (
+                  <HomeOutlined
+                    onClick={() => setCurrentPath(rootPath)}
+                    style={{ cursor: "pointer" }}
+                  />
+                ),
+              },
+              ...breadcrumbs.map((item) => ({
+                title: (
+                  <span
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setCurrentPath(item.path)}
+                  >
+                    {item.title}
+                  </span>
+                ),
+              })),
+            ]}
+          />
+          <Table
+            dataSource={dirItems}
+            columns={columns}
+            rowKey="key"
+            loading={dirLoading}
+            pagination={false}
+            size="small"
+            onRow={(record) => ({
+              onClick: () => {
+                if (record.isDir) setCurrentPath(record.fullPath);
+              },
+              style: { cursor: record.isDir ? "pointer" : "default" },
+            })}
+            locale={{ emptyText: "Нет файлов" }}
+          />
+        </>
       )}
     </List>
   );

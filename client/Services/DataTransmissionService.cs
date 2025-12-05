@@ -350,6 +350,7 @@ public class DataTransmissionService : IDataTransmissionService
 
     public async Task SendCommandResultFileAsync(string commandId, string filePath)
     {
+        HttpResponseMessage? response = null;
         try
         {
             if (!File.Exists(filePath))
@@ -358,20 +359,22 @@ public class DataTransmissionService : IDataTransmissionService
                 return;
             }
 
-            var fileBytes = await File.ReadAllBytesAsync(filePath);
-            var encryptedData = EncryptData(fileBytes);
-            using var content = new MultipartFormDataContent();
-            content.Add(new ByteArrayContent(encryptedData), "file", Path.GetFileName(filePath));
-            content.Add(new StringContent(_settings.ClientId), "clientId");
-            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-
-            var response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
-
-            if (!response.IsSuccessStatusCode)
+            using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var streamContent = GetEncryptedStreamContent(fileStream))
+            using (var content = new MultipartFormDataContent())
             {
-                _logger.LogWarning("Failed to send command result file. Status: {StatusCode}", response.StatusCode);
+                content.Add(streamContent, "file", Path.GetFileName(filePath));
+                content.Add(new StringContent(_settings.ClientId), "clientId");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+
+                response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
+            }
+
+            if (response == null || !response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send command result file. Status: {StatusCode}", response?.StatusCode);
                 var destName = Path.Combine(_pendingCmdFiles, $"cmd_{commandId}_{Path.GetFileName(filePath)}");
-                try { File.Move(filePath, destName, true); } catch { }
+                try { File.Copy(filePath, destName, true); } catch { }
             }
             else
             {
@@ -381,7 +384,81 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending command result file");
-            try { var destName = Path.Combine(_pendingCmdFiles, $"cmd_{commandId}_{Path.GetFileName(filePath)}"); if (File.Exists(filePath)) File.Move(filePath, destName, true); } catch { }
+            try { var destName = Path.Combine(_pendingCmdFiles, $"cmd_{commandId}_{Path.GetFileName(filePath)}"); if (File.Exists(filePath)) File.Copy(filePath, destName, true); } catch { }
+        }
+    }
+
+    private StreamContent GetEncryptedStreamContent(Stream inputStream)
+    {
+        if (string.IsNullOrEmpty(_settings.EncryptionKey))
+        {
+            return new StreamContent(inputStream);
+        }
+
+        try 
+        {
+            var aes = Aes.Create();
+            aes.Key = DeriveKeyFromPassword(_settings.EncryptionKey);
+            aes.GenerateIV();
+            
+            var ivStream = new MemoryStream(aes.IV);
+            var encryptor = aes.CreateEncryptor();
+            var cryptoStream = new CryptoStream(inputStream, encryptor, CryptoStreamMode.Read);
+            
+            var combined = new CombinedStream(ivStream, cryptoStream);
+            return new StreamContent(combined);
+        }
+        catch
+        {
+            return new StreamContent(inputStream);
+        }
+    }
+
+    private class CombinedStream : Stream
+    {
+        private readonly Stream _first;
+        private readonly Stream _second;
+
+        public CombinedStream(Stream first, Stream second)
+        {
+            _first = first;
+            _second = second;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int totalRead = 0;
+            int read = _first.Read(buffer, offset, count);
+            totalRead += read;
+            
+            if (read < count)
+            {
+                int read2 = _second.Read(buffer, offset + read, count - read);
+                totalRead += read2;
+            }
+            return totalRead;
+        }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _first.Dispose();
+                _second.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 

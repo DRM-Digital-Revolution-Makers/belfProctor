@@ -82,7 +82,7 @@ export default function ActivitiesList() {
   };
 
   return (
-    <List title="Активность (реальное время)">
+    <List title="Активность">
       <Table
         rowKey="clientId"
         dataSource={Array.isArray(items) ? items : []}
@@ -90,17 +90,6 @@ export default function ActivitiesList() {
         pagination={false}
         columns={[
           { title: "ClientId", dataIndex: "clientId" },
-          { title: "Время", dataIndex: "timestamp" },
-          {
-            title: "Активность",
-            dataIndex: "isActive",
-            render: (v) =>
-              v ? (
-                <Tag color="green">Активен</Tag>
-              ) : (
-                <Tag color="red">Неактивен</Tag>
-              ),
-          },
           {
             title: "Статус",
             render: (_, r) => {
@@ -117,6 +106,17 @@ export default function ActivitiesList() {
               );
             },
           },
+          {
+            title: "Активность",
+            dataIndex: "isActive",
+            render: (v) =>
+              v ? (
+                <Tag color="green">Активен</Tag>
+              ) : (
+                <Tag color="red">Неактивен</Tag>
+              ),
+          },
+
           { title: "Таймеры", render: (_, r) => renderDuration(r) },
           {
             title: "Действие",

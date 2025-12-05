@@ -29,7 +29,7 @@ export const authFetch = async (url, options = {}) => {
         }
       }
     }
-  } catch {}
+  } catch (e) { void e; }
   const token2 = localStorage.getItem("token") || "";
   const baseHeaders = options.headers || {};
   const headers = token2 ? { ...baseHeaders, Authorization: `Bearer ${token2}` } : baseHeaders;
