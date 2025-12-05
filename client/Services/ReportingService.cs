@@ -12,17 +12,20 @@ public class ReportingService : IReportingService
     private readonly ILogger<ReportingService> _logger;
     private readonly ProctorSettings _settings;
     private readonly IDataTransmissionService _dataTransmissionService;
+    private readonly IActivityMonitorService _activityMonitor;
     private readonly string _logFilePath;
     private readonly object _logLock = new();
 
     public ReportingService(
         ILogger<ReportingService> logger,
         IOptions<ProctorSettings> settings,
-        IDataTransmissionService dataTransmissionService)
+        IDataTransmissionService dataTransmissionService,
+        IActivityMonitorService activityMonitor)
     {
         _logger = logger;
         _settings = settings.Value;
         _dataTransmissionService = dataTransmissionService;
+        _activityMonitor = activityMonitor;
         var logBase = Environment.ExpandEnvironmentVariables(_settings.LogPath ?? string.Empty);
         Directory.CreateDirectory(logBase);
         _logFilePath = Path.Combine(logBase, $"events_{DateTime.Now:yyyyMMdd}.log");
@@ -93,6 +96,89 @@ public class ReportingService : IReportingService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to generate status report");
+        }
+    }
+
+    public async Task GenerateDailyReportAsync()
+    {
+        try
+        {
+            var reportsDir = ExpandPath(_settings.ReportsPath);
+            Directory.CreateDirectory(reportsDir);
+            var reportPath = Path.Combine(reportsDir, $"daily_report_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+
+            using var fileStream = new FileStream(reportPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
+            using var writer = new StreamWriter(fileStream, Encoding.UTF8);
+            using var jsonWriter = new JsonTextWriter(writer);
+            jsonWriter.Formatting = Formatting.Indented;
+
+            await jsonWriter.WriteStartObjectAsync();
+
+            await jsonWriter.WritePropertyNameAsync("Timestamp");
+            await jsonWriter.WriteValueAsync(DateTime.UtcNow);
+
+            await jsonWriter.WritePropertyNameAsync("ClientId");
+            await jsonWriter.WriteValueAsync(_settings.ClientId);
+
+            await jsonWriter.WritePropertyNameAsync("ReportType");
+            await jsonWriter.WriteValueAsync("Daily");
+
+            // Расчетный период: с 00:00 текущего дня до текущего момента (или до конца дня, если отчет за прошлый день)
+            // В данном случае считаем с начала текущего дня (локальное время машины)
+            var today = DateTime.Today;
+            await jsonWriter.WritePropertyNameAsync("PeriodStart");
+            await jsonWriter.WriteValueAsync(today);
+            await jsonWriter.WritePropertyNameAsync("PeriodEnd");
+            await jsonWriter.WriteValueAsync(today.AddDays(1));
+
+            // 1. Время запуска
+            var processStartTime = Process.GetCurrentProcess().StartTime;
+            await jsonWriter.WritePropertyNameAsync("BelfProctorStartTime");
+            await jsonWriter.WriteValueAsync(processStartTime);
+
+            // 2. Количество скриншотов за сегодня
+            var screenshotsDir = ExpandPath(_settings.ScreenshotPath);
+            var todayScreenshots = 0;
+            if (Directory.Exists(screenshotsDir))
+            {
+                todayScreenshots = Directory.EnumerateFiles(screenshotsDir, "screenshot_*.jpg")
+                    .Count(f => File.GetCreationTime(f).Date == today);
+            }
+            await jsonWriter.WritePropertyNameAsync("ScreenshotsCount");
+            await jsonWriter.WriteValueAsync(todayScreenshots);
+
+            // 3. Время активности и неактивности
+            // Важно: _activityMonitor считает с момента запуска приложения.
+            // Если приложение запущено сегодня, то это корректно.
+            // Если приложение работает несколько дней, это будет общее время сессии.
+            // Для строгого подсчета "за день" нужна персистентность, но пока берем текущие счетчики сессии.
+            await jsonWriter.WritePropertyNameAsync("ActiveTimeSeconds");
+            await jsonWriter.WriteValueAsync(_activityMonitor.ActiveElapsed.TotalSeconds);
+
+            await jsonWriter.WritePropertyNameAsync("InactiveTimeSeconds");
+            await jsonWriter.WriteValueAsync(_activityMonitor.InactiveElapsed.TotalSeconds);
+
+            // 4. Открытые файлы/папки (заглушка на будущее)
+            await jsonWriter.WritePropertyNameAsync("AccessedItems");
+            await jsonWriter.WriteStartArrayAsync();
+            // TODO: Добавить логику получения открытых файлов, когда появятся события
+            await jsonWriter.WriteEndArrayAsync();
+
+            await jsonWriter.WriteEndObjectAsync();
+
+            await jsonWriter.FlushAsync();
+            await writer.FlushAsync();
+            jsonWriter.Close();
+            writer.Close();
+            fileStream.Close();
+
+            await _dataTransmissionService.SendReportAsync(reportPath);
+            
+            _logger.LogInformation("Daily report generated: {ReportPath}", reportPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate daily report");
         }
     }
 
