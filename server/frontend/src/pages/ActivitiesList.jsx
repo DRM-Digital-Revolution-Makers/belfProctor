@@ -54,15 +54,27 @@ export default function ActivitiesList() {
     return () => clearInterval(id);
   }, [fetchLatest]);
 
+  const isOnline = (clientId) => {
+    const hb = latestHeartbeats.find((h) => h.clientId === clientId);
+    return hb && Date.now() - new Date(hb.timestamp).getTime() < 3 * 60 * 1000;
+  };
+
   const renderDuration = (record) => {
     const now = Date.now();
     const ts = new Date(record.timestamp).getTime();
-    const activeMs = record.isActive
-      ? record.activeMilliseconds + (now - ts)
-      : record.activeMilliseconds;
-    const inactiveMs = record.isActive
-      ? record.inactiveMilliseconds
-      : record.inactiveMilliseconds + (now - ts);
+    const online = isOnline(record.clientId);
+
+    let activeMs = record.activeMilliseconds;
+    let inactiveMs = record.inactiveMilliseconds;
+
+    if (online) {
+      if (record.isActive) {
+        activeMs += now - ts;
+      } else {
+        inactiveMs += now - ts;
+      }
+    }
+
     const fmt = (ms) => {
       const s = Math.floor(ms / 1000);
       const m = Math.floor(s / 60);
@@ -93,12 +105,7 @@ export default function ActivitiesList() {
           {
             title: "Статус",
             render: (_, r) => {
-              const hb = latestHeartbeats.find(
-                (h) => h.clientId === r.clientId
-              );
-              const online =
-                hb &&
-                Date.now() - new Date(hb.timestamp).getTime() < 3 * 60 * 1000;
+              const online = isOnline(r.clientId);
               return online ? (
                 <Tag color="green">Подключен</Tag>
               ) : (
@@ -108,15 +115,16 @@ export default function ActivitiesList() {
           },
           {
             title: "Активность",
-            dataIndex: "isActive",
-            render: (v) =>
-              v ? (
+            render: (_, r) => {
+              const online = isOnline(r.clientId);
+              const effectiveActive = online && r.isActive;
+              return effectiveActive ? (
                 <Tag color="green">Активен</Tag>
               ) : (
                 <Tag color="red">Неактивен</Tag>
-              ),
+              );
+            },
           },
-
           { title: "Таймеры", render: (_, r) => renderDuration(r) },
           {
             title: "Действие",

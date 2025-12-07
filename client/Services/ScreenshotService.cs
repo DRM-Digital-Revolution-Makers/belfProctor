@@ -120,8 +120,7 @@ public class ScreenshotService : IScreenshotService
 
     private Rectangle GetScreenBounds()
     {
-        // Получаем размеры основного экрана
-        var primaryScreen = System.Windows.Forms.Screen.PrimaryScreen;
-        return primaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+        var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
+        return new Rectangle(vs.X, vs.Y, vs.Width, vs.Height);
     }
 }
