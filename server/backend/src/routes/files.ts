@@ -137,18 +137,11 @@ router.post("/reports", upload.single("report"), async (req, res) => {
 
 // Listings for admin
 router.get("/screenshots", requireAuth, async (req, res) => {
-  const {
-    page = "1",
-    pageSize = "20",
-    clientId,
-    sortOrder = "desc",
-  } = req.query as any;
+  const { page = "1", pageSize = "20", clientId } = req.query as any;
   const where = clientId ? { clientId: String(clientId) } : {};
-  const order = sortOrder === "asc" ? "asc" : "desc";
-
   const all = await prisma.screenshot.findMany({
     where,
-    orderBy: { timestamp: order },
+    orderBy: { timestamp: "desc" },
   });
   const filtered = all.filter((it) => it.path && fs.existsSync(it.path));
   const total = filtered.length;

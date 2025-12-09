@@ -10,7 +10,6 @@ export default function ScreenshotsList() {
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const [page, setPage] = React.useState(1);
-  const [sortOrder, setSortOrder] = React.useState("desc");
   const pageSize = 50;
 
   const load = () => {
@@ -18,7 +17,6 @@ export default function ScreenshotsList() {
       page: String(page),
       pageSize: String(pageSize),
       ts: String(Date.now()),
-      sortOrder: sortOrder,
     });
     authFetch(`${API_URL}/screenshots?${params.toString()}`, {
       cache: "no-store",
@@ -34,7 +32,7 @@ export default function ScreenshotsList() {
         /* keep previous */
       });
   };
-  React.useEffect(load, [page, sortOrder]);
+  React.useEffect(load, [page]);
 
   const openFile = async (id) => {
     const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
@@ -70,21 +68,12 @@ export default function ScreenshotsList() {
           current: page,
           pageSize,
           total,
-        }}
-        onChange={(pagination, filters, sorter) => {
-          setPage(pagination.current);
-          if (sorter && sorter.field === "timestamp") {
-            // antd sorter.order is 'ascend' or 'descend' or undefined
-            const newOrder = sorter.order === "ascend" ? "asc" : "desc";
-            setSortOrder(newOrder);
-          }
+          onChange: (p) => setPage(p),
         }}
         columns={[
           {
             title: "Время",
             dataIndex: "timestamp",
-            sorter: true,
-            defaultSortOrder: "descend",
             render: (value) =>
               new Date(value).toLocaleString("ru-RU", {
                 timeZone: "Asia/Tashkent",
