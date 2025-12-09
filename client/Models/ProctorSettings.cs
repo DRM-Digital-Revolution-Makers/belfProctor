@@ -18,9 +18,6 @@ public class ProctorSettings
     public long MaxLogFileSize { get; set; } = 10485760; // 10MB
     public int MaxScreenshotAge { get; set; } = 7; // дни
     public int ScreenshotRetentionMinutes { get; set; } = 60; // минуты, удалять локальный файл после отправки
-    public List<string> TelegramAllowedChats { get; set; } = new();
-    public int TelegramCheckIntervalSeconds { get; set; } = 2;
-    public bool TelegramAutoCloseDisallowed { get; set; } = true;
     public int HeartbeatInterval { get; set; } = 60000; // мс
     public int PolicyUpdateInterval { get; set; } = 300000; // мс
     public int DirectoryListingInterval { get; set; } = 600000; // мс

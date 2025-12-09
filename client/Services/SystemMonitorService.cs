@@ -1,8 +1,5 @@
 using System.Diagnostics;
 using System.Management;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
@@ -21,22 +18,16 @@ public class SystemMonitorService : ISystemMonitorService
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processPollingTask;
     private readonly HashSet<int> _seenPids = new();
-    private Task? _telegramMonitorTask;
-    private readonly Dictionary<string, DateTime> _blockedChats = new();
 
     public event EventHandler<SystemEvent>? SystemEventOccurred;
 
     public SystemMonitorService(
         ILogger<SystemMonitorService> logger,
-        IOptions<ProctorSettings> settings,
-        IDataTransmissionService transmission)
+        IOptions<ProctorSettings> settings)
     {
         _logger = logger;
         _settings = settings.Value;
-        _transmission = transmission;
     }
-
-    private readonly IDataTransmissionService _transmission;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -58,8 +49,6 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 _ = Task.Run(MonitorNetworkActivity, _cancellationTokenSource.Token);
             }
-
-            _telegramMonitorTask = Task.Run(MonitorTelegramChats, _cancellationTokenSource.Token);
 
             _logger.LogInformation("System monitoring started");
         }
@@ -214,104 +203,6 @@ public class SystemMonitorService : ISystemMonitorService
         }
     }
 
-    private async Task MonitorTelegramChats()
-    {
-        var interval = TimeSpan.FromSeconds(_settings.TelegramCheckIntervalSeconds > 0 ? _settings.TelegramCheckIntervalSeconds : 2);
-        while (!(_cancellationTokenSource?.IsCancellationRequested ?? true))
-        {
-            try
-            {
-                var telegramPids = Process.GetProcessesByName("Telegram").Select(p => p.Id).ToHashSet();
-                if (telegramPids.Count > 0)
-                {
-                    var disallowed = GetTelegramWindowTitles().Where(t => IsChatDisallowed(t)).ToList();
-                    foreach (var t in disallowed)
-                    {
-                        if (_blockedChats.TryGetValue(t, out var last) && (DateTime.Now - last) < TimeSpan.FromMinutes(5)) continue;
-                        _blockedChats[t] = DateTime.Now;
-                        var hwnd = FindWindowByTitleForPids(t, telegramPids);
-                        if (hwnd != IntPtr.Zero && _settings.TelegramAutoCloseDisallowed)
-                        {
-                            SendMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-                            try { MessageBox.Show($"Недопустимый чат: {t}", "BelfProctor", MessageBoxButtons.OK, MessageBoxIcon.Warning); } catch { }
-                        }
-                        var evnt = new SystemEvent
-                        {
-                            Timestamp = DateTime.Now,
-                            EventType = SystemEventType.PolicyViolation,
-                            Description = $"Клиент {_settings.ClientId} открыл запрещённый чат: {t}",
-                            ProcessName = "Telegram.exe",
-                            AdditionalData = new Dictionary<string, object> { ["ChatTitle"] = t }
-                        };
-                        AddEvent(evnt);
-                        SystemEventOccurred?.Invoke(this, evnt);
-                        await _transmission.SendSystemEventAsync(evnt);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Telegram monitoring iteration failed");
-            }
-            await Task.Delay(interval, _cancellationTokenSource?.Token ?? CancellationToken.None);
-        }
-    }
-
-    private bool IsChatDisallowed(string title)
-    {
-        var allowed = _settings.TelegramAllowedChats ?? new List<string>();
-        if (allowed.Count == 0) return false;
-        var t = title.ToLowerInvariant();
-        return !allowed.Any(a => t.Contains(a.ToLowerInvariant()));
-    }
-
-    private IEnumerable<string> GetTelegramWindowTitles()
-    {
-        var list = new List<string>();
-        EnumWindows((hWnd, lParam) =>
-        {
-            uint pid;
-            GetWindowThreadProcessId(hWnd, out pid);
-            var sbLen = GetWindowTextLength(hWnd);
-            if (sbLen > 0)
-            {
-                var sb = new StringBuilder(sbLen + 1);
-                GetWindowText(hWnd, sb, sb.Capacity);
-                var s = sb.ToString();
-                if (!string.IsNullOrWhiteSpace(s)) list.Add(s);
-            }
-            return true;
-        }, IntPtr.Zero);
-        return list.Where(s => s.Contains("Telegram", StringComparison.OrdinalIgnoreCase) || s.Contains("Chat", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private IntPtr FindWindowByTitleForPids(string title, HashSet<int> pids)
-    {
-        IntPtr found = IntPtr.Zero;
-        EnumWindows((hWnd, lParam) =>
-        {
-            uint pid; GetWindowThreadProcessId(hWnd, out pid);
-            if (!pids.Contains((int)pid)) return true;
-            var len = GetWindowTextLength(hWnd);
-            if (len > 0)
-            {
-                var sb = new StringBuilder(len + 1);
-                GetWindowText(hWnd, sb, sb.Capacity);
-                if (string.Equals(sb.ToString(), title, StringComparison.OrdinalIgnoreCase)) { found = hWnd; return false; }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return found;
-    }
-
-    private const uint WM_CLOSE = 0x0010;
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll", SetLastError = true)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-    [DllImport("user32.dll", SetLastError = true)] private static extern int GetWindowTextLength(IntPtr hWnd);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
     private async Task CheckNetworkConnections()
     {
         await Task.Run(() =>
@@ -355,7 +246,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 Timestamp = DateTime.Now,
                 EventType = SystemEventType.ProcessStarted,
-                Description = $"Клиент {_settings.ClientId} запустил процесс: {processName}",
+                Description = $"Process started: {processName}",
                 ProcessName = processName,
                 AdditionalData = new Dictionary<string, object>
                 {
@@ -382,7 +273,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 Timestamp = DateTime.Now,
                 EventType = SystemEventType.USBConnected,
-                Description = $"Клиент {_settings.ClientId} подключил USB-устройство: {driveName}",
+                Description = $"USB device connected: {driveName}",
                 DeviceId = driveName
             };
 
