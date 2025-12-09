@@ -4,21 +4,6 @@ import { decryptAes256CbcPrefixedIv } from "../encryption";
 
 const router = Router();
 
-// Mapping from C# SystemEventType enum (int) to Prisma SystemEventType enum (string)
-const SystemEventTypeMap = [
-  "ProcessStarted",      // 0
-  "ProcessStopped",      // 1
-  "USBConnected",        // 2
-  "USBDisconnected",     // 3
-  "NetworkConnection",   // 4
-  "NetworkDisconnection",// 5
-  "FileAccess",          // 6
-  "RegistryAccess",      // 7
-  "PolicyViolation",     // 8
-  "ClipboardFileCopy",   // 9
-  "SystemError"          // 10
-];
-
 router.post("/", async (req, res) => {
   try {
     const clientId = (req.headers["x-client-id"] as string) || "";
@@ -33,25 +18,11 @@ router.post("/", async (req, res) => {
     const decryptedJson = decryptAes256CbcPrefixedIv(encrypted, client.encryptionKey).toString("utf-8");
     const payload = JSON.parse(decryptedJson);
 
-    // Convert numeric event type to string enum
-    let eventType = payload.EventType !== undefined ? payload.EventType : payload.eventType;
-    if (typeof eventType === "number") {
-      eventType = SystemEventTypeMap[eventType];
-    }
-    
-    // Validate eventType
-    if (!eventType || !SystemEventTypeMap.includes(eventType)) {
-       // Fallback or error? For now, let's log and use SystemError or just fail if critical
-       // But to be safe, if mapping fails, maybe it's a new event type?
-       // Let's assume it maps correctly if it's within range.
-       // If undefined, Prisma will complain.
-    }
-
     const event = await prisma.event.create({
       data: {
         clientId,
         timestamp: new Date(payload.Timestamp || payload.timestamp || Date.now()),
-        eventType: eventType as any, // Cast to any or specific Enum type if imported
+        eventType: payload.EventType || payload.eventType,
         description: payload.Description || payload.description,
         details: payload.Details || payload.details,
         processName: payload.ProcessName || payload.processName,
