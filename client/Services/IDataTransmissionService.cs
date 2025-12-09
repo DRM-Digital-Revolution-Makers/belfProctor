@@ -8,7 +8,6 @@ public interface IDataTransmissionService
     Task SendSystemEventAsync(SystemEvent systemEvent);
     Task SendHeartbeatAsync();
     Task<byte[]> DownloadPolicyAsync(string policyId);
-    Task<byte[]> DownloadWhitelistAsync(string name);
     Task SendReportAsync(string reportPath);
     Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes);
     Task SendCommandResultFileAsync(string commandId, string filePath);

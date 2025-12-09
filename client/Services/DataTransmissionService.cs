@@ -251,33 +251,6 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    public async Task<byte[]> DownloadWhitelistAsync(string name)
-    {
-        try
-        {
-            var response = await _httpClient.GetAsync($"whitelist/client/{name}");
-            
-            if (response.IsSuccessStatusCode)
-            {
-                var encryptedData = await response.Content.ReadAsByteArrayAsync();
-                var decryptedData = DecryptData(encryptedData);
-                
-                _logger.LogDebug("Whitelist downloaded successfully: {Name}", name);
-                return decryptedData;
-            }
-            else
-            {
-                _logger.LogWarning("Failed to download whitelist. Status: {StatusCode}", response.StatusCode);
-                return Array.Empty<byte>();
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error downloading whitelist: {Name}", name);
-            return Array.Empty<byte>();
-        }
-    }
-
     public async Task SendReportAsync(string reportPath)
     {
         try
