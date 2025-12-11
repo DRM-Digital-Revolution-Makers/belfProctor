@@ -57,7 +57,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiter for ingestion endpoints
-const limiter = rateLimit({ windowMs: 60 * 1000, max: 200 });
+const limiter = rateLimit({ windowMs: 60 * 1000, max: 5000 });
 app.use("/api/", limiter);
 
 // Raw parser for octet-stream endpoints

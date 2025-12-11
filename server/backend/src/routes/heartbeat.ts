@@ -21,7 +21,7 @@ router.post("/", async (req, res) => {
     await prisma.heartbeat.create({
       data: {
         clientId,
-        timestamp: new Date(payload.Timestamp || payload.timestamp || Date.now()),
+        timestamp: new Date(), // Always use server time for reliable online/offline status
         status: payload.Status || payload.status || "Online",
         version: payload.Version || payload.version || "",
       },

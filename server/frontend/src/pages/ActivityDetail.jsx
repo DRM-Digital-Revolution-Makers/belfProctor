@@ -31,7 +31,8 @@ export default function ActivityDetail() {
   const [currentPath, setCurrentPath] = React.useState("");
   const [dirItems, setDirItems] = React.useState([]);
   const [dirLoading, setDirLoading] = React.useState(false);
-  const [dirError, setDirError] = React.useState(false);
+  const [dirError, setDirError] = React.useState(null);
+  const [retryTrigger, setRetryTrigger] = React.useState(0);
   const [range, setRange] = React.useState("7d");
   const [authToken, setAuthToken] = React.useState(
     () => localStorage.getItem("token") || ""
@@ -183,7 +184,7 @@ export default function ActivityDetail() {
     let cancelled = false;
     const fetchDir = async () => {
       setDirLoading(true);
-      setDirError(false);
+      setDirError(null);
       try {
         const headers = { ...headersAuth, "Content-Type": "application/json" };
         const res = await authFetch(`${API_URL}/commands/list`, {
@@ -198,13 +199,16 @@ export default function ActivityDetail() {
             includeDirs: true,
           }),
         });
-        if (!res.ok) throw new Error("Failed to list");
+        if (!res.ok)
+          throw new Error(`Ошибка запроса: ${res.status} ${res.statusText}`);
         const json = await res.json();
         const cmdId = json.id;
-        if (!cmdId) throw new Error("No command ID");
+        if (!cmdId) throw new Error("Сервер не вернул ID команды");
 
         let items = [];
-        for (let i = 0; i < 15; i++) {
+        let success = false;
+        // Poll for up to 30 seconds
+        for (let i = 0; i < 30; i++) {
           if (cancelled) return;
           await new Promise((r) => setTimeout(r, 1000));
           const r2 = await authFetch(`${API_URL}/commands/${cmdId}/json`);
@@ -223,12 +227,21 @@ export default function ActivityDetail() {
               if (a.isDir === b.isDir) return a.name.localeCompare(b.name);
               return a.isDir ? -1 : 1;
             });
+            success = true;
             break;
+          } else {
+            // If error other than 404
+            throw new Error(`Ошибка получения результата: ${r2.status}`);
           }
         }
+
+        if (!success)
+          throw new Error("Таймаут: Клиент не ответил за 30 секунд");
+
         if (!cancelled) setDirItems(items);
       } catch (e) {
-        if (!cancelled) setDirError(true);
+        console.error(e);
+        if (!cancelled) setDirError(e.message || "Неизвестная ошибка");
       } finally {
         if (!cancelled) setDirLoading(false);
       }
@@ -237,7 +250,7 @@ export default function ActivityDetail() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath, API_URL, clientId, headersAuth]);
+  }, [currentPath, API_URL, clientId, headersAuth, retryTrigger]);
 
   // Helper to parse path into breadcrumbs
   const breadcrumbs = React.useMemo(() => {
@@ -406,18 +419,23 @@ export default function ActivityDetail() {
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
     let sum = 0;
+    const MAX_GAP = 2 * 60 * 1000;
     for (let i = 0; i < sorted.length - 1; i++) {
       const cur = sorted[i];
       const nxt = sorted[i + 1];
-      if (cur.isActive)
-        sum +=
-          new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
+      const diff =
+        new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
+      const duration = Math.min(diff, MAX_GAP);
+      if (cur.isActive) sum += duration;
     }
     const last = sorted[sorted.length - 1];
     const dayDate = new Date(last.timestamp);
     const isToday = new Date().toDateString() === dayDate.toDateString();
-    if (isToday && last.isActive)
-      sum += now - new Date(last.timestamp).getTime();
+    const timeSinceLast = now - new Date(last.timestamp).getTime();
+
+    if (isToday && last.isActive && timeSinceLast < MAX_GAP)
+      sum += timeSinceLast;
+
     const hours = Math.max(0, sum / (60 * 60 * 1000));
     const label = dayDate.toLocaleDateString(undefined, {
       day: "2-digit",
@@ -433,18 +451,32 @@ export default function ActivityDetail() {
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
     let sum = 0;
+    const MAX_GAP = 2 * 60 * 1000;
     for (let i = 0; i < sorted.length - 1; i++) {
       const cur = sorted[i];
       const nxt = sorted[i + 1];
-      if (!cur.isActive)
-        sum +=
-          new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
+      const diff =
+        new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
+
+      if (!cur.isActive) {
+        sum += diff;
+      } else {
+        if (diff > MAX_GAP) {
+          sum += diff - MAX_GAP;
+        }
+      }
     }
     const last = sorted[sorted.length - 1];
     const dayDate = new Date(last.timestamp);
     const isToday = new Date().toDateString() === dayDate.toDateString();
-    if (isToday && !last.isActive)
-      sum += now - new Date(last.timestamp).getTime();
+    const timeSinceLast = now - new Date(last.timestamp).getTime();
+
+    if (isToday && !last.isActive) {
+      sum += timeSinceLast;
+    } else if (isToday && last.isActive && timeSinceLast > MAX_GAP) {
+      sum += timeSinceLast - MAX_GAP;
+    }
+
     const hours = Math.max(0, sum / (60 * 60 * 1000));
     const label = dayDate.toLocaleDateString(undefined, {
       day: "2-digit",
@@ -655,8 +687,30 @@ export default function ActivityDetail() {
         />
       </div>
       {dirError ? (
-        <div style={{ color: "#999" }}>
-          рабочие директории клиента не отображаются
+        <div
+          style={{
+            padding: "12px 16px",
+            marginBottom: 16,
+            background: "#fff2f0",
+            border: "1px solid #ffccc7",
+            borderRadius: 6,
+            color: "#cf1322",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span>
+            Ошибка загрузки директории: <strong>{dirError}</strong>
+          </span>
+          <Button
+            size="small"
+            onClick={() => setRetryTrigger((p) => p + 1)}
+            type="primary"
+            danger
+          >
+            Повторить
+          </Button>
         </div>
       ) : (
         <>

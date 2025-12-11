@@ -3,6 +3,8 @@ using System.Management;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace BelfProctor.Services;
 
@@ -49,6 +51,8 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 _ = Task.Run(MonitorNetworkActivity, _cancellationTokenSource.Token);
             }
+            
+            _ = Task.Run(MonitorActiveWindow, _cancellationTokenSource.Token);
 
             _logger.LogInformation("System monitoring started");
         }
@@ -336,6 +340,67 @@ public class SystemMonitorService : ISystemMonitorService
             return recentSimilar;
         }
     }
+
+    private async Task MonitorActiveWindow()
+    {
+        string? lastTitle = null;
+        while (!_cancellationTokenSource?.IsCancellationRequested ?? false)
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    var hWnd = GetForegroundWindow();
+                    if (hWnd != IntPtr.Zero)
+                    {
+                        const int nChars = 256;
+                        var buff = new StringBuilder(nChars);
+                        if (GetWindowText(hWnd, buff, nChars) > 0)
+                        {
+                            var title = buff.ToString();
+                            if (!string.IsNullOrWhiteSpace(title) && title != lastTitle)
+                            {
+                                lastTitle = title;
+                                GetWindowThreadProcessId(hWnd, out var processId);
+                                var processName = "Unknown";
+                                try { processName = Process.GetProcessById((int)processId).ProcessName; } catch { }
+
+                                var systemEvent = new SystemEvent
+                                {
+                                    Timestamp = DateTime.Now,
+                                    EventType = SystemEventType.AppUsage,
+                                    Description = $"User opened: {title}",
+                                    ProcessName = processName,
+                                    AdditionalData = new Dictionary<string, object>
+                                    {
+                                        ["WindowTitle"] = title,
+                                        ["ProcessId"] = processId
+                                    }
+                                };
+                                
+                                AddEvent(systemEvent);
+                                SystemEventOccurred?.Invoke(this, systemEvent);
+                            }
+                        }
+                    }
+                }
+                await Task.Delay(1000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                 // Ignore errors in loop
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     private void AddEvent(SystemEvent systemEvent)
     {

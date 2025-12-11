@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Threading;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,6 +24,10 @@ public class DataTransmissionService : IDataTransmissionService
     private readonly string _pendingCmdJson;
     private readonly string _pendingCmdFiles;
     private System.Threading.Timer? _retryTimer;
+    private System.Threading.Timer? _eventBatchTimer;
+    private readonly ConcurrentQueue<SystemEvent> _eventQueue = new();
+    private const int MaxBatchSize = 50;
+    private readonly SemaphoreSlim _batchLock = new(1, 1);
 
     public DataTransmissionService(
         ILogger<DataTransmissionService> logger,
@@ -70,6 +76,7 @@ public class DataTransmissionService : IDataTransmissionService
         Directory.CreateDirectory(_pendingCmdJson);
         Directory.CreateDirectory(_pendingCmdFiles);
         _retryTimer = new System.Threading.Timer(_ => { try { FlushPendingAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+        _eventBatchTimer = new System.Threading.Timer(_ => { try { FlushEventBatchAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
     }
 
     private async Task<HttpResponseMessage> GetWithAutoDiscoverAsync(string relativeUrl)
@@ -239,33 +246,60 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    public async Task SendSystemEventAsync(SystemEvent systemEvent)
+    public Task SendSystemEventAsync(SystemEvent systemEvent)
     {
-        try
-        {
-            var json = JsonConvert.SerializeObject(systemEvent);
-            var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
-            
-            using var content = new ByteArrayContent(encryptedData);
-            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        _eventQueue.Enqueue(systemEvent);
+        return Task.CompletedTask;
+    }
 
-            var response = await PostWithAutoDiscoverAsync("events", content);
-            
-            if (response.IsSuccessStatusCode)
-            {
-                _logger.LogDebug("System event sent successfully: {EventType}", systemEvent.EventType);
-            }
-            else
-            {
-                _logger.LogWarning("Failed to send system event. Status: {StatusCode}", response.StatusCode);
-                var name = Path.Combine(_pendingEvents, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json");
-                try { await File.WriteAllTextAsync(name, json); } catch { }
-            }
-        }
-        catch (Exception ex)
+    private async Task FlushEventBatchAsync()
+    {
+        if (await _batchLock.WaitAsync(0))
         {
-            _logger.LogError(ex, "Error sending system event: {EventType}", systemEvent.EventType);
-            try { var name = Path.Combine(_pendingEvents, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(systemEvent)); } catch { }
+            try
+            {
+                while (!_eventQueue.IsEmpty)
+                {
+                    var batch = new List<SystemEvent>();
+                    while (batch.Count < MaxBatchSize && _eventQueue.TryDequeue(out var evt))
+                    {
+                        batch.Add(evt);
+                    }
+
+                    if (batch.Count == 0) break;
+
+                    try
+                    {
+                        var json = JsonConvert.SerializeObject(batch);
+                        var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
+                        
+                        using var content = new ByteArrayContent(encryptedData);
+                        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+                        var response = await PostWithAutoDiscoverAsync("events", content);
+                        
+                        if (response.IsSuccessStatusCode)
+                        {
+                            _logger.LogDebug("System event batch sent successfully: {Count} events", batch.Count);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Failed to send system event batch. Status: {StatusCode}", response.StatusCode);
+                            var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
+                            try { await File.WriteAllTextAsync(name, json); } catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error sending system event batch");
+                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch)); } catch { }
+                    }
+                }
+            }
+            finally
+            {
+                _batchLock.Release();
+            }
         }
     }
 
@@ -644,6 +678,7 @@ public class DataTransmissionService : IDataTransmissionService
     {
         _httpClient?.Dispose();
         _retryTimer?.Dispose();
+        _eventBatchTimer?.Dispose();
     }
 
     private async Task FlushPendingAsync()

@@ -27,6 +27,7 @@ enum SystemEventType {
   RegistryAccess
   PolicyViolation
   SystemError
+  AppUsage
 }
 
 model User {

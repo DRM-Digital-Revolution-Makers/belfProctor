@@ -54,15 +54,33 @@ export default function ActivitiesList() {
     return () => clearInterval(id);
   }, [fetchLatest]);
 
+  const isOnline = (clientId) => {
+    const hb = latestHeartbeats.find((h) => h.clientId === clientId);
+    // Reduced timeout to 60 seconds to detect offline status faster
+    return hb && Date.now() - new Date(hb.timestamp).getTime() < 60 * 1000;
+  };
+
   const renderDuration = (record) => {
     const now = Date.now();
     const ts = new Date(record.timestamp).getTime();
-    const activeMs = record.isActive
-      ? record.activeMilliseconds + (now - ts)
-      : record.activeMilliseconds;
-    const inactiveMs = record.isActive
-      ? record.inactiveMilliseconds
-      : record.inactiveMilliseconds + (now - ts);
+    const online = isOnline(record.clientId);
+    const isActive = online && record.isActive;
+
+    let activeMs = record.activeMilliseconds;
+    let inactiveMs = record.inactiveMilliseconds;
+
+    if (online) {
+      // If online, accumulate time based on current state
+      if (isActive) {
+        activeMs += now - ts;
+      } else {
+        inactiveMs += now - ts;
+      }
+    }
+    // If offline, we do not add any time to active/inactive current counters
+    // because the client stopped reporting.
+    // Ideally, the time since last report is "Offline" time.
+
     const fmt = (ms) => {
       const s = Math.floor(ms / 1000);
       const m = Math.floor(s / 60);
@@ -93,12 +111,7 @@ export default function ActivitiesList() {
           {
             title: "Статус",
             render: (_, r) => {
-              const hb = latestHeartbeats.find(
-                (h) => h.clientId === r.clientId
-              );
-              const online =
-                hb &&
-                Date.now() - new Date(hb.timestamp).getTime() < 3 * 60 * 1000;
+              const online = isOnline(r.clientId);
               return online ? (
                 <Tag color="green">Подключен</Tag>
               ) : (
@@ -108,15 +121,16 @@ export default function ActivitiesList() {
           },
           {
             title: "Активность",
-            dataIndex: "isActive",
-            render: (v) =>
-              v ? (
+            render: (_, r) => {
+              const online = isOnline(r.clientId);
+              const effectiveActive = online && r.isActive;
+              return effectiveActive ? (
                 <Tag color="green">Активен</Tag>
               ) : (
                 <Tag color="red">Неактивен</Tag>
-              ),
+              );
+            },
           },
-
           { title: "Таймеры", render: (_, r) => renderDuration(r) },
           {
             title: "Действие",

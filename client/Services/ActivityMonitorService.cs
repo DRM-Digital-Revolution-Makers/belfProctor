@@ -16,7 +16,7 @@ public class ActivityMonitorService : IActivityMonitorService
     private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
     private readonly ILogger<ActivityMonitorService> _logger;
-    private readonly TimeSpan _inactivityThreshold = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _inactivityThreshold = TimeSpan.FromSeconds(5);
     private readonly object _lock = new();
     private System.Threading.Timer? _timer;
     private bool _active;
@@ -75,11 +75,14 @@ public class ActivityMonitorService : IActivityMonitorService
     private static TimeSpan GetIdleTime()
     {
         var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
-        if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
-        var last = unchecked((int)info.dwTime);
-        var now = Environment.TickCount;
-        var diff = now - last;
-        if (diff < 0) diff = int.MaxValue + diff;
+        if (!GetLastInputInfo(ref info)) return TimeSpan.MaxValue;
+        
+        uint now = (uint)Environment.TickCount;
+        uint last = info.dwTime;
+        
+        // Unsigned arithmetic handles rollover correctly
+        uint diff = now - last;
+        
         return TimeSpan.FromMilliseconds(diff);
     }
 }
