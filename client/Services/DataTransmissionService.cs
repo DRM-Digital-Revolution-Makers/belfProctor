@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using BelfProctor.Models;
+using System.Net.NetworkInformation;
 
 namespace BelfProctor.Services;
 
@@ -49,6 +50,7 @@ public class DataTransmissionService : IDataTransmissionService
         else
         {
             _logger.LogWarning("ServerUrl is not configured or invalid: {ServerUrl}", _settings.ServerUrl);
+            TryInitializeBaseAddress();
         }
 
         var logBase = Environment.ExpandEnvironmentVariables(_settings.LogPath);
@@ -70,6 +72,128 @@ public class DataTransmissionService : IDataTransmissionService
         _retryTimer = new System.Threading.Timer(_ => { try { FlushPendingAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
     }
 
+    private async Task<HttpResponseMessage> GetWithAutoDiscoverAsync(string relativeUrl)
+    {
+        try
+        {
+            if (_httpClient.BaseAddress == null)
+            {
+                TryInitializeBaseAddress();
+            }
+            var resp = await _httpClient.GetAsync(relativeUrl);
+            if (!resp.IsSuccessStatusCode)
+            {
+                TryInitializeBaseAddress(extendedScan: true);
+                resp = await _httpClient.GetAsync(relativeUrl);
+            }
+            return resp;
+        }
+        catch (HttpRequestException)
+        {
+            TryInitializeBaseAddress(extendedScan: true);
+            return await _httpClient.GetAsync(relativeUrl);
+        }
+        catch (TaskCanceledException)
+        {
+            TryInitializeBaseAddress(extendedScan: true);
+            return await _httpClient.GetAsync(relativeUrl);
+        }
+    }
+    private void TryInitializeBaseAddress(bool extendedScan = false)
+    {
+        foreach (var candidate in GetServerCandidates(extendedScan))
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var probeUri = new Uri(new Uri(candidate), "heartbeat/latest");
+                var resp = _httpClient.GetAsync(probeUri, cts.Token).GetAwaiter().GetResult();
+                if (resp.IsSuccessStatusCode)
+                {
+                    _httpClient.BaseAddress = new Uri(candidate);
+                    _logger.LogInformation("Discovered server: {BaseAddress}", _httpClient.BaseAddress);
+                    return;
+                }
+            }
+            catch { }
+        }
+    }
+
+    private IEnumerable<string> GetServerCandidates(bool extendedScan)
+    {
+        var list = new List<string>();
+        list.Add(NormalizeServerUrl($"http://localhost:8080/api"));
+        list.Add(NormalizeServerUrl($"http://127.0.0.1:8080/api"));
+        try
+        {
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != OperationalStatus.Up) continue;
+                var props = nic.GetIPProperties();
+                foreach (var gw in props.GatewayAddresses)
+                {
+                    var ip = gw?.Address;
+                    if (ip != null && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    {
+                        list.Add(NormalizeServerUrl($"http://{ip}:8080/api"));
+                    }
+                }
+                foreach (var uni in props.UnicastAddresses)
+                {
+                    var ip = uni?.Address;
+                    var mask = uni?.IPv4Mask;
+                    if (ip != null && mask != null && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    {
+                        var octets = ip.ToString().Split('.');
+                        if (octets.Length == 4)
+                        {
+                            var prefix = $"{octets[0]}.{octets[1]}.{octets[2]}";
+                            list.Add(NormalizeServerUrl($"http://{prefix}.1:8080/api"));
+                            list.Add(NormalizeServerUrl($"http://{prefix}.254:8080/api"));
+                            if (extendedScan || (octets[0] == "169" && octets[1] == "254"))
+                            {
+                                for (int h = 1; h <= 254; h++)
+                                {
+                                    list.Add(NormalizeServerUrl($"http://{prefix}.{h}:8080/api"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return list.Distinct();
+    }
+
+    private async Task<HttpResponseMessage> PostWithAutoDiscoverAsync(string relativeUrl, HttpContent content)
+    {
+        try
+        {
+            if (_httpClient.BaseAddress == null)
+            {
+                TryInitializeBaseAddress();
+            }
+            var resp = await _httpClient.PostAsync(relativeUrl, content);
+            if (!resp.IsSuccessStatusCode)
+            {
+                TryInitializeBaseAddress(extendedScan: true);
+                resp = await _httpClient.PostAsync(relativeUrl, content);
+            }
+            return resp;
+        }
+        catch (HttpRequestException)
+        {
+            TryInitializeBaseAddress(extendedScan: true);
+            return await _httpClient.PostAsync(relativeUrl, content);
+        }
+        catch (TaskCanceledException)
+        {
+            TryInitializeBaseAddress(extendedScan: true);
+            return await _httpClient.PostAsync(relativeUrl, content);
+        }
+    }
+
     public async Task SendScreenshotAsync(string filePath)
     {
         try
@@ -89,7 +213,7 @@ public class DataTransmissionService : IDataTransmissionService
                 content.Add(new StringContent(_settings.ClientId), "clientId");
                 content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-                var response = await _httpClient.PostAsync("screenshots", content);
+                var response = await PostWithAutoDiscoverAsync("screenshots", content);
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -125,7 +249,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync("events", content);
+            var response = await PostWithAutoDiscoverAsync("events", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -161,7 +285,7 @@ public class DataTransmissionService : IDataTransmissionService
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-            var response = await _httpClient.PostAsync("activity", content);
+            var response = await PostWithAutoDiscoverAsync("activity", content);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send activity. Status: {StatusCode}", response.StatusCode);
@@ -205,7 +329,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync("heartbeat", content);
+            var response = await PostWithAutoDiscoverAsync("heartbeat", content);
             
             if (response.IsSuccessStatusCode)
             {
@@ -228,7 +352,7 @@ public class DataTransmissionService : IDataTransmissionService
     {
         try
         {
-            var response = await _httpClient.GetAsync($"policies/{policyId}");
+            var response = await GetWithAutoDiscoverAsync($"policies/{policyId}");
             
             if (response.IsSuccessStatusCode)
             {
@@ -269,7 +393,7 @@ public class DataTransmissionService : IDataTransmissionService
                 content.Add(new StringContent(_settings.ClientId), "clientId");
                 content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-                var response = await _httpClient.PostAsync("reports", content);
+                var response = await PostWithAutoDiscoverAsync("reports", content);
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -336,7 +460,7 @@ public class DataTransmissionService : IDataTransmissionService
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await _httpClient.PostAsync($"commands/{commandId}/json", content);
+            var response = await PostWithAutoDiscoverAsync($"commands/{commandId}/json", content);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -375,7 +499,7 @@ public class DataTransmissionService : IDataTransmissionService
                 content.Add(new StringContent(_settings.ClientId), "clientId");
                 content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
 
-                response = await _httpClient.PostAsync($"commands/{commandId}/result", content);
+                response = await PostWithAutoDiscoverAsync($"commands/{commandId}/result", content);
             }
 
             if (response == null || !response.IsSuccessStatusCode)
@@ -538,7 +662,7 @@ public class DataTransmissionService : IDataTransmissionService
                         content.Add(streamContent, "screenshot", sendName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
                         content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                        var resp = await _httpClient.PostAsync("screenshots", content);
+                        var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
                         if (resp.IsSuccessStatusCode) 
                         {
@@ -562,7 +686,7 @@ public class DataTransmissionService : IDataTransmissionService
                         content.Add(streamContent, "report", Path.GetFileName(file));
                         content.Add(new StringContent(_settings.ClientId), "clientId");
                         content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                        var resp = await _httpClient.PostAsync("reports", content);
+                        var resp = await PostWithAutoDiscoverAsync("reports", content);
                         
                         if (resp.IsSuccessStatusCode) 
                         {
@@ -583,7 +707,7 @@ public class DataTransmissionService : IDataTransmissionService
                     var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
                     using var content = new ByteArrayContent(encrypted);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                    var resp = await _httpClient.PostAsync("events", content);
+                    var resp = await PostWithAutoDiscoverAsync("events", content);
                     if (resp.IsSuccessStatusCode) File.Delete(file);
                 }
                 catch { }
@@ -597,7 +721,7 @@ public class DataTransmissionService : IDataTransmissionService
                     var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
                     using var content = new ByteArrayContent(encrypted);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                    var resp = await _httpClient.PostAsync("activity", content);
+                    var resp = await PostWithAutoDiscoverAsync("activity", content);
                     if (resp.IsSuccessStatusCode) File.Delete(file);
                 }
                 catch { }
@@ -611,7 +735,7 @@ public class DataTransmissionService : IDataTransmissionService
                     var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
                     using var content = new ByteArrayContent(encrypted);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                    var resp = await _httpClient.PostAsync("heartbeat", content);
+                    var resp = await PostWithAutoDiscoverAsync("heartbeat", content);
                     if (resp.IsSuccessStatusCode) File.Delete(file);
                 }
                 catch { }
@@ -630,7 +754,7 @@ public class DataTransmissionService : IDataTransmissionService
                         using (var streamContent = GetEncryptedStreamContent(fileStream))
                         {
                             streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-                            var resp = await _httpClient.PostAsync($"commands/{cmdId}/json", streamContent);
+                            var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/json", streamContent);
                             if (resp.IsSuccessStatusCode) 
                             {
                                 streamContent.Dispose();
@@ -659,7 +783,7 @@ public class DataTransmissionService : IDataTransmissionService
                             content.Add(streamContent, "file", Path.GetFileName(file));
                             content.Add(new StringContent(_settings.ClientId), "clientId");
                             content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
-                            var resp = await _httpClient.PostAsync($"commands/{cmdId}/result", content);
+                            var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {
                                 streamContent.Dispose();

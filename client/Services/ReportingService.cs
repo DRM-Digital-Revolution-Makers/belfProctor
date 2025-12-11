@@ -61,7 +61,7 @@ public class ReportingService : IReportingService
             await jsonWriter.WriteValueAsync("Active");
 
             await jsonWriter.WritePropertyNameAsync("SystemInfo");
-            await JsonSerializer.CreateDefault().SerializeAsync(jsonWriter, sysInfo);
+            JsonSerializer.CreateDefault().Serialize(jsonWriter, sysInfo);
             
             await jsonWriter.WritePropertyNameAsync("Configuration");
             await jsonWriter.WriteStartObjectAsync();
@@ -76,7 +76,7 @@ public class ReportingService : IReportingService
             await jsonWriter.WriteEndObjectAsync();
 
             await jsonWriter.WritePropertyNameAsync("Statistics");
-            await JsonSerializer.CreateDefault().SerializeAsync(jsonWriter, stats);
+            JsonSerializer.CreateDefault().Serialize(jsonWriter, stats);
 
             await jsonWriter.WriteEndObjectAsync();
 
