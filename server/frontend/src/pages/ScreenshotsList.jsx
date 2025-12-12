@@ -1,9 +1,11 @@
 import React from "react";
 import { List } from "@refinedev/antd";
 import { Table, Button } from "antd";
+import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 
 export default function ScreenshotsList() {
+  const { t, i18n } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -59,7 +61,7 @@ export default function ScreenshotsList() {
   };
 
   return (
-    <List title="">
+    <List title={t("screenshots.title")}>
       <Table
         rowKey="id"
         dataSource={Array.isArray(items) ? items : []}
@@ -72,26 +74,31 @@ export default function ScreenshotsList() {
         }}
         columns={[
           {
-            title: "Время",
+            title: t("common.time"),
             dataIndex: "timestamp",
             render: (value) =>
-              new Date(value).toLocaleString("ru-RU", {
-                timeZone: "Asia/Tashkent",
-                day: "2-digit",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
+              new Date(value).toLocaleString(
+                i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                {
+                  timeZone: "Asia/Tashkent",
+                  day: "2-digit",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }
+              ),
           },
-          { title: "Клиент", dataIndex: "clientId" },
-          { title: "Файл", dataIndex: "filename" },
+          { title: t("common.client"), dataIndex: "clientId" },
+          { title: t("common.file"), dataIndex: "filename" },
           {
-            title: "Действие",
+            title: t("common.action"),
             render: (_, rec) => (
               <div style={{ display: "flex", gap: 8 }}>
-                <Button onClick={() => openFile(rec.id)}>Открыть</Button>
+                <Button onClick={() => openFile(rec.id)}>
+                  {t("common.open")}
+                </Button>
                 <Button onClick={() => downloadFile(rec.id, rec.filename)}>
-                  Скачать
+                  {t("common.download")}
                 </Button>
               </div>
             ),

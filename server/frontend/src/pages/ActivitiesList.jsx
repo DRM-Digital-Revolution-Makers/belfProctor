@@ -2,9 +2,11 @@ import React from "react";
 import { List } from "@refinedev/antd";
 import { Table, Tag, Button } from "antd";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 
 export default function ActivitiesList() {
+  const { t } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -87,20 +89,27 @@ export default function ActivitiesList() {
       const h = Math.floor(m / 60);
       const mm = m % 60;
       const ss = s % 60;
-      if (h > 0) return `${h} ч ${mm} м ${ss} с`;
-      if (m > 0) return `${m} м ${ss} с`;
-      return `${ss} с`;
+      if (h > 0)
+        return `${h} ${t("common.h")} ${mm} ${t("common.m")} ${ss} ${t(
+          "common.s"
+        )}`;
+      if (m > 0) return `${m} ${t("common.m")} ${ss} ${t("common.s")}`;
+      return `${ss} ${t("common.s")}`;
     };
     return (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <div>Активен: {fmt(activeMs)}</div>
-        <div>Неактивен: {fmt(inactiveMs)}</div>
+        <div>
+          {t("common.active")}: {fmt(activeMs)}
+        </div>
+        <div>
+          {t("common.inactive")}: {fmt(inactiveMs)}
+        </div>
       </div>
     );
   };
 
   return (
-    <List title="Активность">
+    <List title={t("activity.title")}>
       <Table
         rowKey="clientId"
         dataSource={Array.isArray(items) ? items : []}
@@ -109,34 +118,34 @@ export default function ActivitiesList() {
         columns={[
           { title: "ClientId", dataIndex: "clientId" },
           {
-            title: "Статус",
+            title: t("common.status"),
             render: (_, r) => {
               const online = isOnline(r.clientId);
               return online ? (
-                <Tag color="green">Подключен</Tag>
+                <Tag color="green">{t("common.online")}</Tag>
               ) : (
-                <Tag color="red">Отключен</Tag>
+                <Tag color="red">{t("common.offline")}</Tag>
               );
             },
           },
           {
-            title: "Активность",
+            title: t("activity.title"),
             render: (_, r) => {
               const online = isOnline(r.clientId);
               const effectiveActive = online && r.isActive;
               return effectiveActive ? (
-                <Tag color="green">Активен</Tag>
+                <Tag color="green">{t("common.active")}</Tag>
               ) : (
-                <Tag color="red">Неактивен</Tag>
+                <Tag color="red">{t("common.inactive")}</Tag>
               );
             },
           },
-          { title: "Таймеры", render: (_, r) => renderDuration(r) },
+          { title: t("common.timers"), render: (_, r) => renderDuration(r) },
           {
-            title: "Действие",
+            title: t("common.action"),
             render: (_, r) => (
               <Link to={`/activity/${r.clientId}`}>
-                <Button>Подробнее</Button>
+                <Button>{t("common.details")}</Button>
               </Link>
             ),
           },

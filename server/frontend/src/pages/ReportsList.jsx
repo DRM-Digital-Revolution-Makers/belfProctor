@@ -1,9 +1,11 @@
 import React from "react";
 import { List } from "@refinedev/antd";
 import { Table, Button } from "antd";
+import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 
 export default function ReportsList() {
+  const { t } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -48,7 +50,7 @@ export default function ReportsList() {
   };
 
   return (
-    <List title="Отчёты">
+    <List title={t("reports.title")}>
       <Table
         rowKey="id"
         dataSource={Array.isArray(items) ? items : []}
@@ -60,14 +62,14 @@ export default function ReportsList() {
           onChange: (p) => setPage(p),
         }}
         columns={[
-          { title: "Время", dataIndex: "timestamp" },
-          { title: "Клиент", dataIndex: "clientId" },
-          { title: "Файл", dataIndex: "filename" },
+          { title: t("common.time"), dataIndex: "timestamp" },
+          { title: t("common.client"), dataIndex: "clientId" },
+          { title: t("common.file"), dataIndex: "filename" },
           {
-            title: "Действие",
+            title: t("common.action"),
             render: (_, rec) => (
               <Button onClick={() => openFile(rec.id, rec.filename)}>
-                Скачать CSV
+                {t("common.downloadCsv")}
               </Button>
             ),
           },

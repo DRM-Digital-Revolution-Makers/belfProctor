@@ -8,6 +8,7 @@ import { Routes, Route } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 
 import ClientsList from "./pages/ClientsList.jsx";
+import ClientDetail from "./pages/ClientDetail.jsx";
 import EventsList from "./pages/EventsList.jsx";
 import ScreenshotsList from "./pages/ScreenshotsList.jsx";
 import ReportsList from "./pages/ReportsList.jsx";
@@ -91,6 +92,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<EventsList />} />
               <Route path="clients" element={<ClientsList />} />
+              <Route path="clients/:id" element={<ClientDetail />} />
               <Route path="events" element={<EventsList />} />
               <Route path="activity" element={<ActivitiesList />} />
               <Route path="activity/:clientId" element={<ActivityDetail />} />

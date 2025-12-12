@@ -7,6 +7,7 @@ import {
   DownloadOutlined,
   HomeOutlined,
 } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 import { useParams } from "react-router-dom";
 import ApexCharts from "apexcharts";
@@ -14,6 +15,7 @@ import _ from "lodash";
 import "flyonui/dist/helper-apexcharts.js";
 
 export default function ActivityDetail() {
+  const { t, i18n } = useTranslation();
   const { clientId } = useParams();
   const API_URL =
     import.meta.env.VITE_API_URL ||
@@ -200,10 +202,12 @@ export default function ActivityDetail() {
           }),
         });
         if (!res.ok)
-          throw new Error(`Ошибка запроса: ${res.status} ${res.statusText}`);
+          throw new Error(
+            `${t("common.requestError")}: ${res.status} ${res.statusText}`
+          );
         const json = await res.json();
         const cmdId = json.id;
-        if (!cmdId) throw new Error("Сервер не вернул ID команды");
+        if (!cmdId) throw new Error(t("common.serverNoId"));
 
         let items = [];
         let success = false;
@@ -231,17 +235,16 @@ export default function ActivityDetail() {
             break;
           } else {
             // If error other than 404
-            throw new Error(`Ошибка получения результата: ${r2.status}`);
+            throw new Error(`${t("common.resultError")}: ${r2.status}`);
           }
         }
 
-        if (!success)
-          throw new Error("Таймаут: Клиент не ответил за 30 секунд");
+        if (!success) throw new Error(t("common.timeout30s"));
 
         if (!cancelled) setDirItems(items);
       } catch (e) {
         console.error(e);
-        if (!cancelled) setDirError(e.message || "Неизвестная ошибка");
+        if (!cancelled) setDirError(e.message || t("common.unknownError"));
       } finally {
         if (!cancelled) setDirLoading(false);
       }
@@ -320,7 +323,7 @@ export default function ActivityDetail() {
 
   const columns = [
     {
-      title: "Имя",
+      title: t("common.name"),
       dataIndex: "name",
       key: "name",
       render: (text, record) => (
@@ -350,7 +353,7 @@ export default function ActivityDetail() {
       ),
     },
     {
-      title: "Размер",
+      title: t("common.size"),
       dataIndex: "length",
       key: "length",
       width: 100,
@@ -363,14 +366,19 @@ export default function ActivityDetail() {
       },
     },
     {
-      title: "Дата изменения",
+      title: t("common.lastModified"),
       dataIndex: "lastWriteTime",
       key: "lastWriteTime",
       width: 200,
-      render: (text) => (text ? new Date(text).toLocaleString("ru-RU") : "-"),
+      render: (text) =>
+        text
+          ? new Date(text).toLocaleString(
+              i18n.language === "uz" ? "uz-UZ" : "ru-RU"
+            )
+          : "-",
     },
     {
-      title: "Действия",
+      title: t("common.actions"),
       key: "actions",
       width: 100,
       align: "right",
@@ -497,7 +505,7 @@ export default function ActivityDetail() {
     if (!daily.length) return;
     const series = [
       {
-        name: "Активность за день",
+        name: t("common.dayActivity"),
         data: daily.map((d) => Number(d.hours.toFixed(1))),
       },
     ];
@@ -515,7 +523,7 @@ export default function ActivityDetail() {
         },
       },
       xaxis: { categories: daily.map((d) => d.label) },
-      yaxis: { min: 0, labels: { formatter: (v) => `${v} ч` } },
+      yaxis: { min: 0, labels: { formatter: (v) => `${v} ${t("common.h")}` } },
       colors: ["#1677ff"],
       tooltip: { enabled: true },
     };
@@ -551,7 +559,7 @@ export default function ActivityDetail() {
     if (!dailyInactive.length) return;
     const series = [
       {
-        name: "Неактивность за день",
+        name: t("common.dayInactivity"),
         data: dailyInactive.map((d) => Number(d.hours.toFixed(1))),
       },
     ];
@@ -569,7 +577,7 @@ export default function ActivityDetail() {
         },
       },
       xaxis: { categories: dailyInactive.map((d) => d.label) },
-      yaxis: { min: 0, labels: { formatter: (v) => `${v} ч` } },
+      yaxis: { min: 0, labels: { formatter: (v) => `${v} ${t("common.h")}` } },
       colors: ["#ff4d4f"],
       tooltip: { enabled: true },
     };
@@ -595,7 +603,7 @@ export default function ActivityDetail() {
   }, [dailyInactive, chartElIdInactive]);
 
   return (
-    <List title={`Клиент ${clientId}`}>
+    <List title={`${t("common.client")} ${clientId}`}>
       <div
         style={{
           marginBottom: 8,
@@ -604,23 +612,23 @@ export default function ActivityDetail() {
           alignItems: "center",
         }}
       >
-        <div style={{ fontWeight: 600 }}>График активности</div>
+        <div style={{ fontWeight: 600 }}>{t("common.activeChart")}</div>
         <Segmented
           value={range}
           onChange={setRange}
           options={[
-            { label: "Неделя", value: "7d" },
-            { label: "Месяц", value: "30d" },
+            { label: t("common.week"), value: "7d" },
+            { label: t("common.month"), value: "30d" },
           ]}
         />
       </div>
       <div id={chartElId} />
       <div style={{ marginTop: 16, marginBottom: 8, fontWeight: 600 }}>
-        График неактивности
+        {t("common.inactiveChart")}
       </div>
       <div id={chartElIdInactive} />
       <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>
-        Последние скриншоты
+        {t("common.lastScreenshots")}
       </div>
       <div
         style={{
@@ -650,23 +658,26 @@ export default function ActivityDetail() {
                   color: "#999",
                 }}
               >
-                Нет доступа
+                {t("common.accessDenied")}
               </div>
             )}
             <div style={{ marginTop: 8, fontSize: 12 }}>
-              {new Date(s.timestamp).toLocaleString("ru-RU", {
-                timeZone: "Asia/Tashkent",
-                day: "2-digit",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {new Date(s.timestamp).toLocaleString(
+                i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                {
+                  timeZone: "Asia/Tashkent",
+                  day: "2-digit",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }
+              )}
             </div>
           </div>
         ))}
       </div>
       <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>
-        Файлы клиента
+        {t("common.clientFiles")}
       </div>
       <div
         style={{
@@ -676,7 +687,7 @@ export default function ActivityDetail() {
           marginBottom: 8,
         }}
       >
-        <span style={{ color: "#666" }}>Диск:</span>
+        <span style={{ color: "#666" }}>{t("common.disk")}:</span>
         <Select
           style={{ minWidth: 160 }}
           value={rootPath}
@@ -701,7 +712,7 @@ export default function ActivityDetail() {
           }}
         >
           <span>
-            Ошибка загрузки директории: <strong>{dirError}</strong>
+            {t("common.dirLoadError")}: <strong>{dirError}</strong>
           </span>
           <Button
             size="small"
@@ -709,7 +720,7 @@ export default function ActivityDetail() {
             type="primary"
             danger
           >
-            Повторить
+            {t("common.retry")}
           </Button>
         </div>
       ) : (
@@ -750,7 +761,7 @@ export default function ActivityDetail() {
               },
               style: { cursor: record.isDir ? "pointer" : "default" },
             })}
-            locale={{ emptyText: "Нет файлов" }}
+            locale={{ emptyText: t("common.noFiles") }}
           />
         </>
       )}
