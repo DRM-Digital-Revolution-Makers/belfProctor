@@ -386,7 +386,7 @@ public class SystemMonitorService : ISystemMonitorService
                 }
                 await Task.Delay(1000, _cancellationTokenSource?.Token ?? CancellationToken.None);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                  // Ignore errors in loop
             }

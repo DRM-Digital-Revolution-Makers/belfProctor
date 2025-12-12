@@ -28,6 +28,7 @@ public class DataTransmissionService : IDataTransmissionService
     private readonly ConcurrentQueue<SystemEvent> _eventQueue = new();
     private const int MaxBatchSize = 50;
     private readonly SemaphoreSlim _batchLock = new(1, 1);
+    private string _currentBaseUrl = string.Empty;
 
     public DataTransmissionService(
         ILogger<DataTransmissionService> logger,
@@ -48,10 +49,10 @@ public class DataTransmissionService : IDataTransmissionService
         _httpClient.Timeout = TimeSpan.FromMinutes(5);
 
         var serverUrl = NormalizeServerUrl(_settings.ServerUrl);
-        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var baseUri))
+        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out _))
         {
-            _httpClient.BaseAddress = baseUri;
-            _logger.LogInformation("HTTP BaseAddress: {BaseAddress}", _httpClient.BaseAddress);
+            _currentBaseUrl = serverUrl;
+            _logger.LogInformation("HTTP BaseAddress: {BaseAddress}", _currentBaseUrl);
         }
         else
         {
@@ -83,27 +84,50 @@ public class DataTransmissionService : IDataTransmissionService
     {
         try
         {
-            if (_httpClient.BaseAddress == null)
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
                 TryInitializeBaseAddress();
             }
-            var resp = await _httpClient.GetAsync(relativeUrl);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            var resp = await _httpClient.GetAsync(uri);
             if (!resp.IsSuccessStatusCode)
             {
+                _currentBaseUrl = string.Empty;
                 TryInitializeBaseAddress(extendedScan: true);
-                resp = await _httpClient.GetAsync(relativeUrl);
+                if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+                {
+                    return resp;
+                }
+                uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+                resp = await _httpClient.GetAsync(uri);
             }
             return resp;
         }
         catch (HttpRequestException)
         {
+            _currentBaseUrl = string.Empty;
             TryInitializeBaseAddress(extendedScan: true);
-            return await _httpClient.GetAsync(relativeUrl);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.GetAsync(uri);
         }
         catch (TaskCanceledException)
         {
+            _currentBaseUrl = string.Empty;
             TryInitializeBaseAddress(extendedScan: true);
-            return await _httpClient.GetAsync(relativeUrl);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.RequestTimeout);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.GetAsync(uri);
         }
     }
     private void TryInitializeBaseAddress(bool extendedScan = false)
@@ -117,8 +141,8 @@ public class DataTransmissionService : IDataTransmissionService
                 var resp = _httpClient.GetAsync(probeUri, cts.Token).GetAwaiter().GetResult();
                 if (resp.IsSuccessStatusCode)
                 {
-                    _httpClient.BaseAddress = new Uri(candidate);
-                    _logger.LogInformation("Discovered server: {BaseAddress}", _httpClient.BaseAddress);
+                    _currentBaseUrl = candidate;
+                    _logger.LogInformation("Discovered server: {BaseAddress}", _currentBaseUrl);
                     return;
                 }
             }
@@ -177,27 +201,50 @@ public class DataTransmissionService : IDataTransmissionService
     {
         try
         {
-            if (_httpClient.BaseAddress == null)
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
                 TryInitializeBaseAddress();
             }
-            var resp = await _httpClient.PostAsync(relativeUrl, content);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            var resp = await _httpClient.PostAsync(uri, content);
             if (!resp.IsSuccessStatusCode)
             {
+                _currentBaseUrl = string.Empty;
                 TryInitializeBaseAddress(extendedScan: true);
-                resp = await _httpClient.PostAsync(relativeUrl, content);
+                if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+                {
+                    return resp;
+                }
+                uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+                resp = await _httpClient.PostAsync(uri, content);
             }
             return resp;
         }
         catch (HttpRequestException)
         {
+            _currentBaseUrl = string.Empty;
             TryInitializeBaseAddress(extendedScan: true);
-            return await _httpClient.PostAsync(relativeUrl, content);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.PostAsync(uri, content);
         }
         catch (TaskCanceledException)
         {
+            _currentBaseUrl = string.Empty;
             TryInitializeBaseAddress(extendedScan: true);
-            return await _httpClient.PostAsync(relativeUrl, content);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.RequestTimeout);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.PostAsync(uri, content);
         }
     }
 
