@@ -87,6 +87,7 @@ model Screenshot {
   timestamp DateTime
   filename  String
   path      String
+  isFavorite Boolean  @default(false)
   createdAt DateTime @default(now())
 
   @@index([clientId, timestamp])

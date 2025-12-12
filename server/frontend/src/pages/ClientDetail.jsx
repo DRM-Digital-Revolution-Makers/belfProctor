@@ -15,12 +15,17 @@ import {
   message,
   Layout,
   Space,
+  Modal,
+  Form,
+  Input,
 } from "antd";
 import {
   ArrowLeftOutlined,
   ClockCircleOutlined,
   UserOutlined,
   StopOutlined,
+  StarOutlined,
+  StarFilled,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
@@ -84,18 +89,123 @@ const ClientDetail = () => {
     return `${baseUrl}${url}?token=${token}`;
   };
 
+  const toggleFavorite = async (screenshotId, currentStatus) => {
+    const newStatus = !currentStatus;
+    try {
+      const res = await authFetch(
+        `${API_URL}/screenshots/${screenshotId}/favorite`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isFavorite: newStatus }),
+        }
+      );
+      if (res.ok) {
+        setData((prev) => ({
+          ...prev,
+          screenshots: prev.screenshots.map((s) =>
+            s.id === screenshotId ? { ...s, isFavorite: newStatus } : s
+          ),
+        }));
+      }
+    } catch (e) {
+      console.error(e);
+      message.error(t("common.error"));
+    }
+  };
+
+  const handleInfo = async () => {
+    const resp = await authFetch(`${API_URL}/clients/${id}`);
+    if (!resp.ok) return;
+    const info = await resp.json();
+    Modal.info({
+      title: `${t("common.client")} ${info.id}`,
+      content: (
+        <div style={{ display: "grid", gap: 8 }}>
+          <div>
+            EncryptionKey: <Input readOnly value={info.encryptionKey || ""} />
+          </div>
+          <Form
+            layout="vertical"
+            onFinish={async (vals) => {
+              const headers2 = {
+                "Content-Type": "application/json",
+              };
+              await authFetch(`${API_URL}/commands/send`, {
+                method: "POST",
+                headers: headers2,
+                body: JSON.stringify({
+                  clientId: id,
+                  type: "setIntervals",
+                  payload: vals,
+                }),
+              });
+              message.success(t("clients.commandSent"));
+            }}
+          >
+            <Form.Item name="heartbeatMs" label={t("common.heartbeatMs")}>
+              <Input placeholder={`${t("common.example")} 5000`} />
+            </Form.Item>
+            <Form.Item name="activityMs" label={t("common.activityMs")}>
+              <Input placeholder={`${t("common.example")} 3000`} />
+            </Form.Item>
+            <Form.Item name="screenshotMs" label={t("common.screenshotMs")}>
+              <Input placeholder={`${t("common.example")} 60000`} />
+            </Form.Item>
+            <Button htmlType="submit" type="primary">
+              {t("common.setIntervals")}
+            </Button>
+          </Form>
+        </div>
+      ),
+      okText: t("common.close"),
+    });
+  };
+
+  const handleDelete = () => {
+    Modal.confirm({
+      title: t("common.delete"),
+      content: t("clients.deleteConfirm"), // Assuming you have this key or use a generic "Are you sure?"
+      onOk: async () => {
+        const resp = await authFetch(`${API_URL}/clients/${id}`, {
+          method: "DELETE",
+        });
+        if (resp.ok) {
+          message.success(t("clients.deleted"));
+          navigate("/clients");
+        } else {
+          message.error(t("clients.deleteError"));
+        }
+      },
+    });
+  };
+
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto" }}>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate("/clients")}
-          />
-          <Title level={2} style={{ margin: 0 }}>
-            {t("common.clientDetail")}: {id}
-          </Title>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={() => navigate("/clients")}
+            />
+            <Title level={2} style={{ margin: 0 }}>
+              {t("common.clientDetail")}: {id}
+            </Title>
+          </div>
+          <Space>
+            <Button onClick={handleInfo}>{t("common.info")}</Button>
+            <Button danger onClick={handleDelete}>
+              {t("common.delete")}
+            </Button>
+          </Space>
         </div>
 
         {/* Filters */}
@@ -155,7 +265,34 @@ const ClientDetail = () => {
             >
               <Image.PreviewGroup>
                 {data.screenshots.map((s) => (
-                  <div key={s.id} style={{ textAlign: "center" }}>
+                  <div
+                    key={s.id}
+                    style={{ textAlign: "center", position: "relative" }}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 5,
+                        right: 5,
+                        zIndex: 1,
+                      }}
+                    >
+                      <Button
+                        shape="circle"
+                        size="small"
+                        icon={
+                          s.isFavorite ? (
+                            <StarFilled style={{ color: "#faad14" }} />
+                          ) : (
+                            <StarOutlined />
+                          )
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(s.id, s.isFavorite);
+                        }}
+                      />
+                    </div>
                     <Image
                       src={getImageUrl(s.url)}
                       alt={s.filename}

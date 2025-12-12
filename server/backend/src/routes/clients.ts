@@ -121,6 +121,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
       id: true,
       timestamp: true,
       filename: true,
+      isFavorite: true,
     },
   });
 

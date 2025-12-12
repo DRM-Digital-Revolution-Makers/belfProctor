@@ -137,18 +137,37 @@ router.post("/reports", upload.single("report"), async (req, res) => {
 
 // Listings for admin
 router.get("/screenshots", requireAuth, async (req, res) => {
-  const { page = "1", pageSize = "20", clientId } = req.query as any;
-  const where = clientId ? { clientId: String(clientId) } : {};
-  const all = await prisma.screenshot.findMany({
-    where,
-    orderBy: { timestamp: "desc" },
-  });
-  const filtered = all.filter((it) => it.path && fs.existsSync(it.path));
-  const total = filtered.length;
-  const start = (parseInt(page) - 1) * parseInt(pageSize);
-  const end = start + parseInt(pageSize);
-  const data = filtered.slice(start, end);
-  res.json({ data, total });
+  const { page = "1", pageSize = "20", clientId, isFavorite } = req.query as any;
+  const where: any = {};
+  if (clientId) where.clientId = String(clientId);
+  if (isFavorite === "true") where.isFavorite = true;
+
+  const skip = (parseInt(page) - 1) * parseInt(pageSize);
+  const [items, total] = await Promise.all([
+    prisma.screenshot.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
+      skip,
+      take: parseInt(pageSize),
+    }),
+    prisma.screenshot.count({ where }),
+  ]);
+
+  res.json({ data: items, total });
+});
+
+router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { isFavorite } = req.body;
+  try {
+    const updated = await prisma.screenshot.update({
+      where: { id },
+      data: { isFavorite: Boolean(isFavorite) },
+    });
+    res.json(updated);
+  } catch (e) {
+    res.status(404).json({ message: "Not found" });
+  }
 });
 
 router.get("/reports", requireAuth, async (req, res) => {

@@ -13,41 +13,41 @@ export default function ActivitiesList() {
   const [items, setItems] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
 
-  const fetchLatest = React.useCallback(() => {
+  const fetchLatest = React.useCallback(async () => {
     const ts = Date.now();
-    authFetch(`${API_URL}/activity/latest?ts=${ts}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (json) setItems(json.data || []);
-      })
-      .catch(() => {
-        /* keep previous items */
+    try {
+      const [clientsRes, activityRes, heartbeatRes] = await Promise.all([
+        authFetch(`${API_URL}/clients?ts=${ts}`),
+        authFetch(`${API_URL}/activity/latest?ts=${ts}`),
+        authFetch(`${API_URL}/heartbeat/latest?ts=${ts}`),
+      ]);
+
+      const clients = clientsRes.ok ? await clientsRes.json() : [];
+      const activities = activityRes.ok
+        ? (await activityRes.json()).data || []
+        : [];
+      const heartbeats = heartbeatRes.ok
+        ? (await heartbeatRes.json()).data || []
+        : [];
+
+      setLatestHeartbeats(heartbeats);
+
+      const merged = clients.map((c) => {
+        const act = activities.find((a) => a.clientId === c.id) || {};
+        return {
+          clientId: c.id,
+          timestamp: act.timestamp || new Date().toISOString(), // fallback
+          isActive: Boolean(act.isActive),
+          activeMilliseconds: act.activeMilliseconds || 0,
+          inactiveMilliseconds: act.inactiveMilliseconds || 0,
+          ...act, // keep original id etc if present
+        };
       });
-    authFetch(`${API_URL}/heartbeat/latest?ts=${ts}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (json) setLatestHeartbeats(json.data || []);
-      })
-      .catch(() => {
-        /* keep previous hb */
-      });
-    authFetch(`${API_URL}/activity?page=1&pageSize=50&ts=${ts}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (json && (!items || items.length === 0)) {
-          const arr = Array.isArray(json.data) ? json.data : [];
-          const map = new Map();
-          for (const rec of arr) {
-            if (!map.has(rec.clientId)) map.set(rec.clientId, rec);
-          }
-          setItems(Array.from(map.values()));
-        }
-      })
-      .catch(() => {
-        /* keep previous items */
-      });
+
+      setItems(merged);
+    } catch (e) {
+      console.error(e);
+    }
   }, [API_URL]);
 
   React.useEffect(() => {
