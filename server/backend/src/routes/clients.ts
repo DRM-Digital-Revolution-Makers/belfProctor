@@ -145,6 +145,33 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     },
   });
 
+  // 3. Fetch Top 5 Apps (by count)
+  const appEvents = await prisma.event.groupBy({
+    by: ["processName"],
+    where: {
+      clientId: id,
+      eventType: "AppUsage",
+      timestamp: {
+        gte: startOfDay,
+        lte: endOfDay,
+      },
+    },
+    _count: {
+      processName: true,
+    },
+    orderBy: {
+      _count: {
+        processName: "desc",
+      },
+    },
+    take: 5,
+  });
+
+  const topApps = appEvents.map((e) => ({
+    name: e.processName || "Unknown",
+    count: e._count.processName,
+  }));
+
   // Distribute screenshots to hours
   screenshots.forEach((s) => {
     const hour = s.timestamp.getHours();
@@ -158,6 +185,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     activeMs,
     inactiveMs,
     hourly: hourlyStats,
+    topApps,
     screenshots: screenshots.map((s) => ({
       ...s,
       url: `/api/screenshots/${s.id}/file`,
@@ -284,12 +312,40 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
     });
   }
 
+  // 5. Fetch Top 5 Apps for the month
+  const appEvents = await prisma.event.groupBy({
+    by: ["processName"],
+    where: {
+      clientId: id,
+      eventType: "AppUsage",
+      timestamp: {
+        gte: startOfMonth,
+        lte: endOfMonth,
+      },
+    },
+    _count: {
+      processName: true,
+    },
+    orderBy: {
+      _count: {
+        processName: "desc",
+      },
+    },
+    take: 5,
+  });
+
+  const topApps = appEvents.map((e) => ({
+    name: e.processName || "Unknown",
+    count: e._count.processName,
+  }));
+
   res.json({
     month: dateStr,
     totalActiveMs,
     totalInactiveMs,
     totalScreenshots,
     days: resultDays,
+    topApps,
   });
 });
 

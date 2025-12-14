@@ -137,7 +137,12 @@ router.post("/reports", upload.single("report"), async (req, res) => {
 
 // Listings for admin
 router.get("/screenshots", requireAuth, async (req, res) => {
-  const { page = "1", pageSize = "20", clientId, isFavorite } = req.query as any;
+  const {
+    page = "1",
+    pageSize = "20",
+    clientId,
+    isFavorite,
+  } = req.query as any;
   const where: any = {};
   if (clientId) where.clientId = String(clientId);
   if (isFavorite === "true") where.isFavorite = true;
@@ -376,7 +381,7 @@ router.get("/commands/:id/file/latest", requireAuth, async (req, res) => {
         }
       }
     }
-    if (!latestPath) return res.status(404).json({ message: "Not found" });
+    if (!latestPath) return res.status(202).json({ message: "Pending" });
     res.sendFile(latestPath);
   } catch (e) {
     console.error(e);

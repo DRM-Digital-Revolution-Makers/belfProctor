@@ -14,7 +14,6 @@ import {
   FileTextOutlined,
   DownloadOutlined,
   HomeOutlined,
-  LoadingOutlined,
   CloseCircleOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -52,12 +51,104 @@ export default function ActivityDetail() {
   const [imgTs, setImgTs] = React.useState(() => Date.now());
   const [driveOptions, setDriveOptions] = React.useState([]);
   const [rootPath, setRootPath] = React.useState("%SYSTEMDRIVE%\\");
-  const [downloadStates, setDownloadStates] = React.useState({});
+  const [downloadStates, setDownloadStates] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem("belf_downloads");
+      const parsed = saved ? JSON.parse(saved) : {};
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const cancelRefs = React.useRef(new Set());
 
   const headersAuth = React.useMemo(() => {
     return authToken ? { Authorization: `Bearer ${authToken}` } : {};
   }, [authToken]);
+
+  // Persist download states
+  React.useEffect(() => {
+    localStorage.setItem("belf_downloads", JSON.stringify(downloadStates));
+  }, [downloadStates]);
+
+  // Polling effect for downloads
+  React.useEffect(() => {
+    const interval = setInterval(async () => {
+      const pendingPaths = Object.keys(downloadStates);
+      if (!pendingPaths.length) return;
+
+      for (const path of pendingPaths) {
+        const state = downloadStates[path];
+        // Skip if not polling or no cmdId
+        if (state.status !== "polling" || !state.cmdId) continue;
+
+        // Check if cancelled
+        if (cancelRefs.current.has(path)) {
+          setDownloadStates((prev) => {
+            const next = { ...prev };
+            delete next[path];
+            return next;
+          });
+          cancelRefs.current.delete(path);
+          continue;
+        }
+
+        // Simulate progress
+        setDownloadStates((prev) => {
+          if (!prev[path]) return prev;
+          const current = prev[path].progress || 0;
+          let next = current;
+          if (current < 30) next += 5;
+          else if (current < 70) next += 2;
+          else if (current < 95) next += 0.5;
+          return {
+            ...prev,
+            [path]: { ...prev[path], progress: Math.min(99, next) },
+          };
+        });
+
+        try {
+          const res = await authFetch(
+            `${API_URL}/commands/${state.cmdId}/file/latest`
+          );
+          if (res.ok && res.status === 200) {
+            // Download ready
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = state.filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+
+            // Remove from state
+            setDownloadStates((prev) => {
+              const next = { ...prev };
+              delete next[path];
+              return next;
+            });
+          } else if (res.status === 404 || res.status === 500) {
+            // If error persists (not pending 202), maybe increment error count?
+            // For now, we trust 202 for pending. 404 might mean server restart lost the file.
+            // Let's remove it if it's 404 to avoid infinite loop of 404s
+            if (res.status === 404) {
+              setDownloadStates((prev) => {
+                const next = { ...prev };
+                delete next[path];
+                return next;
+              });
+              message.error(`${t("common.requestError")} (404)`);
+            }
+          }
+        } catch (e) {
+          console.error("Polling error", e);
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [downloadStates, API_URL, headersAuth, t]);
 
   // Initialize currentPath when rootPath is determined
   React.useEffect(() => {
@@ -130,7 +221,6 @@ export default function ActivityDetail() {
   React.useEffect(() => {
     loadData();
     return () => {};
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadData]);
 
   React.useEffect(() => {
@@ -319,7 +409,11 @@ export default function ActivityDetail() {
     if (downloadStates[path]) return;
 
     cancelRefs.current.delete(path);
-    setDownloadStates((prev) => ({ ...prev, [path]: { progress: 0 } }));
+    // Initialize state
+    setDownloadStates((prev) => ({
+      ...prev,
+      [path]: { status: "init", progress: 0 },
+    }));
 
     const headers = {
       ...headersAuth,
@@ -342,52 +436,27 @@ export default function ActivityDetail() {
       const { id: cmdId } = await res.json();
       const targetFilename = isFolder ? `${record.name}.zip` : record.name;
 
-      // Poll for file result (up to 10 minutes)
-      for (let i = 0; i < 600; i++) {
-        if (cancelRefs.current.has(path)) throw new Error("Cancelled");
-
-        // Simulate progress
-        setDownloadStates((prev) => {
-          if (!prev[path]) return prev;
-          const current = prev[path].progress;
-          let next = current;
-          if (current < 30) next += 5;
-          else if (current < 70) next += 2;
-          else if (current < 95) next += 0.5;
-          return { ...prev, [path]: { progress: Math.min(99, next) } };
-        });
-
-        await new Promise((r) => setTimeout(r, 1000));
-        const r2 = await authFetch(`${API_URL}/commands/${cmdId}/file/latest`);
-        if (r2.ok) {
-          setDownloadStates((prev) => ({
-            ...prev,
-            [path]: { progress: 100 },
-          }));
-          const blob = await r2.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = targetFilename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-          break;
-        }
-      }
+      // Update state to start polling
+      setDownloadStates((prev) => ({
+        ...prev,
+        [path]: {
+          status: "polling",
+          cmdId,
+          filename: targetFilename,
+          progress: 5,
+        },
+      }));
     } catch (e) {
       if (e.message !== "Cancelled") {
         console.error(e);
         message.error(t("common.requestError"));
       }
-    } finally {
+      // Clean up on error
       setDownloadStates((prev) => {
         const next = { ...prev };
         delete next[path];
         return next;
       });
-      cancelRefs.current.delete(path);
     }
   };
 
@@ -467,6 +536,11 @@ export default function ActivityDetail() {
               <span style={{ fontSize: 12, color: "#666" }}>
                 {Math.floor(state.progress)}%
               </span>
+              {state.progress >= 95 && (
+                <span style={{ fontSize: 10, color: "#faad14" }}>
+                  {t("common.processingWait")}
+                </span>
+              )}
               <Button
                 type="text"
                 danger

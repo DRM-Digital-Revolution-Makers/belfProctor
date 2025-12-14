@@ -252,13 +252,6 @@ const ClientDetail = () => {
     return parts.length > 0 ? parts.join(" ") : "0 секунд";
   };
 
-  const getWeekOfMonth = (date) => {
-    const d = dayjs(date);
-    const firstDay = d.startOf("month").day();
-    const day = d.date();
-    return Math.ceil((day + firstDay) / 7);
-  };
-
   const escapeCSV = (val) => {
     if (val === null || val === undefined) return "";
     return `"${String(val).replace(/"/g, '""')}"`;
@@ -289,6 +282,18 @@ const ClientDetail = () => {
     ]
       .map((row) => row.map(escapeCSV).join(";"))
       .join("\n");
+
+    // Top 5 Apps
+    let topAppsSection = "";
+    if (dailyData.topApps && dailyData.topApps.length > 0) {
+      const topAppsHeader = ["Приложение", "Количество использований"]
+        .map(escapeCSV)
+        .join(";");
+      const topAppsRows = dailyData.topApps
+        .map((app) => [app.name, app.count].map(escapeCSV).join(";"))
+        .join("\n");
+      topAppsSection = `\n\n"Топ 5 приложений"\n${topAppsHeader}\n${topAppsRows}`;
+    }
 
     // Hourly Activity
     let hourlySection = "";
@@ -336,7 +341,7 @@ const ClientDetail = () => {
     const screenshotsSection = `\n\n"Скриншоты"\n${screenshotsHeader}\n${screenshotsRows}`;
 
     downloadCSV(
-      summaryRows + hourlySection + screenshotsSection,
+      summaryRows + topAppsSection + hourlySection + screenshotsSection,
       `report_daily_${id}_${selectedDate.format("YYYY-MM-DD")}.csv`
     );
   };
@@ -354,8 +359,19 @@ const ClientDetail = () => {
       .map((row) => row.map(escapeCSV).join(";"))
       .join("\n");
 
+    // Top 5 Apps
+    let topAppsSection = "";
+    if (monthlyData.topApps && monthlyData.topApps.length > 0) {
+      const topAppsHeader = ["Приложение", "Количество использований"]
+        .map(escapeCSV)
+        .join(";");
+      const topAppsRows = monthlyData.topApps
+        .map((app) => [app.name, app.count].map(escapeCSV).join(";"))
+        .join("\n");
+      topAppsSection = `\n"Топ 5 приложений"\n${topAppsHeader}\n${topAppsRows}\n`;
+    }
+
     const header = [
-      "Неделя",
       "Дата",
       "Активное время",
       "Неактивное время",
@@ -367,7 +383,6 @@ const ClientDetail = () => {
     const rows = monthlyData.days
       .map((d) =>
         [
-          getWeekOfMonth(d.date),
           d.date,
           formatDurationVerbose(d.activeMs),
           formatDurationVerbose(d.inactiveMs),
@@ -379,7 +394,7 @@ const ClientDetail = () => {
       .join("\n");
 
     downloadCSV(
-      summaryRows + "\n" + header + "\n" + rows,
+      summaryRows + topAppsSection + "\n" + header + "\n" + rows,
       `report_monthly_${id}_${monthlyData.month}.csv`
     );
   };
@@ -478,6 +493,28 @@ const ClientDetail = () => {
                         </Card>
                       </Col>
                     </Row>
+
+                    {dailyData.topApps && dailyData.topApps.length > 0 && (
+                      <Card
+                        title="Топ 5 приложений"
+                        style={{ marginTop: 24 }}
+                        size="small"
+                      >
+                        <Table
+                          dataSource={dailyData.topApps}
+                          rowKey="name"
+                          pagination={false}
+                          size="small"
+                          columns={[
+                            { title: "Приложение", dataIndex: "name" },
+                            {
+                              title: "Запусков/Активности",
+                              dataIndex: "count",
+                            },
+                          ]}
+                        />
+                      </Card>
+                    )}
 
                     <div style={{ marginTop: 24 }}>
                       <Title level={4}>{t("common.lastScreenshots")}</Title>
@@ -607,6 +644,25 @@ const ClientDetail = () => {
                       </Card>
                     </Col>
                   </Row>
+
+                  {monthlyData.topApps && monthlyData.topApps.length > 0 && (
+                    <Card
+                      title="Топ 5 приложений (за месяц)"
+                      style={{ marginTop: 24 }}
+                      size="small"
+                    >
+                      <Table
+                        dataSource={monthlyData.topApps}
+                        rowKey="name"
+                        pagination={false}
+                        size="small"
+                        columns={[
+                          { title: "Приложение", dataIndex: "name" },
+                          { title: "Запусков/Активности", dataIndex: "count" },
+                        ]}
+                      />
+                    </Card>
+                  )}
                 </Space>
               ) : (
                 <Empty description={t("common.noData")} />

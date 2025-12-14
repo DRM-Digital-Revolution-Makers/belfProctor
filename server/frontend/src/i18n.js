@@ -89,6 +89,7 @@ const resources = {
         clientDetail: "Детали клиента",
         noData: "Нет данных",
         clientOffline: "Канал команд недоступен (клиент не подключен к WS)",
+        processingWait: "Обработка...",
       },
       events: {
         title: "События",
@@ -238,6 +239,7 @@ const resources = {
         clientDetail: "Mijoz tafsilotlari",
         noData: "Ma'lumot yo'q",
         clientOffline: "Buyruq kanali mavjud emas (mijoz WS ga ulanmagan)",
+        processingWait: "Qayta ishlanmoqda...",
       },
       events: {
         title: "Hodisalar",

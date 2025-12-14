@@ -16,10 +16,21 @@ public class SystemMonitorService : ISystemMonitorService
     private readonly object _eventsLock = new();
     
     private ManagementEventWatcher? _processWatcher;
+    private ManagementEventWatcher? _processStopWatcher;
     private ManagementEventWatcher? _usbWatcher;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processPollingTask;
     private readonly HashSet<int> _seenPids = new();
+
+    private static readonly HashSet<string> IgnoredProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "svchost", "runtimebroker", "backgroundtaskhost", "conhost", "dllhost",
+        "sihost", "taskhostw", "searchindexer", "csrss", "winlogon",
+        "services", "lsass", "smss", "system", "registry", "idle",
+        "audiodg", "spoolsv", "wudfhost", "wmiprvse", "msmpeng",
+        "nisrv", "tiworker", "trustedinstaller", "ctfmon", "smartscreen",
+        "searchui", "shellexperiencehost", "lockapp", "dashost"
+    };
 
     public event EventHandler<SystemEvent>? SystemEventOccurred;
 
@@ -70,6 +81,9 @@ public class SystemMonitorService : ISystemMonitorService
         _processWatcher?.Stop();
         _processWatcher?.Dispose();
         
+        _processStopWatcher?.Stop();
+        _processStopWatcher?.Dispose();
+        
         _usbWatcher?.Stop();
         _usbWatcher?.Dispose();
         
@@ -103,6 +117,12 @@ public class SystemMonitorService : ISystemMonitorService
                 _processWatcher.EventArrived += OnProcessStarted;
                 _processWatcher.Start();
 
+                // Мониторинг остановки процессов
+                var stopQuery = new WqlEventQuery("SELECT * FROM Win32_ProcessStopTrace");
+                _processStopWatcher = new ManagementEventWatcher(stopQuery);
+                _processStopWatcher.EventArrived += OnProcessStopped;
+                _processStopWatcher.Start();
+
                 _logger.LogInformation("Process monitoring started");
             }
             catch (Exception ex)
@@ -124,6 +144,9 @@ public class SystemMonitorService : ISystemMonitorService
                                         if (!_seenPids.Contains(p.Id))
                                         {
                                             _seenPids.Add(p.Id);
+                                            
+                                            if (!IsRelevantProcess(p.ProcessName)) continue;
+
                                             var systemEvent = new SystemEvent
                                             {
                                                 Timestamp = DateTime.Now,
@@ -246,6 +269,8 @@ public class SystemMonitorService : ISystemMonitorService
             var processName = e.NewEvent["ProcessName"]?.ToString() ?? "Unknown";
             var processId = e.NewEvent["ProcessID"]?.ToString() ?? "0";
 
+            if (!IsRelevantProcess(processName)) return;
+
             var systemEvent = new SystemEvent
             {
                 Timestamp = DateTime.Now,
@@ -265,6 +290,47 @@ public class SystemMonitorService : ISystemMonitorService
         {
             _logger.LogError(ex, "Error processing process start event");
         }
+    }
+
+    private void OnProcessStopped(object sender, EventArrivedEventArgs e)
+    {
+        try
+        {
+            var processName = e.NewEvent["ProcessName"]?.ToString() ?? "Unknown";
+            var processId = e.NewEvent["ProcessID"]?.ToString() ?? "0";
+
+            if (!IsRelevantProcess(processName)) return;
+
+            var systemEvent = new SystemEvent
+            {
+                Timestamp = DateTime.Now,
+                EventType = SystemEventType.ProcessStopped,
+                Description = $"Process stopped: {processName}",
+                ProcessName = processName,
+                AdditionalData = new Dictionary<string, object>
+                {
+                    ["ProcessId"] = processId
+                }
+            };
+
+            AddEvent(systemEvent);
+            SystemEventOccurred?.Invoke(this, systemEvent);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing process stop event");
+        }
+    }
+
+    private bool IsRelevantProcess(string processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return false;
+        
+        // Remove extension if present
+        if (processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            processName = Path.GetFileNameWithoutExtension(processName);
+            
+        return !IgnoredProcesses.Contains(processName);
     }
 
     private void OnUSBDeviceConnected(object sender, EventArrivedEventArgs e)
@@ -296,13 +362,21 @@ public class SystemMonitorService : ISystemMonitorService
         var lines = output.Split('\n');
         foreach (var line in lines)
         {
-            if (line.Contains("ESTABLISHED") && !line.Contains("127.0.0.1"))
+            if (line.Contains("ESTABLISHED"))
             {
                 var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length >= 3)
                 {
                     var localAddress = parts[1];
                     var remoteAddress = parts[2];
+                    
+                    // Filter out loopback
+                    if (remoteAddress.StartsWith("127.0.0.1") || remoteAddress.StartsWith("[::1]"))
+                        continue;
+
+                    // Parse port to filter out common noise
+                    if (IsIgnoredNetworkTraffic(remoteAddress))
+                        continue;
 
                     var systemEvent = new SystemEvent
                     {
@@ -326,6 +400,31 @@ public class SystemMonitorService : ISystemMonitorService
                 }
             }
         }
+    }
+
+    private bool IsIgnoredNetworkTraffic(string remoteAddress)
+    {
+        // Format is usually IP:PORT or [IP]:PORT
+        var lastColonIndex = remoteAddress.LastIndexOf(':');
+        if (lastColonIndex > 0 && lastColonIndex < remoteAddress.Length - 1)
+        {
+            var portStr = remoteAddress.Substring(lastColonIndex + 1);
+            if (int.TryParse(portStr, out var port))
+            {
+                // Ignore standard web traffic and common background services
+                if (port == 80 ||   // HTTP
+                    port == 443 ||  // HTTPS
+                    port == 53 ||   // DNS
+                    port == 5228 || // Google Play Services
+                    port == 123 ||  // NTP
+                    port == 5353 || // mDNS
+                    port == 1900)   // SSDP
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private bool IsRecentDuplicateEvent(SystemEvent newEvent)
