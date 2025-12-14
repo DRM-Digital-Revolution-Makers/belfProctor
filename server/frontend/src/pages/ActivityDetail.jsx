@@ -1,11 +1,21 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Button, Segmented, Select, Breadcrumb, Table } from "antd";
+import {
+  Button,
+  Segmented,
+  Select,
+  Breadcrumb,
+  Table,
+  message,
+  Progress,
+} from "antd";
 import {
   FolderFilled,
   FileTextOutlined,
   DownloadOutlined,
   HomeOutlined,
+  LoadingOutlined,
+  CloseCircleOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
@@ -42,6 +52,8 @@ export default function ActivityDetail() {
   const [imgTs, setImgTs] = React.useState(() => Date.now());
   const [driveOptions, setDriveOptions] = React.useState([]);
   const [rootPath, setRootPath] = React.useState("%SYSTEMDRIVE%\\");
+  const [downloadStates, setDownloadStates] = React.useState({});
+  const cancelRefs = React.useRef(new Set());
 
   const headersAuth = React.useMemo(() => {
     return authToken ? { Authorization: `Bearer ${authToken}` } : {};
@@ -183,10 +195,15 @@ export default function ActivityDetail() {
   // Fetch directory contents when currentPath changes
   React.useEffect(() => {
     if (!currentPath) return;
+    if (!clientId) {
+      console.warn("Missing clientId in ActivityDetail");
+      return;
+    }
     let cancelled = false;
     const fetchDir = async () => {
       setDirLoading(true);
       setDirError(null);
+      console.log(`Fetching dir for client=${clientId} path=${currentPath}`);
       try {
         const headers = { ...headersAuth, "Content-Type": "application/json" };
         const res = await authFetch(`${API_URL}/commands/list`, {
@@ -201,10 +218,21 @@ export default function ActivityDetail() {
             includeDirs: true,
           }),
         });
-        if (!res.ok)
-          throw new Error(
-            `${t("common.requestError")}: ${res.status} ${res.statusText}`
-          );
+        if (!res.ok) {
+          let errMsg = `${t("common.requestError")}: ${res.status}`;
+          try {
+            const errJson = await res.json();
+            if (
+              res.status === 404 &&
+              errJson.message === "client not connected"
+            ) {
+              errMsg = t("common.clientOffline");
+            } else if (errJson.message) {
+              errMsg = errJson.message;
+            }
+          } catch {}
+          throw new Error(errMsg);
+        }
         const json = await res.json();
         const cmdId = json.id;
         if (!cmdId) throw new Error(t("common.serverNoId"));
@@ -277,7 +305,22 @@ export default function ActivityDetail() {
     });
   }, [currentPath]);
 
+  const handleCancelDownload = (path) => {
+    cancelRefs.current.add(path);
+    setDownloadStates((prev) => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+  };
+
   const handleDownload = async (record) => {
+    const path = record.fullPath;
+    if (downloadStates[path]) return;
+
+    cancelRefs.current.delete(path);
+    setDownloadStates((prev) => ({ ...prev, [path]: { progress: 0 } }));
+
     const headers = {
       ...headersAuth,
       "Content-Type": "application/json",
@@ -295,15 +338,32 @@ export default function ActivityDetail() {
           path: record.fullPath,
         }),
       });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error("Failed to send command");
       const { id: cmdId } = await res.json();
       const targetFilename = isFolder ? `${record.name}.zip` : record.name;
 
-      // Poll for file result
-      for (let i = 0; i < 120; i++) {
+      // Poll for file result (up to 10 minutes)
+      for (let i = 0; i < 600; i++) {
+        if (cancelRefs.current.has(path)) throw new Error("Cancelled");
+
+        // Simulate progress
+        setDownloadStates((prev) => {
+          if (!prev[path]) return prev;
+          const current = prev[path].progress;
+          let next = current;
+          if (current < 30) next += 5;
+          else if (current < 70) next += 2;
+          else if (current < 95) next += 0.5;
+          return { ...prev, [path]: { progress: Math.min(99, next) } };
+        });
+
         await new Promise((r) => setTimeout(r, 1000));
         const r2 = await authFetch(`${API_URL}/commands/${cmdId}/file/latest`);
         if (r2.ok) {
+          setDownloadStates((prev) => ({
+            ...prev,
+            [path]: { progress: 100 },
+          }));
           const blob = await r2.blob();
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
@@ -317,7 +377,17 @@ export default function ActivityDetail() {
         }
       }
     } catch (e) {
-      console.error(e);
+      if (e.message !== "Cancelled") {
+        console.error(e);
+        message.error(t("common.requestError"));
+      }
+    } finally {
+      setDownloadStates((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+      cancelRefs.current.delete(path);
     }
   };
 
@@ -380,18 +450,46 @@ export default function ActivityDetail() {
     {
       title: t("common.actions"),
       key: "actions",
-      width: 100,
+      width: 150,
       align: "right",
-      render: (_, record) => (
-        <Button
-          type="text"
-          icon={<DownloadOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDownload(record);
-          }}
-        />
-      ),
+      render: (_, record) => {
+        const state = downloadStates[record.fullPath];
+        if (state) {
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Progress
+                percent={Math.floor(state.progress)}
+                size="small"
+                steps={5}
+                showInfo={false}
+                strokeColor="#1677ff"
+              />
+              <span style={{ fontSize: 12, color: "#666" }}>
+                {Math.floor(state.progress)}%
+              </span>
+              <Button
+                type="text"
+                danger
+                icon={<CloseCircleOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCancelDownload(record.fullPath);
+                }}
+              />
+            </div>
+          );
+        }
+        return (
+          <Button
+            type="text"
+            icon={<DownloadOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDownload(record);
+            }}
+          />
+        );
+      },
     },
   ];
 

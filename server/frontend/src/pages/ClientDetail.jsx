@@ -18,6 +18,8 @@ import {
   Modal,
   Form,
   Input,
+  Tabs,
+  Table,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -26,12 +28,12 @@ import {
   StopOutlined,
   StarOutlined,
   StarFilled,
+  DownloadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
 
 const { Title } = Typography;
-const { Content } = Layout;
 
 const ClientDetail = () => {
   const { id } = useParams();
@@ -43,13 +45,20 @@ const ClientDetail = () => {
 
   const [loading, setLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState(dayjs());
-  const [data, setData] = useState({
+  const [selectedMonth, setSelectedMonth] = useState(dayjs());
+
+  // Daily Data
+  const [dailyData, setDailyData] = useState({
     activeMs: 0,
     inactiveMs: 0,
     screenshots: [],
   });
 
-  const fetchData = useCallback(
+  // Monthly Data
+  const [monthlyData, setMonthlyData] = useState(null);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+
+  const fetchDailyData = useCallback(
     async (date) => {
       setLoading(true);
       try {
@@ -61,7 +70,7 @@ const ClientDetail = () => {
           throw new Error("Failed to fetch data");
         }
         const json = await res.json();
-        setData(json);
+        setDailyData(json);
       } catch (error) {
         console.error(error);
         message.error(t("common.requestError"));
@@ -69,12 +78,39 @@ const ClientDetail = () => {
         setLoading(false);
       }
     },
-    [id, t]
+    [id, t, API_URL]
+  );
+
+  const fetchMonthlyData = useCallback(
+    async (month) => {
+      setMonthlyLoading(true);
+      try {
+        const dateStr = month.format("YYYY-MM");
+        const res = await authFetch(
+          `${API_URL}/clients/${id}/monthly-summary?date=${dateStr}`
+        );
+        if (!res.ok) {
+          throw new Error("Failed to fetch monthly data");
+        }
+        const json = await res.json();
+        setMonthlyData(json);
+      } catch (error) {
+        console.error(error);
+        message.error(t("common.requestError"));
+      } finally {
+        setMonthlyLoading(false);
+      }
+    },
+    [id, t, API_URL]
   );
 
   useEffect(() => {
-    fetchData(selectedDate);
-  }, [fetchData, selectedDate]);
+    fetchDailyData(selectedDate);
+  }, [fetchDailyData, selectedDate]);
+
+  useEffect(() => {
+    fetchMonthlyData(selectedMonth);
+  }, [fetchMonthlyData, selectedMonth]);
 
   const formatDuration = (ms) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -101,7 +137,7 @@ const ClientDetail = () => {
         }
       );
       if (res.ok) {
-        setData((prev) => ({
+        setDailyData((prev) => ({
           ...prev,
           screenshots: prev.screenshots.map((s) =>
             s.id === screenshotId ? { ...s, isFavorite: newStatus } : s
@@ -165,7 +201,7 @@ const ClientDetail = () => {
   const handleDelete = () => {
     Modal.confirm({
       title: t("common.delete"),
-      content: t("clients.deleteConfirm"), // Assuming you have this key or use a generic "Are you sure?"
+      content: t("clients.deleteConfirm"),
       onOk: async () => {
         const resp = await authFetch(`${API_URL}/clients/${id}`, {
           method: "DELETE",
@@ -178,6 +214,174 @@ const ClientDetail = () => {
         }
       },
     });
+  };
+
+  const getNoun = (number, one, two, five) => {
+    let n = Math.abs(number);
+    n %= 100;
+    if (n >= 5 && n <= 20) {
+      return five;
+    }
+    n %= 10;
+    if (n === 1) {
+      return one;
+    }
+    if (n >= 2 && n <= 4) {
+      return two;
+    }
+    return five;
+  };
+
+  const formatDurationVerbose = (ms) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const days = Math.floor(totalSeconds / (3600 * 24));
+    const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const parts = [];
+    if (days > 0) parts.push(`${days} ${getNoun(days, "день", "дня", "дней")}`);
+    if (hours > 0)
+      parts.push(`${hours} ${getNoun(hours, "час", "часа", "часов")}`);
+    if (minutes > 0) parts.push(`${minutes} мин`);
+    if (seconds > 0)
+      parts.push(
+        `${seconds} ${getNoun(seconds, "секунда", "секунды", "секунд")}`
+      );
+
+    return parts.length > 0 ? parts.join(" ") : "0 секунд";
+  };
+
+  const getWeekOfMonth = (date) => {
+    const d = dayjs(date);
+    const firstDay = d.startOf("month").day();
+    const day = d.date();
+    return Math.ceil((day + firstDay) / 7);
+  };
+
+  const escapeCSV = (val) => {
+    if (val === null || val === undefined) return "";
+    return `"${String(val).replace(/"/g, '""')}"`;
+  };
+
+  const downloadCSV = (data, filename) => {
+    const bom = "\uFEFF";
+    const csvContent =
+      "data:text/csv;charset=utf-8," + encodeURIComponent(bom + data);
+    const link = document.createElement("a");
+    link.setAttribute("href", csvContent);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadDaily = () => {
+    if (!dailyData) return;
+
+    // Daily Summary
+    const summaryRows = [
+      ["Дата", selectedDate.format("YYYY-MM-DD")],
+      ["Активное время", formatDurationVerbose(dailyData.activeMs)],
+      ["Неактивное время", formatDurationVerbose(dailyData.inactiveMs)],
+      ["Количество скриншотов", dailyData.screenshots.length],
+      [],
+    ]
+      .map((row) => row.map(escapeCSV).join(";"))
+      .join("\n");
+
+    // Hourly Activity
+    let hourlySection = "";
+    if (dailyData.hourly) {
+      const hourlyHeader = [
+        "Час",
+        "Активное время",
+        "Неактивное время",
+        "Количество скриншотов",
+      ]
+        .map(escapeCSV)
+        .join(";");
+      const hourlyRows = dailyData.hourly
+        .map((h) =>
+          [
+            `${String(h.hour).padStart(2, "0")}:00 - ${String(
+              h.hour + 1
+            ).padStart(2, "0")}:00`,
+            formatDurationVerbose(h.activeMs),
+            formatDurationVerbose(h.inactiveMs),
+            h.screenshotsCount,
+          ]
+            .map(escapeCSV)
+            .join(";")
+        )
+        .join("\n");
+      hourlySection = `\n\n"Почасовая активность"\n${hourlyHeader}\n${hourlyRows}`;
+    }
+
+    // Screenshots
+    const screenshotsHeader = ["Время", "Имя файла", "Избранное"]
+      .map(escapeCSV)
+      .join(";");
+    const screenshotsRows = dailyData.screenshots
+      .map((s) =>
+        [
+          dayjs(s.timestamp).format("HH:mm:ss"),
+          s.filename,
+          s.isFavorite ? "Да" : "Нет",
+        ]
+          .map(escapeCSV)
+          .join(";")
+      )
+      .join("\n");
+    const screenshotsSection = `\n\n"Скриншоты"\n${screenshotsHeader}\n${screenshotsRows}`;
+
+    downloadCSV(
+      summaryRows + hourlySection + screenshotsSection,
+      `report_daily_${id}_${selectedDate.format("YYYY-MM-DD")}.csv`
+    );
+  };
+
+  const handleDownloadMonthly = () => {
+    if (!monthlyData) return;
+
+    const summaryRows = [
+      ["Месяц", monthlyData.month],
+      ["Всего активно", formatDurationVerbose(monthlyData.totalActiveMs)],
+      ["Всего неактивно", formatDurationVerbose(monthlyData.totalInactiveMs)],
+      ["Всего скриншотов", monthlyData.totalScreenshots],
+      [],
+    ]
+      .map((row) => row.map(escapeCSV).join(";"))
+      .join("\n");
+
+    const header = [
+      "Неделя",
+      "Дата",
+      "Активное время",
+      "Неактивное время",
+      "Количество скриншотов",
+    ]
+      .map(escapeCSV)
+      .join(";");
+
+    const rows = monthlyData.days
+      .map((d) =>
+        [
+          getWeekOfMonth(d.date),
+          d.date,
+          formatDurationVerbose(d.activeMs),
+          formatDurationVerbose(d.inactiveMs),
+          d.screenshotsCount,
+        ]
+          .map(escapeCSV)
+          .join(";")
+      )
+      .join("\n");
+
+    downloadCSV(
+      summaryRows + "\n" + header + "\n" + rows,
+      `report_monthly_${id}_${monthlyData.month}.csv`
+    );
   };
 
   return (
@@ -201,126 +405,215 @@ const ClientDetail = () => {
             </Title>
           </div>
           <Space>
-            <Button onClick={handleInfo}>{t("common.info")}</Button>
-            <Button danger onClick={handleDelete}>
+            <Button icon={<UserOutlined />} onClick={handleInfo}>
+              {t("common.info")}
+            </Button>
+            <Button danger icon={<StopOutlined />} onClick={handleDelete}>
               {t("common.delete")}
             </Button>
           </Space>
         </div>
 
-        {/* Filters */}
-        <Card>
-          <Space>
-            <span style={{ fontSize: "16px", fontWeight: 500 }}>
-              {t("common.selectDate")}:
-            </span>
-            <DatePicker
-              value={selectedDate}
-              onChange={(date) => {
-                if (date) setSelectedDate(date);
-              }}
-              allowClear={false}
-              style={{ width: 200 }}
-            />
-          </Space>
-        </Card>
-
-        {/* Statistics */}
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12}>
-            <Card>
-              <Statistic
-                title={t("common.dayActivity")}
-                value={formatDuration(data.activeMs)}
-                prefix={<ClockCircleOutlined style={{ color: "#52c41a" }} />}
-                valueStyle={{ color: "#3f8600" }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12}>
-            <Card>
-              <Statistic
-                title={t("common.dayInactivity")}
-                value={formatDuration(data.inactiveMs)}
-                prefix={<StopOutlined style={{ color: "#cf1322" }} />}
-                valueStyle={{ color: "#cf1322" }}
-              />
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Screenshots */}
-        <Card title={t("common.screenshots")}>
-          {loading ? (
-            <div style={{ textAlign: "center", padding: "50px" }}>
-              <Spin size="large" />
-            </div>
-          ) : data.screenshots && data.screenshots.length > 0 ? (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                gap: "16px",
-              }}
-            >
-              <Image.PreviewGroup>
-                {data.screenshots.map((s) => (
-                  <div
-                    key={s.id}
-                    style={{ textAlign: "center", position: "relative" }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 5,
-                        right: 5,
-                        zIndex: 1,
-                      }}
-                    >
-                      <Button
-                        shape="circle"
-                        size="small"
-                        icon={
-                          s.isFavorite ? (
-                            <StarFilled style={{ color: "#faad14" }} />
-                          ) : (
-                            <StarOutlined />
-                          )
-                        }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleFavorite(s.id, s.isFavorite);
-                        }}
-                      />
-                    </div>
-                    <Image
-                      src={getImageUrl(s.url)}
-                      alt={s.filename}
-                      style={{
-                        width: "100%",
-                        height: "150px",
-                        objectFit: "cover",
-                        borderRadius: "8px",
-                        border: "1px solid #f0f0f0",
-                      }}
+        <Tabs defaultActiveKey="daily" type="card">
+          <Tabs.TabPane tab={t("reports.daily")} key="daily">
+            <Space direction="vertical" size="large" style={{ width: "100%" }}>
+              <Card>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginBottom: 24,
+                  }}
+                >
+                  <Space>
+                    <span>{t("reports.selectDay")}:</span>
+                    <DatePicker
+                      value={selectedDate}
+                      onChange={(d) => d && setSelectedDate(d)}
+                      allowClear={false}
                     />
-                    <div
-                      style={{
-                        marginTop: "8px",
-                        color: "#888",
-                        fontSize: "12px",
-                      }}
-                    >
-                      {dayjs(s.timestamp).format("HH:mm:ss")}
-                    </div>
+                  </Space>
+                  <Button
+                    icon={<DownloadOutlined />}
+                    onClick={handleDownloadDaily}
+                  >
+                    {t("reports.download")}
+                  </Button>
+                </div>
+
+                {loading ? (
+                  <div style={{ textAlign: "center", padding: 40 }}>
+                    <Spin size="large" />
                   </div>
-                ))}
-              </Image.PreviewGroup>
-            </div>
-          ) : (
-            <Empty description={t("common.noScreenshots")} />
-          )}
-        </Card>
+                ) : (
+                  <>
+                    <Row gutter={[16, 16]}>
+                      <Col span={8}>
+                        <Card>
+                          <Statistic
+                            title={t("common.dayActivity")}
+                            value={formatDuration(dailyData.activeMs)}
+                            prefix={<ClockCircleOutlined />}
+                            valueStyle={{ color: "#3f8600" }}
+                          />
+                        </Card>
+                      </Col>
+                      <Col span={8}>
+                        <Card>
+                          <Statistic
+                            title={t("common.dayInactivity")}
+                            value={formatDuration(dailyData.inactiveMs)}
+                            prefix={<StopOutlined />}
+                            valueStyle={{ color: "#cf1322" }}
+                          />
+                        </Card>
+                      </Col>
+                      <Col span={8}>
+                        <Card>
+                          <Statistic
+                            title={t("common.screenshots")}
+                            value={dailyData.screenshots.length}
+                            prefix={<StarOutlined />}
+                          />
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    <div style={{ marginTop: 24 }}>
+                      <Title level={4}>{t("common.lastScreenshots")}</Title>
+                      {dailyData.screenshots.length === 0 ? (
+                        <Empty description={t("common.noScreenshots")} />
+                      ) : (
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns:
+                              "repeat(auto-fill, minmax(200px, 1fr))",
+                            gap: "16px",
+                          }}
+                        >
+                          {dailyData.screenshots.map((s) => (
+                            <Card
+                              key={s.id}
+                              hoverable
+                              cover={
+                                <div style={{ position: "relative" }}>
+                                  <Image
+                                    alt={s.filename}
+                                    src={getImageUrl(s.url)}
+                                    fallback="https://via.placeholder.com/200?text=Error"
+                                  />
+                                  <Button
+                                    type="text"
+                                    icon={
+                                      s.isFavorite ? (
+                                        <StarFilled style={{ color: "gold" }} />
+                                      ) : (
+                                        <StarOutlined />
+                                      )
+                                    }
+                                    style={{
+                                      position: "absolute",
+                                      top: 8,
+                                      right: 8,
+                                      background: "rgba(255,255,255,0.8)",
+                                    }}
+                                    onClick={() =>
+                                      toggleFavorite(s.id, s.isFavorite)
+                                    }
+                                  />
+                                </div>
+                              }
+                            >
+                              <Card.Meta
+                                title={dayjs(s.timestamp).format("HH:mm:ss")}
+                                description={s.filename}
+                              />
+                            </Card>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </Card>
+            </Space>
+          </Tabs.TabPane>
+
+          <Tabs.TabPane tab={t("reports.monthly")} key="monthly">
+            <Card>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: 24,
+                }}
+              >
+                <Space>
+                  <span>{t("reports.selectMonth")}:</span>
+                  <DatePicker
+                    picker="month"
+                    value={selectedMonth}
+                    onChange={(d) => d && setSelectedMonth(d)}
+                    allowClear={false}
+                  />
+                </Space>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={handleDownloadMonthly}
+                >
+                  {t("reports.download")}
+                </Button>
+              </div>
+
+              {monthlyLoading ? (
+                <div style={{ textAlign: "center", padding: 40 }}>
+                  <Spin size="large" />
+                </div>
+              ) : monthlyData ? (
+                <Space
+                  direction="vertical"
+                  size="large"
+                  style={{ width: "100%" }}
+                >
+                  <Row gutter={[16, 16]}>
+                    <Col span={8}>
+                      <Card>
+                        <Statistic
+                          title={t("reports.totalActive")}
+                          value={formatDuration(monthlyData.totalActiveMs)}
+                          prefix={<ClockCircleOutlined />}
+                          valueStyle={{ color: "#3f8600" }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card>
+                        <Statistic
+                          title={t("reports.totalInactive")}
+                          value={formatDuration(monthlyData.totalInactiveMs)}
+                          prefix={<StopOutlined />}
+                          valueStyle={{ color: "#cf1322" }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card>
+                        <Statistic
+                          title={t("reports.totalScreenshots")}
+                          value={monthlyData.totalScreenshots}
+                          prefix={<StarOutlined />}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+                </Space>
+              ) : (
+                <Empty description={t("common.noData")} />
+              )}
+            </Card>
+          </Tabs.TabPane>
+        </Tabs>
       </Space>
     </div>
   );

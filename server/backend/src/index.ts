@@ -221,7 +221,8 @@ const wss = new WebSocketServer({ server });
 wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
-    const clientId = url.searchParams.get("clientId") || "";
+    const rawId = url.searchParams.get("clientId") || "";
+    const clientId = rawId.trim();
     if (!clientId) {
       socket.close();
       return;
@@ -241,7 +242,7 @@ app.post("/api/commands/send", requireAuth, async (req, res) => {
     const { clientId, type, payload } = req.body as any;
     if (!clientId || !type)
       return res.status(400).json({ message: "clientId and type required" });
-    const socket = clients.get(String(clientId));
+    const socket = clients.get(String(clientId).trim());
     if (!socket || socket.readyState !== 1)
       return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -269,7 +270,7 @@ app.post("/api/commands/list", requireAuth, async (req, res) => {
       return res
         .status(400)
         .json({ message: "clientId and basePath required" });
-    const socket = clients.get(String(clientId));
+    const socket = clients.get(String(clientId).trim());
     if (!socket || socket.readyState !== 1)
       return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -289,7 +290,7 @@ app.post("/api/commands/file", requireAuth, async (req, res) => {
     const { clientId, path: filePath } = req.body as any;
     if (!clientId || !filePath)
       return res.status(400).json({ message: "clientId and path required" });
-    const socket = clients.get(String(clientId));
+    const socket = clients.get(String(clientId).trim());
     if (!socket || socket.readyState !== 1)
       return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -309,7 +310,7 @@ app.post("/api/commands/folder", requireAuth, async (req, res) => {
     const { clientId, path: folderPath } = req.body as any;
     if (!clientId || !folderPath)
       return res.status(400).json({ message: "clientId and path required" });
-    const socket = clients.get(String(clientId));
+    const socket = clients.get(String(clientId).trim());
     if (!socket || socket.readyState !== 1)
       return res.status(404).json({ message: "client not connected" });
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
