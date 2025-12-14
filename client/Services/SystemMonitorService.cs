@@ -334,7 +334,7 @@ public class SystemMonitorService : ISystemMonitorService
         {
             var recentSimilar = _recentEvents
                 .Where(e => e.EventType == newEvent.EventType && 
-                           e.Timestamp > DateTime.Now.AddMinutes(-1))
+                        e.Timestamp > DateTime.Now.AddMinutes(-1))
                 .Any(e => e.NetworkAddress == newEvent.NetworkAddress);
             
             return recentSimilar;

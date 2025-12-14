@@ -3,6 +3,7 @@ using System.Drawing.Imaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
+using System.Runtime.InteropServices;
 
 namespace BelfProctor.Services;
 
@@ -20,6 +21,7 @@ public class ScreenshotService : IScreenshotService
         _logger = logger;
         _settings = settings.Value;
         _dataTransmissionService = dataTransmissionService;
+        EnsureDpiAwareness();
     }
 
     public async Task CaptureScreenshotAsync()
@@ -69,8 +71,12 @@ public class ScreenshotService : IScreenshotService
 
             using var bitmap = new Bitmap(bounds.Width, bounds.Height);
             using var graphics = Graphics.FromImage(bitmap);
-            
-            graphics.CopyFromScreen(bounds.X, bounds.Y, 0, 0, bounds.Size);
+            foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            {
+                var destX = screen.Bounds.X - bounds.X;
+                var destY = screen.Bounds.Y - bounds.Y;
+                graphics.CopyFromScreen(screen.Bounds.X, screen.Bounds.Y, destX, destY, screen.Bounds.Size);
+            }
             
             var encoderParameters = new EncoderParameters(1);
             encoderParameters.Param[0] = new EncoderParameter(Encoder.Quality, _settings.ScreenshotQuality);
@@ -120,8 +126,29 @@ public class ScreenshotService : IScreenshotService
 
     private Rectangle GetScreenBounds()
     {
-        // Получаем размеры основного экрана
-        var primaryScreen = System.Windows.Forms.Screen.PrimaryScreen;
-        return primaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+        var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
+        return new Rectangle(vs.Left, vs.Top, vs.Width, vs.Height);
+    }
+
+    private static bool _dpiSet = false;
+    private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+    private enum PROCESS_DPI_AWARENESS
+    {
+        PROCESS_DPI_UNAWARE = 0,
+        PROCESS_SYSTEM_DPI_AWARE = 1,
+        PROCESS_PER_MONITOR_DPI_AWARE = 2
+    }
+    [DllImport("shcore.dll")]
+    private static extern int SetProcessDpiAwareness(PROCESS_DPI_AWARENESS value);
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
+    private static void EnsureDpiAwareness()
+    {
+        if (_dpiSet) return;
+        try { if (SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) { _dpiSet = true; return; } } catch { }
+        try { if (SetProcessDpiAwareness(PROCESS_DPI_AWARENESS.PROCESS_PER_MONITOR_DPI_AWARE) == 0) { _dpiSet = true; return; } } catch { }
+        try { if (SetProcessDPIAware()) { _dpiSet = true; return; } } catch { }
     }
 }
