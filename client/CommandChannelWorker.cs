@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using BelfProctor.Models;
 using BelfProctor.Services;
@@ -10,13 +11,18 @@ namespace BelfProctor;
 
 public class CommandChannelWorker : BackgroundService
 {
+    private readonly ILogger<CommandChannelWorker> _logger;
     private readonly ProctorSettings _settings;
     private readonly CommandHandler _handler;
 
-    public CommandChannelWorker(IOptions<ProctorSettings> settings, CommandHandler handler)
+    public CommandChannelWorker(
+        IOptions<ProctorSettings> settings,
+        CommandHandler handler,
+        ILogger<CommandChannelWorker> logger)
     {
         _settings = settings.Value;
         _handler = handler;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -27,7 +33,9 @@ public class CommandChannelWorker : BackgroundService
             {
                 using var ws = new ClientWebSocket();
                 var wsUrl = BuildWsUrl(_settings.ServerUrl, _settings.ClientId);
+                _logger.LogInformation("Connecting to command channel: {Url}", wsUrl);
                 await ws.ConnectAsync(new Uri(wsUrl), stoppingToken);
+                _logger.LogInformation("Command channel connected");
                 var buf = new byte[64 * 1024];
                 while (ws.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
                 {
@@ -50,9 +58,11 @@ public class CommandChannelWorker : BackgroundService
                         });
                     }
                 }
+                _logger.LogInformation("Command channel disconnected");
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogDebug(ex, "Command channel error, will retry");
             }
             await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
         }
