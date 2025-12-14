@@ -24,12 +24,21 @@ public class SystemMonitorService : ISystemMonitorService
 
     private static readonly HashSet<string> IgnoredProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
+        // Windows System & Services
         "svchost", "runtimebroker", "backgroundtaskhost", "conhost", "dllhost",
         "sihost", "taskhostw", "searchindexer", "csrss", "winlogon",
         "services", "lsass", "smss", "system", "registry", "idle",
         "audiodg", "spoolsv", "wudfhost", "wmiprvse", "msmpeng",
         "nisrv", "tiworker", "trustedinstaller", "ctfmon", "smartscreen",
-        "searchui", "shellexperiencehost", "lockapp", "dashost"
+        "searchui", "shellexperiencehost", "lockapp", "dashost",
+        "applicationframehost", "startmenuexperiencehost", "wermgr", "sppsvc",
+        "mscorsvw", "wininit", "fontdrvhost", "memory compression", "werfault",
+        "useroobebroker", "searchhost", "textinputhost", "securityhealthservice",
+        "sgrmbroker", "taskmgr", "explorer", "systemsettings", "standardcollector.service",
+        "searchapp", "settingsynchost", "skypehost", "gamebarftserver", "gamebarpresencewriter",
+        "rundll32", "consent", "gamingservices", "gamingservicesnet", "ipoint", "itype",
+        "oneapp.igcc.winservice", "compattelrunner", "devicecensus", "officeclicktorun",
+        "sedsvc", "unsecapp", "wlanext", "aggregatorhost"
     };
 
     public event EventHandler<SystemEvent>? SystemEventOccurred;
