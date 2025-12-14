@@ -38,7 +38,13 @@ public class SystemMonitorService : ISystemMonitorService
         "searchapp", "settingsynchost", "skypehost", "gamebarftserver", "gamebarpresencewriter",
         "rundll32", "consent", "gamingservices", "gamingservicesnet", "ipoint", "itype",
         "oneapp.igcc.winservice", "compattelrunner", "devicecensus", "officeclicktorun",
-        "sedsvc", "unsecapp", "wlanext", "aggregatorhost"
+        "sedsvc", "unsecapp", "wlanext", "aggregatorhost",
+        
+        // Vendor Specific & WebViews
+        "nvdisplay.container", "storedesktopextension", 
+        "lenovovantage-(modernpreloadaddin)", "lenovovantage-(devicesettingssystemaddin)",
+        "msedgewebview2", "lenovovantage", "lenovo.modern.imcontroller",
+        "nvidia web helper", "nvcontainer"
     };
 
     public event EventHandler<SystemEvent>? SystemEventOccurred;
