@@ -56,6 +56,7 @@ public class ProctorWorker : BackgroundService
             await _stabilityService.StartAsync(cancellationToken);
             
             // Запуск системного мониторинга
+            _systemMonitorService.SystemEventOccurred += OnSystemEventOccurred;
             await _systemMonitorService.StartAsync(cancellationToken);
             await _activityMonitorService.StartAsync(cancellationToken);
         _activityMonitorService.ActivityChanged += OnActivityChanged;
@@ -116,6 +117,7 @@ public class ProctorWorker : BackgroundService
     {
         _logger.LogInformation("BelfProctor service stopping...");
         
+        _systemMonitorService.SystemEventOccurred -= OnSystemEventOccurred;
         await _systemMonitorService.StopAsync(cancellationToken);
         await _stabilityService.StopAsync(cancellationToken);
         _activityMonitorService.ActivityChanged -= OnActivityChanged;
@@ -240,5 +242,10 @@ public class ProctorWorker : BackgroundService
             try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
             catch { }
         });
+    }
+
+    private void OnSystemEventOccurred(object? sender, SystemEvent e)
+    {
+        _dataTransmissionService.SendSystemEventAsync(e);
     }
 }
