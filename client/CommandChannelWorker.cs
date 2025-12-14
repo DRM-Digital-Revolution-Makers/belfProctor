@@ -35,7 +35,20 @@ public class CommandChannelWorker : BackgroundService
                     if (result.MessageType == WebSocketMessageType.Close) break;
                     var msg = Encoding.UTF8.GetString(buf, 0, result.Count);
                     var cmd = JsonConvert.DeserializeObject<Command>(msg);
-                    if (cmd != null) await _handler.HandleAsync(cmd);
+                    if (cmd != null)
+                    {
+                        _ = Task.Run(async () => 
+                        {
+                            try
+                            {
+                                await _handler.HandleAsync(cmd);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error handling command {Id}", cmd.Id);
+                            }
+                        });
+                    }
                 }
             }
             catch

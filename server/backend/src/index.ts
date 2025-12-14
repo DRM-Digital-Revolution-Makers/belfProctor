@@ -229,7 +229,9 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
     }
     clients.set(clientId, socket);
     socket.on("close", () => {
-      clients.delete(clientId);
+      if (clients.get(clientId) === socket) {
+        clients.delete(clientId);
+      }
     });
   } catch {
     socket.close();
