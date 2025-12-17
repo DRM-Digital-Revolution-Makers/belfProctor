@@ -31,26 +31,13 @@ public class ScreenshotService : IScreenshotService
             var filePath = await CaptureScreenshotToFileAsync();
             
             // Отправляем скриншот на сервер
+            // DataTransmissionService сам решит, удалить файл или переместить в Pending
             await _dataTransmissionService.SendScreenshotAsync(filePath);
-            // Планируем удаление локального файла спустя заданное время
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMinutes(_settings.ScreenshotRetentionMinutes));
-                    if (File.Exists(filePath))
-                    {
-                        File.Delete(filePath);
-                        _logger.LogDebug("Screenshot deleted after retention: {FilePath}", filePath);
-                    }
-                }
-                catch { }
-            });
             
             // Очищаем старые скриншоты
             await CleanupOldScreenshotsAsync();
             
-            _logger.LogDebug("Screenshot captured and sent: {FilePath}", filePath);
+            _logger.LogDebug("Screenshot captured: {FilePath}", filePath);
         }
         catch (Exception ex)
         {
@@ -105,7 +92,9 @@ public class ScreenshotService : IScreenshotService
             {
                 var cutoffDate = DateTime.Now.AddDays(-_settings.MaxScreenshotAge);
                 var basePath = Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath);
-                var screenshotFiles = Directory.GetFiles(basePath, "screenshot_*.jpg");
+                
+                // Очищаем только основную папку скриншотов, не трогая Pending
+                var screenshotFiles = Directory.GetFiles(basePath, "screenshot_*.jpg", SearchOption.TopDirectoryOnly);
 
                 foreach (var file in screenshotFiles)
                 {
