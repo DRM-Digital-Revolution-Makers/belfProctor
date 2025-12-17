@@ -28,6 +28,7 @@ public class DataTransmissionService : IDataTransmissionService
     private readonly ConcurrentQueue<SystemEvent> _eventQueue = new();
     private const int MaxBatchSize = 50;
     private readonly SemaphoreSlim _batchLock = new(1, 1);
+    private readonly SemaphoreSlim _flushLock = new(1, 1);
     private string _currentBaseUrl = string.Empty;
 
     public DataTransmissionService(
@@ -730,8 +731,12 @@ public class DataTransmissionService : IDataTransmissionService
 
     private async Task FlushPendingAsync()
     {
+        if (!await _flushLock.WaitAsync(0)) return;
+
         try
         {
+            _logger.LogDebug("Starting FlushPendingAsync");
+
             foreach (var file in Directory.GetFiles(_pendingScreenshots))
             {
                 try
@@ -740,21 +745,33 @@ public class DataTransmissionService : IDataTransmissionService
                     using (var streamContent = GetEncryptedStreamContent(fileStream))
                     using (var content = new MultipartFormDataContent())
                     {
-                        var sendName = $"{_settings.ClientId}_{DateTime.UtcNow:yyyy-MM-ddTHH-mm-ss.fffZ}.jpg";
+                        // Use original creation time for the timestamp to ensure correct ordering on server
+                        var timestamp = File.GetCreationTimeUtc(file);
+                        var sendName = Path.GetFileName(file);
+                        
                         content.Add(streamContent, "screenshot", sendName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                        content.Add(new StringContent(timestamp.ToString("O")), "timestamp");
+                        
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
                         if (resp.IsSuccessStatusCode) 
                         {
+                            _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
                             streamContent.Dispose();
                             fileStream.Dispose();
                             File.Delete(file);
                         }
+                        else
+                        {
+                             _logger.LogWarning("Failed to send pending screenshot {FileName}. Status: {Status}", sendName, resp.StatusCode);
+                        }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error sending pending screenshot: {FileName}", Path.GetFileName(file));
+                }
             }
 
             foreach (var file in Directory.GetFiles(_pendingReports))
@@ -878,6 +895,13 @@ public class DataTransmissionService : IDataTransmissionService
                 catch { }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in FlushPendingAsync");
+        }
+        finally
+        {
+            _flushLock.Release();
+        }
     }
 }
