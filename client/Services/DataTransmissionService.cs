@@ -951,9 +951,5 @@ public class DataTransmissionService : IDataTransmissionService
         }
         catch { }
         return null;
-    }            }
-        }
-        catch { }
-        return null;
     }
 }
