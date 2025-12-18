@@ -81,11 +81,13 @@ public class ProctorWorker : BackgroundService
     {
         var screenshotLoop = RunScreenshotLoop(stoppingToken);
 
+        var heartbeatInterval = _settings.HeartbeatIntervalMs > 1000 ? _settings.HeartbeatIntervalMs : 5000;
         var heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.HeartbeatIntervalMs));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(heartbeatInterval));
         
+        var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.PolicyUpdateIntervalMs));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(policyInterval));
 
         try
         {
