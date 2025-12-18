@@ -2,7 +2,7 @@ namespace BelfProctor.Models;
 
 public class ProctorSettings
 {
-    public int ScreenshotIntervalMs { get; set; } = 30000; // мс
+    public int ScreenshotIntervalMs { get; set; } = 300000; // 5 минут
     public int ScreenshotQuality { get; set; } = 85;
     public string ScreenshotPath { get; set; } = string.Empty;
     public string LogPath { get; set; } = string.Empty;

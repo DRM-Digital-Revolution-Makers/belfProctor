@@ -106,7 +106,8 @@ public class ProctorWorker : BackgroundService
 
     private async Task RunScreenshotLoop(CancellationToken ct)
     {
-        var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(_settings.ScreenshotIntervalMs));
+        var interval = _settings.ScreenshotIntervalMs > 5000 ? _settings.ScreenshotIntervalMs : 300000;
+        var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(interval));
         // Немедленный снимок при старте
         await TakeScreenshot();
         while (await timer.WaitForNextTickAsync(ct))
