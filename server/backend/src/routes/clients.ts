@@ -167,13 +167,13 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     take: 5,
   });
 
-  const topApps = appEvents.map((e) => ({
+  const topApps = appEvents.map((e: any) => ({
     name: e.processName || "Unknown",
     count: e._count.processName,
   }));
 
   // Distribute screenshots to hours
-  screenshots.forEach((s) => {
+  screenshots.forEach((s: any) => {
     const hour = s.timestamp.getHours();
     if (hour >= 0 && hour < 24) {
       hourlyStats[hour].screenshotsCount++;
@@ -186,7 +186,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     inactiveMs,
     hourly: hourlyStats,
     topApps,
-    screenshots: screenshots.map((s) => ({
+    screenshots: screenshots.map((s: any) => ({
       ...s,
       url: `/api/screenshots/${s.id}/file`,
     })),
@@ -334,7 +334,7 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
     take: 5,
   });
 
-  const topApps = appEvents.map((e) => ({
+  const topApps = appEvents.map((e: any) => ({
     name: e.processName || "Unknown",
     count: e._count.processName,
   }));

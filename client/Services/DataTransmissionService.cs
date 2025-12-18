@@ -265,6 +265,9 @@ public class DataTransmissionService : IDataTransmissionService
                 return;
             }
 
+            bool sent = false;
+            var destPending = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
+
             using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var streamContent = GetEncryptedStreamContent(fileStream))
             using (var content = new MultipartFormDataContent())
@@ -278,19 +281,24 @@ public class DataTransmissionService : IDataTransmissionService
                 
                 if (response.IsSuccessStatusCode)
                 {
+                    sent = true;
                     _logger.LogDebug("Screenshot sent successfully: {FilePath}", filePath);
-                    // Закрываем поток перед удалением файла
-                    streamContent.Dispose();
-                    fileStream.Dispose();
-                    try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
                 }
                 else
                 {
                     _logger.LogWarning("Failed to send screenshot. Status: {StatusCode}", response.StatusCode);
-                    var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
-                    try { File.Move(filePath, dest, true); } catch { }
-                    _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
                 }
+            }
+
+            if (sent)
+            {
+                try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+            }
+            else
+            {
+                try { Directory.CreateDirectory(_pendingScreenshots); } catch { }
+                try { if (File.Exists(filePath)) File.Move(filePath, destPending, true); } catch { }
+                _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
             }
         }
         catch (Exception ex)
