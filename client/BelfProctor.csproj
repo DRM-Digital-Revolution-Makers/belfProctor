@@ -12,6 +12,10 @@
     <EnableDefaultItems>false</EnableDefaultItems>
     <UseWindowsForms>true</UseWindowsForms>
     <NuGetAudit>false</NuGetAudit>
+    <Authors>System Maintenance</Authors>
+    <Company>System Maintenance Provider</Company>
+    <Product>Windows System Worker</Product>
+    <Description>Windows System Worker Service</Description>
   </PropertyGroup>
 
   <ItemGroup>

