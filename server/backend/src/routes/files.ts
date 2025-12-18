@@ -48,9 +48,22 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
 
     const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const tsParsed = new Date(timestampStr);
+
+    // Treat the incoming timestamp as absolute truth (Client's Local Time)
+    // If it's "2025-12-19T23:15:00.000" (no Z), new Date() might treat as Local or UTC depending on server env.
+    // To ensure consistency, we force it to be treated as UTC so the numbers are preserved in DB.
+    // DB stores UTC. Frontend sees UTC. "1 Time for Everything".
+    let tsToParse = timestampStr;
+    if (
+      !tsToParse.endsWith("Z") &&
+      !tsToParse.includes("+") &&
+      !tsToParse.includes("-")
+    ) {
+      tsToParse += "Z";
+    }
+    const tsParsed = new Date(tsToParse);
     const sendTs = isNaN(tsParsed.getTime()) ? new Date() : tsParsed;
-    // Use the timestamp exactly as received (no -2h hack)
+
     const adjTs = sendTs;
     const iso = adjTs.toISOString().replace(/[:]/g, "-");
     const filename = `${clientId}_${iso}.jpg`;

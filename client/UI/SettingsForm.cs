@@ -104,7 +104,7 @@ public class SettingsForm : Form
         _save.AutoSize = true;
         _cancel.Text = "Cancel";
         _cancel.AutoSize = true;
-        _save.Click += (_, __) => SaveSettings();
+        _save.Click += async (_, __) => await SaveSettings();
         _cancel.Click += (_, __) => Close();
         buttons.Controls.Add(_cancel);
         buttons.Controls.Add(_save);
@@ -124,6 +124,14 @@ public class SettingsForm : Form
         _adminPassword.UseSystemPasswordChar = true;
         
         LoadSettings();
+        
+        // Auto-generate key if missing
+        if (string.IsNullOrWhiteSpace(_encryptionKey.Text))
+        {
+            using var aes = Aes.Create();
+            aes.GenerateKey();
+            _encryptionKey.Text = Convert.ToBase64String(aes.Key);
+        }
     }
 
     private void AddSectionHeader(TableLayoutPanel panel, string text)
@@ -298,13 +306,30 @@ public class SettingsForm : Form
         catch { }
     }
 
-    private void SaveSettings()
+    private async Task SaveSettings()
     {
+        // Require Encryption Key
+        if (string.IsNullOrWhiteSpace(_encryptionKey.Text))
+        {
+             MessageBox.Show("Encryption Key is required for server communication.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+             return;
+        }
+
+        // Auto-Register if credentials provided
+        if (!string.IsNullOrWhiteSpace(_adminEmail.Text) && !string.IsNullOrWhiteSpace(_adminPassword.Text))
+        {
+            var res = MessageBox.Show("Do you want to register/update this client on the server now?", "Register Client", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (res == DialogResult.Yes)
+            {
+                await RegisterClient();
+            }
+        }
+
         // Define install path (stealth folder)
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var installDir = Path.Combine(appData, "SystemWorker");
         var installPath = Path.Combine(installDir, "SystemWorker.exe");
-        var currentPath = Process.GetCurrentProcess().MainModule?.FileName ?? Application.ExecutablePath;
+        var currentPath = Environment.ProcessPath ?? Application.ExecutablePath;
 
         // Save settings to config file (standard logic)
         var newSettings = new JObject();
