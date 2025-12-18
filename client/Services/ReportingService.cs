@@ -104,13 +104,13 @@ public class ReportingService : IReportingService
             
             var report = new
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTime.Now,
                 ClientId = _settings.ClientId,
                 ReportType = "Security",
                 Period = new
                 {
-                    From = DateTime.UtcNow.AddHours(-24),
-                    To = DateTime.UtcNow
+                    From = DateTime.Now.AddHours(-24),
+                    To = DateTime.Now
                 },
                 EventsSummary = new
                 {

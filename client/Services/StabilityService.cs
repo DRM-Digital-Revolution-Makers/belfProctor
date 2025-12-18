@@ -16,7 +16,7 @@ public class StabilityService : BackgroundService, IStabilityService
     private readonly IServiceProvider _serviceProvider;
     private Timer? _healthCheckTimer;
     private Timer? _memoryCheckTimer;
-    private DateTime _lastHeartbeat = DateTime.UtcNow;
+    private DateTime _lastHeartbeat = DateTime.Now;
     private int _consecutiveFailures = 0;
     private readonly object _lockObject = new();
 
@@ -214,7 +214,7 @@ public class StabilityService : BackgroundService, IStabilityService
 
     private void UpdateHeartbeat()
     {
-        _lastHeartbeat = DateTime.UtcNow;
+        _lastHeartbeat = DateTime.Now;
     }
 
     private Task<bool> CheckServiceResponsiveness()
@@ -222,7 +222,7 @@ public class StabilityService : BackgroundService, IStabilityService
         try
         {
             // Проверяем, что heartbeat обновлялся в последние 2 минуты
-            var timeSinceLastHeartbeat = DateTime.UtcNow - _lastHeartbeat;
+            var timeSinceLastHeartbeat = DateTime.Now - _lastHeartbeat;
             if (timeSinceLastHeartbeat > TimeSpan.FromMinutes(2))
             {
                 _logger.LogWarning("Service appears unresponsive. Last heartbeat: {LastHeartbeat}", _lastHeartbeat);
@@ -338,7 +338,7 @@ public class StabilityService : BackgroundService, IStabilityService
         {
             var restartInfo = new
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTime.Now,
                 Reason = "Health check failure",
                 ConsecutiveFailures = _consecutiveFailures,
                 LastHeartbeat = _lastHeartbeat,
@@ -346,7 +346,7 @@ public class StabilityService : BackgroundService, IStabilityService
             };
 
             var logPath = Path.Combine(_settings.LogPath, "restart_log.txt");
-            var logEntry = $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} - Service restart: {System.Text.Json.JsonSerializer.Serialize(restartInfo)}{Environment.NewLine}";
+            var logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - Service restart: {System.Text.Json.JsonSerializer.Serialize(restartInfo)}{Environment.NewLine}";
             
             await File.AppendAllTextAsync(logPath, logEntry);
         }

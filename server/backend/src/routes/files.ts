@@ -50,7 +50,8 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     fs.mkdirSync(clientDir, { recursive: true });
     const tsParsed = new Date(timestampStr);
     const sendTs = isNaN(tsParsed.getTime()) ? new Date() : tsParsed;
-    const adjTs = new Date(sendTs.getTime() - 2 * 60 * 60 * 1000);
+    // Use the timestamp exactly as received (no -2h hack)
+    const adjTs = sendTs;
     const iso = adjTs.toISOString().replace(/[:]/g, "-");
     const filename = `${clientId}_${iso}.jpg`;
     const filepath = path.join(clientDir, filename);
