@@ -1,5 +1,6 @@
 using System.Text;
 using System.Windows.Forms;
+using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
 using BelfProctor.Models;
