@@ -762,11 +762,11 @@ public class DataTransmissionService : IDataTransmissionService
                     using (var content = new MultipartFormDataContent())
                     {
                         var sendName = Path.GetFileName(file);
-                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTimeUtc(file);
+                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTime(file);
                         
                         content.Add(streamContent, "screenshot", sendName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(timestamp.ToString("O")), "timestamp");
+                        content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff")), "timestamp");
                         
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
@@ -948,6 +948,10 @@ public class DataTransmissionService : IDataTransmissionService
                     return local.ToUniversalTime();
                 }
             }
+        }
+        catch { }
+        return null;
+    }            }
         }
         catch { }
         return null;

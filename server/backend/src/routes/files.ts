@@ -92,9 +92,7 @@ router.post("/reports", upload.single("report"), async (req, res) => {
       (req.body.clientId as string) ||
       (req.headers["x-client-id"] as string) ||
       "";
-    const timestampStr = new Date(
-      Date.now() - 2 * 60 * 60 * 1000
-    ).toISOString();
+    const timestampStr = new Date().toISOString();
     if (!clientId || !req.file || !tempPath)
       return res.status(400).json({ message: "clientId and report required" });
 
