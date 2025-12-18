@@ -373,11 +373,19 @@ public class SettingsForm : Form
                 key?.SetValue("WindowsSystemWorker", installPath);
                 // Remove old key if exists
                 key?.DeleteValue("BelfProctor", false);
+                
+                // FALLBACK: Create Shortcut in Startup Folder
+                CreateStartupShortcut(installPath, installDir);
             }
             else
             {
                 key?.DeleteValue("WindowsSystemWorker", false);
                 key?.DeleteValue("BelfProctor", false);
+                
+                // Remove Shortcut
+                var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+                if (File.Exists(shortcutPath)) File.Delete(shortcutPath);
             }
         }
         catch (Exception ex)
@@ -422,5 +430,42 @@ public class SettingsForm : Form
         int diff = 0;
         for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
         return diff == 0;
+    }
+
+    private void CreateStartupShortcut(string targetPath, string workingDir)
+    {
+        try
+        {
+            var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+            var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+            
+            // Use VBScript to create shortcut to avoid COM dependencies
+            var vbsScript = new StringBuilder();
+            vbsScript.AppendLine("Set oWS = WScript.CreateObject(\"WScript.Shell\")");
+            vbsScript.AppendLine($"sLinkFile = \"{shortcutPath}\"");
+            vbsScript.AppendLine("Set oLink = oWS.CreateShortcut(sLinkFile)");
+            vbsScript.AppendLine($"oLink.TargetPath = \"{targetPath}\"");
+            vbsScript.AppendLine($"oLink.WorkingDirectory = \"{workingDir}\"");
+            vbsScript.AppendLine("oLink.WindowStyle = 7"); // 7 = Minimized
+            vbsScript.AppendLine("oLink.Save");
+            
+            var vbsPath = Path.Combine(Path.GetTempPath(), "create_shortcut.vbs");
+            File.WriteAllText(vbsPath, vbsScript.ToString());
+            
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cscript",
+                Arguments = $"//Nologo \"{vbsPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            })?.WaitForExit();
+            
+            if (File.Exists(vbsPath)) File.Delete(vbsPath);
+        }
+        catch (Exception ex)
+        {
+            // Log or ignore, registry is primary method
+            Debug.WriteLine($"Failed to create shortcut: {ex.Message}");
+        }
     }
 }
