@@ -9,5 +9,5 @@ if %errorLevel% neq 0 (
 )
 echo.
 echo Build successful!
-echo The file is located at: client\publish\BelfProctor.exe
+echo The file is located at: client\publish\SystemWorker.exe
 pause

