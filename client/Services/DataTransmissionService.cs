@@ -745,7 +745,6 @@ public class DataTransmissionService : IDataTransmissionService
                     using (var streamContent = GetEncryptedStreamContent(fileStream))
                     using (var content = new MultipartFormDataContent())
                     {
-                        // Use original creation time for the timestamp to ensure correct ordering on server
                         var timestamp = File.GetCreationTimeUtc(file);
                         var sendName = Path.GetFileName(file);
                         
