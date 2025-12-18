@@ -9,8 +9,6 @@ const resources = {
         clients: "Клиенты",
         activity: "Активность",
         screenshots: "Скриншоты",
-        reports: "Отчёты",
-        policies: "Политики",
       },
       common: {
         time: "Время",
@@ -120,36 +118,6 @@ const resources = {
       screenshots: {
         title: "Скриншоты",
       },
-      reports: {
-        title: "Отчёты",
-        filename: "Имя файла",
-        size: "Размер",
-      },
-      reports: {
-        title: "Отчёты",
-        monthly: "Ежемесячный отчёт",
-        daily: "Ежедневный отчёт",
-        generate: "Сформировать",
-        download: "Скачать отчёт",
-        date: "Дата",
-        screenshots: "Скриншоты",
-        activeTime: "Активное время",
-        inactiveTime: "Неактивное время",
-        totalActive: "Всего активно",
-        totalInactive: "Всего неактивно",
-        totalScreenshots: "Всего скриншотов",
-        selectMonth: "Выберите месяц",
-        selectDay: "Выберите день",
-        week: "Неделя",
-        hour: "Час",
-        hourlyActivity: "Почасовая активность",
-        total: "Итого",
-      },
-      policies: {
-        title: "Политики",
-        name: "Название",
-        rules: "Правила",
-      },
     },
   },
   uz: {
@@ -159,8 +127,6 @@ const resources = {
         clients: "Mijozlar",
         activity: "Faoliyat",
         screenshots: "Skrinshotlar",
-        reports: "Hisobotlar",
-        policies: "Siyosatlar",
       },
       common: {
         time: "Vaqt",
@@ -269,16 +235,6 @@ const resources = {
       },
       screenshots: {
         title: "Skrinshotlar",
-      },
-      reports: {
-        title: "Hisobotlar",
-        filename: "Fayl nomi",
-        size: "Hajm",
-      },
-      policies: {
-        title: "Siyosatlar",
-        name: "Nom",
-        rules: "Qoidalar",
       },
     },
   },

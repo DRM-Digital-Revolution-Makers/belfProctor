@@ -46,14 +46,6 @@ export default function NavBar() {
               key: "/screenshots",
               label: <Link to="/screenshots">{t("nav.screenshots")}</Link>,
             },
-            {
-              key: "/reports",
-              label: <Link to="/reports">{t("nav.reports")}</Link>,
-            },
-            {
-              key: "/policies",
-              label: <Link to="/policies">{t("nav.policies")}</Link>,
-            },
           ]}
         />
         <div>

@@ -42,6 +42,49 @@ public class Program
         builder.Services.Configure<ProctorSettings>(
             builder.Configuration.GetSection("ProctorSettings"));
         
+        var tempConfig = builder.Configuration.GetSection("ProctorSettings").Get<ProctorSettings>() ?? new ProctorSettings();
+        
+        // Check if not configured or forced UI
+        bool needsConfig = string.IsNullOrWhiteSpace(tempConfig.ClientId) || 
+                           string.IsNullOrWhiteSpace(tempConfig.ServerUrl) || 
+                           args.Contains("--config-ui");
+
+        if (needsConfig)
+        {
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            var cfg = builder.Configuration;
+            var services = new ServiceCollection();
+            services.Configure<ProctorSettings>(cfg.GetSection("ProctorSettings"));
+            using var sp = services.BuildServiceProvider();
+            var opts = sp.GetRequiredService<IOptions<ProctorSettings>>();
+            
+            // Run settings form. If it returns, we assume settings might be saved.
+            Application.Run(new UI.SettingsForm(cfg, opts.Value, possibleConfigs));
+            
+            // Reload config after form close to see if we can proceed
+            var newBuilder = Host.CreateApplicationBuilder(args);
+            foreach (var c in possibleConfigs) if (File.Exists(c)) newBuilder.Configuration.AddJsonFile(c, true, true);
+            var newSettings = newBuilder.Configuration.GetSection("ProctorSettings").Get<ProctorSettings>();
+            
+            if (newSettings == null || string.IsNullOrWhiteSpace(newSettings.ClientId) || string.IsNullOrWhiteSpace(newSettings.ServerUrl))
+            {
+                // Still invalid? User cancelled or didn't save. Exit.
+                return; 
+            }
+            
+            // If valid now, we must restart the builder/host construction to pick up new values cleanly 
+            // OR just let the original builder continue if we reload. 
+            // Simplest is to let original builder continue but we must ensure it reads latest file.
+            // But builder.Configuration was already built. 
+            // So better to just exit and expect restart (since SettingsForm says "Application will restart/continue")
+            // BUT for user experience, let's try to proceed if we can reload.
+            // Actually, "Host.CreateApplicationBuilder" loads config at start. 
+            // We should reload it.
+             builder.Configuration.Reload();
+        }
+
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
         builder.Services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
         builder.Services.AddSingleton<IActivityMonitorService, ActivityMonitorService>();
