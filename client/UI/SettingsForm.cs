@@ -380,6 +380,18 @@ public class SettingsForm : Form
             {
                 if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
 
+                // Check for existing running process in install path and kill it
+                var existingProcess = Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
+                if (existingProcess != null)
+                {
+                    try 
+                    { 
+                        existingProcess.Kill(); 
+                        existingProcess.WaitForExit(3000);
+                    } 
+                    catch { }
+                }
+
                 // Copy all files from current directory to install directory to ensure dependencies (DLLs, JSONs) are present
                 var sourceDir = Path.GetDirectoryName(currentPath);
                 if (!string.IsNullOrEmpty(sourceDir))
@@ -450,7 +462,7 @@ public class SettingsForm : Form
             MessageBox.Show($"Error setting startup: {ex.Message}");
         }
 
-        MessageBox.Show("Settings saved. Application will restart in background.");
+        MessageBox.Show("Settings saved. Application updated and will restart in background.");
         
         // If we just installed it, launch the installed version and exit this one
         if (!isInstalled && File.Exists(installPath))
@@ -460,8 +472,25 @@ public class SettingsForm : Form
         }
         else
         {
-            Close();
-        }
+            // If already installed, we might need to restart to pick up config?
+            // Actually, we are running as Settings UI. The background service might be running or not.
+            // If we killed it above, we should restart it.
+            // But we only killed it if we were NOT installed (updating).
+            // If we ARE installed (isInstalled=true), we didn't kill anything.
+            // But we saved config.
+            // We should restart to apply config.
+            
+            // Check if we are running as worker or just UI?
+             // This is SettingsForm. We are likely just UI or UI mode of worker.
+             // We should restart ourselves.
+             
+             // Restart with --auto-start to run silently as service
+             var proc = new ProcessStartInfo(Application.ExecutablePath);
+             proc.UseShellExecute = true;
+             proc.Arguments = "--auto-start";
+             Process.Start(proc);
+             Application.Exit();
+         }
     }
 
     private static bool IsAdmin()

@@ -13,13 +13,28 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Immediate debug logging to verify process start
+        try 
+        {
+            var debugDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
+            if (!Directory.Exists(debugDir)) Directory.CreateDirectory(debugDir);
+            File.AppendAllText(Path.Combine(debugDir, "startup_log.txt"), $"{DateTime.Now}: Process started. Args: {string.Join(" ", args)}\n");
+        }
+        catch { }
+
         try
         {
             // Mutex to prevent multiple instances
             using var mutex = new Mutex(false, "Global\\BelfProctorSystemWorker", out bool createdNew);
             if (!createdNew)
             {
-                if (args.Contains("--auto-start")) return;
+                // If auto-start, log and exit
+                if (args.Contains("--auto-start")) 
+                {
+                    try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker", "startup_log.txt"), $"{DateTime.Now}: Exiting - Instance already running.\n"); } catch { }
+                    return;
+                }
+                
                 if (args.Contains("--config-ui"))
                 {
                     MessageBox.Show("Another instance is running.", "Already Running");
@@ -32,6 +47,8 @@ public class Program
             // Fix for running from Registry/Startup where CWD might be System32
             var baseDir = AppContext.BaseDirectory;
             Directory.SetCurrentDirectory(baseDir);
+            
+            try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker", "startup_log.txt"), $"{DateTime.Now}: BaseDir set to {baseDir}\n"); } catch { }
 
             var builder = Host.CreateApplicationBuilder(args);
             
@@ -55,6 +72,19 @@ public class Program
             bool needsConfig = string.IsNullOrWhiteSpace(tempConfig.ClientId) || 
                                string.IsNullOrWhiteSpace(tempConfig.ServerUrl) || 
                                args.Contains("--config-ui");
+
+            // If running manually (not auto-start) AND not installed (e.g. from Downloads),
+            // FORCE UI to allow installation/registration.
+            // Also force UI if running manually and installed, because user probably wants to reconfigure.
+            // Basically: Manual run -> Always Show UI.
+            // Auto-start -> Run Silent.
+            if (!isAutoStart)
+            {
+                needsConfig = true;
+            }
+
+            // Log config status
+            try { File.AppendAllText(Path.Combine(localAppData, "startup_log.txt"), $"{DateTime.Now}: AutoStart={isAutoStart}, NeedsConfig={needsConfig}, ClientId={tempConfig.ClientId}\n"); } catch { }
 
             // If auto-start and config missing, we can't run.
             if (isAutoStart && needsConfig)
