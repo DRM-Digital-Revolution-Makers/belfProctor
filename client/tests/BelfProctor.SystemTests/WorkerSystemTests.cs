@@ -19,9 +19,9 @@ public class WorkerSystemTests
 
         var settings = Options.Create(new ProctorSettings
         {
-            ScreenshotInterval = 100,
-            HeartbeatInterval = 100,
-            PolicyUpdateInterval = 200,
+            ScreenshotIntervalMs = 100,
+            HeartbeatIntervalMs = 100,
+            PolicyUpdateIntervalMs = 200,
             ScreenshotPath = screenshots,
             LogPath = logs,
             ReportsPath = reports,

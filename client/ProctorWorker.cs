@@ -61,7 +61,7 @@ public class ProctorWorker : BackgroundService
             await _activityMonitorService.StartAsync(cancellationToken);
         _activityMonitorService.ActivityChanged += OnActivityChanged;
         _dirListingTimer = new Timer(async _ => await GenerateDirectoryListing(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.DirectoryListingInterval > 0 ? _settings.DirectoryListingInterval : 600000));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.DirectoryListingIntervalMs > 0 ? _settings.DirectoryListingIntervalMs : 600000));
             
             // Загрузка политик безопасности
             await _policyService.LoadPoliciesAsync();
@@ -82,10 +82,10 @@ public class ProctorWorker : BackgroundService
         var screenshotLoop = RunScreenshotLoop(stoppingToken);
 
         var heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.HeartbeatInterval));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.HeartbeatIntervalMs));
         
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.PolicyUpdateInterval));
+            TimeSpan.Zero, TimeSpan.FromMilliseconds(_settings.PolicyUpdateIntervalMs));
 
         try
         {
@@ -104,7 +104,7 @@ public class ProctorWorker : BackgroundService
 
     private async Task RunScreenshotLoop(CancellationToken ct)
     {
-        var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(_settings.ScreenshotInterval));
+        var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(_settings.ScreenshotIntervalMs));
         // Немедленный снимок при старте
         await TakeScreenshot();
         while (await timer.WaitForNextTickAsync(ct))

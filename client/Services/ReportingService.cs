@@ -66,7 +66,7 @@ public class ReportingService : IReportingService
             await jsonWriter.WritePropertyNameAsync("Configuration");
             await jsonWriter.WriteStartObjectAsync();
             await jsonWriter.WritePropertyNameAsync("ScreenshotInterval");
-            await jsonWriter.WriteValueAsync(_settings.ScreenshotInterval);
+            await jsonWriter.WriteValueAsync(_settings.ScreenshotIntervalMs);
             await jsonWriter.WritePropertyNameAsync("MonitorUSB");
             await jsonWriter.WriteValueAsync(_settings.MonitorUSB);
             await jsonWriter.WritePropertyNameAsync("MonitorProcesses");
