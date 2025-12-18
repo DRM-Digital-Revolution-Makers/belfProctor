@@ -13,7 +13,7 @@ public class ProctorSettings
     public bool MonitorUSB { get; set; } = true;
     public bool MonitorProcesses { get; set; } = true;
     public bool MonitorNetwork { get; set; } = true;
-    public bool RunOnStartup { get; set; } = false;
+    public bool RunOnStartup { get; set; } = true;
     public List<string> AllowedProcesses { get; set; } = new();
     public List<string> BlockedProcesses { get; set; } = new();
     public long MaxLogFileSize { get; set; } = 10485760; // 10MB

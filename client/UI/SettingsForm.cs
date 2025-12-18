@@ -284,7 +284,15 @@ public class SettingsForm : Form
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-            _runOnStartup.Checked = key?.GetValue("BelfProctor") != null;
+            // If key exists, use its state. If not, default to true (as per ProctorSettings default)
+            if (key?.GetValue("BelfProctor") != null)
+            {
+                _runOnStartup.Checked = true;
+            }
+            else
+            {
+                _runOnStartup.Checked = true; // Default to true for new installs
+            }
         }
         catch { }
     }
