@@ -371,7 +371,7 @@ public class SettingsForm : Form
             catch { }
         }
 
-        // Install logic: Copy EXE if not already running from install path
+        // Install logic: Copy ALL files if not already running from install path
         bool isInstalled = string.Equals(currentPath, installPath, StringComparison.OrdinalIgnoreCase);
         
         if (!isInstalled)
@@ -379,7 +379,34 @@ public class SettingsForm : Form
             try
             {
                 if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
-                File.Copy(currentPath, installPath, true);
+
+                // Copy all files from current directory to install directory to ensure dependencies (DLLs, JSONs) are present
+                var sourceDir = Path.GetDirectoryName(currentPath);
+                if (!string.IsNullOrEmpty(sourceDir))
+                {
+                    var files = Directory.GetFiles(sourceDir);
+                    foreach (var file in files)
+                    {
+                        var fileName = Path.GetFileName(file);
+                        var destFile = Path.Combine(installDir, fileName);
+                        // Skip the main exe as we handle it specifically or it might be locked? 
+                        // Actually, File.Copy allows overwriting. 
+                        // But we want to rename the main exe to SystemWorker.exe
+                        
+                        if (string.Equals(file, currentPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            File.Copy(file, installPath, true);
+                        }
+                        else
+                        {
+                            // Don't copy .pdb files to save space/stealth, and skip old configs
+                            if (!fileName.EndsWith(".pdb") && !fileName.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase)) 
+                            {
+                                File.Copy(file, destFile, true);
+                            }
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
