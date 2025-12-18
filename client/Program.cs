@@ -82,7 +82,7 @@ public class Program
             // BUT for user experience, let's try to proceed if we can reload.
             // Actually, "Host.CreateApplicationBuilder" loads config at start. 
             // We should reload it.
-             builder.Configuration.Reload();
+            ((IConfigurationRoot)builder.Configuration).Reload();
         }
 
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();

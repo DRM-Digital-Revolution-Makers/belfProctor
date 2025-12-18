@@ -144,6 +144,7 @@ public class SettingsForm : Form
         section["ServerUrl"] = _serverUrl.Text;
         section["ClientId"] = _clientId.Text;
         section["EncryptionKey"] = _encryptionKey.Text;
+        section["RunOnStartup"] = _runOnStartup.Checked;
         section["ScreenshotIntervalMs"] = _screenshotInterval.Value;
         section["ScreenshotQuality"] = _screenshotQuality.Value;
         section["ScreenshotPath"] = _screenshotPath.Text;

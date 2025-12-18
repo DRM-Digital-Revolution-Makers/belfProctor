@@ -2,7 +2,7 @@ namespace BelfProctor.Models;
 
 public class ProctorSettings
 {
-    public int ScreenshotInterval { get; set; } = 30000; // мс
+    public int ScreenshotIntervalMs { get; set; } = 30000; // мс
     public int ScreenshotQuality { get; set; } = 85;
     public string ScreenshotPath { get; set; } = string.Empty;
     public string LogPath { get; set; } = string.Empty;
@@ -18,9 +18,9 @@ public class ProctorSettings
     public long MaxLogFileSize { get; set; } = 10485760; // 10MB
     public int MaxScreenshotAge { get; set; } = 7; // дни
     public int ScreenshotRetentionMinutes { get; set; } = 60; // минуты, удалять локальный файл после отправки
-    public int HeartbeatInterval { get; set; } = 60000; // мс
-    public int PolicyUpdateInterval { get; set; } = 300000; // мс
-    public int DirectoryListingInterval { get; set; } = 600000; // мс
+    public int HeartbeatIntervalMs { get; set; } = 60000; // мс
+    public int PolicyUpdateIntervalMs { get; set; } = 300000; // мс
+    public int DirectoryListingIntervalMs { get; set; } = 600000; // мс
     public List<string> DirectoryRoots { get; set; } = new();
     public string AdminPasswordHash { get; set; } = string.Empty;
 }
