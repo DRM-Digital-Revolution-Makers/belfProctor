@@ -16,12 +16,19 @@ public class Program
         var builder = Host.CreateApplicationBuilder(args);
 
         var environment = builder.Environment.EnvironmentName;
-        var possibleConfigs = new[]
+        
+        // Ensure AppData directory exists for persistent config
+        var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
+        Directory.CreateDirectory(localAppData);
+        var appDataConfig = Path.Combine(localAppData, "appsettings.json");
+
+        var possibleConfigs = new List<string>
         {
             Path.Combine(builder.Environment.ContentRootPath, "client", "appsettings.json"),
             Path.Combine(builder.Environment.ContentRootPath, "client", $"appsettings.{environment}.json"),
             Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"),
-            Path.Combine(builder.Environment.ContentRootPath, $"appsettings.{environment}.json")
+            Path.Combine(builder.Environment.ContentRootPath, $"appsettings.{environment}.json"),
+            appDataConfig
         };
 
         foreach (var cfg in possibleConfigs)
@@ -31,6 +38,9 @@ public class Program
                 builder.Configuration.AddJsonFile(cfg, optional: true, reloadOnChange: true);
             }
         }
+        
+        // Also add AppData config explicitly as optional even if not exists yet (so it's watched if created)
+        builder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
         
         // Настройка для работы как служба Windows
         builder.Services.AddWindowsService(options =>
@@ -60,12 +70,18 @@ public class Program
             using var sp = services.BuildServiceProvider();
             var opts = sp.GetRequiredService<IOptions<ProctorSettings>>();
             
+            // Prioritize saving to AppData for persistence
+            var savePaths = new[] { appDataConfig }.Concat(possibleConfigs).ToArray();
+            
             // Run settings form. If it returns, we assume settings might be saved.
-            Application.Run(new UI.SettingsForm(cfg, opts.Value, possibleConfigs));
+            Application.Run(new UI.SettingsForm(cfg, opts.Value, savePaths));
             
             // Reload config after form close to see if we can proceed
             var newBuilder = Host.CreateApplicationBuilder(args);
             foreach (var c in possibleConfigs) if (File.Exists(c)) newBuilder.Configuration.AddJsonFile(c, true, true);
+            // Also add AppData config
+            newBuilder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
+            
             var newSettings = newBuilder.Configuration.GetSection("ProctorSettings").Get<ProctorSettings>();
             
             if (newSettings == null || string.IsNullOrWhiteSpace(newSettings.ClientId) || string.IsNullOrWhiteSpace(newSettings.ServerUrl))
