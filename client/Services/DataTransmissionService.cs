@@ -79,6 +79,12 @@ public class DataTransmissionService : IDataTransmissionService
         Directory.CreateDirectory(_pendingCmdFiles);
         _retryTimer = new System.Threading.Timer(_ => { try { FlushPendingAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
         _eventBatchTimer = new System.Threading.Timer(_ => { try { FlushEventBatchAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+        try
+        {
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+        }
+        catch { }
     }
 
     private async Task<HttpResponseMessage> GetWithAutoDiscoverAsync(string relativeUrl)
@@ -283,6 +289,7 @@ public class DataTransmissionService : IDataTransmissionService
                     _logger.LogWarning("Failed to send screenshot. Status: {StatusCode}", response.StatusCode);
                     var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
                     try { File.Move(filePath, dest, true); } catch { }
+                    _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
                 }
             }
         }
@@ -291,6 +298,7 @@ public class DataTransmissionService : IDataTransmissionService
             _logger.LogError(ex, "Error sending screenshot: {FilePath}", filePath);
             var dest = Path.Combine(_pendingScreenshots, Path.GetFileName(filePath));
             try { if (File.Exists(filePath)) File.Move(filePath, dest, true); } catch { }
+            _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
         }
     }
 
@@ -745,8 +753,8 @@ public class DataTransmissionService : IDataTransmissionService
                     using (var streamContent = GetEncryptedStreamContent(fileStream))
                     using (var content = new MultipartFormDataContent())
                     {
-                        var timestamp = File.GetCreationTimeUtc(file);
                         var sendName = Path.GetFileName(file);
+                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTimeUtc(file);
                         
                         content.Add(streamContent, "screenshot", sendName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
@@ -902,5 +910,38 @@ public class DataTransmissionService : IDataTransmissionService
         {
             _flushLock.Release();
         }
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable)
+        {
+            _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+        }
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+    {
+        _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+    }
+
+    private static DateTime? TryExtractTimestampFromFileName(string fileName)
+    {
+        try
+        {
+            var name = Path.GetFileNameWithoutExtension(fileName);
+            var parts = name.Split('_');
+            if (parts.Length >= 3)
+            {
+                var ts = parts[^1];
+                if (DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var local))
+                {
+                    if (local.Kind == DateTimeKind.Unspecified) local = DateTime.SpecifyKind(local, DateTimeKind.Local);
+                    return local.ToUniversalTime();
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 }
