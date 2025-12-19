@@ -149,10 +149,10 @@ public class Program
                     ScreenshotPath = section["ScreenshotPath"] ?? string.Empty,
                     LogPath = section["LogPath"] ?? string.Empty,
                     ReportsPath = section["ReportsPath"] ?? string.Empty,
-                    MonitorUSB = bool.TryParse(section["MonitorUSB"], out var usb) ? usb : true,
-                    MonitorProcesses = bool.TryParse(section["MonitorProcesses"], out var proc) ? proc : true,
-                    MonitorNetwork = bool.TryParse(section["MonitorNetwork"], out var net) ? net : true,
-                    RunOnStartup = bool.TryParse(section["RunOnStartup"], out var run) ? run : true,
+                    MonitorUSB = bool.TryParse(section["MonitorUSB"], out var usbVal1) ? usbVal1 : true,
+                    MonitorProcesses = bool.TryParse(section["MonitorProcesses"], out var procVal1) ? procVal1 : true,
+                    MonitorNetwork = bool.TryParse(section["MonitorNetwork"], out var netVal1) ? netVal1 : true,
+                    RunOnStartup = bool.TryParse(section["RunOnStartup"], out var runVal1) ? runVal1 : true,
                 };
                 
                 var savePaths = new[] { appDataConfig, baseConfig };
@@ -180,10 +180,10 @@ public class Program
                 ScreenshotPath = sanitizedSection["ScreenshotPath"] ?? string.Empty,
                 LogPath = sanitizedSection["LogPath"] ?? string.Empty,
                 ReportsPath = sanitizedSection["ReportsPath"] ?? string.Empty,
-                MonitorUSB = bool.TryParse(sanitizedSection["MonitorUSB"], out var usb) ? usb : true,
-                MonitorProcesses = bool.TryParse(sanitizedSection["MonitorProcesses"], out var proc) ? proc : true,
-                MonitorNetwork = bool.TryParse(sanitizedSection["MonitorNetwork"], out var net) ? net : true,
-                RunOnStartup = bool.TryParse(sanitizedSection["RunOnStartup"], out var run) ? run : true,
+                MonitorUSB = bool.TryParse(sanitizedSection["MonitorUSB"], out var usbVal2) ? usbVal2 : true,
+                MonitorProcesses = bool.TryParse(sanitizedSection["MonitorProcesses"], out var procVal2) ? procVal2 : true,
+                MonitorNetwork = bool.TryParse(sanitizedSection["MonitorNetwork"], out var netVal2) ? netVal2 : true,
+                RunOnStartup = bool.TryParse(sanitizedSection["RunOnStartup"], out var runVal2) ? runVal2 : true,
             };
             builder.Services.AddSingleton<IOptions<ProctorSettings>>(Options.Create(settings));
 
