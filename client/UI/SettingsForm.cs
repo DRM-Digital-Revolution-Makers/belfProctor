@@ -120,6 +120,10 @@ public class SettingsForm : Form
         _policyUpdateInterval.Maximum = 3600000;
         _directoryListingInterval.Minimum = 1000;
         _directoryListingInterval.Maximum = 3600000;
+        _screenshotInterval.DecimalPlaces = 0;
+        _heartbeatInterval.DecimalPlaces = 0;
+        _policyUpdateInterval.DecimalPlaces = 0;
+        _directoryListingInterval.DecimalPlaces = 0;
         _serverUrl.Width = _clientId.Width = _encryptionKey.Width = _screenshotPath.Width = _logPath.Width = _reportsPath.Width = _allowedProcesses.Width = _blockedProcesses.Width = _directoryRoots.Width = _adminEmail.Width = _adminPassword.Width = 500;
         _adminPassword.UseSystemPasswordChar = true;
         
@@ -338,8 +342,8 @@ public class SettingsForm : Form
         section["ClientId"] = _clientId.Text;
         section["EncryptionKey"] = _encryptionKey.Text;
         section["RunOnStartup"] = _runOnStartup.Checked;
-        section["ScreenshotIntervalMs"] = _screenshotInterval.Value;
-        section["ScreenshotQuality"] = _screenshotQuality.Value;
+        section["ScreenshotIntervalMs"] = Convert.ToInt32(_screenshotInterval.Value);
+        section["ScreenshotQuality"] = Convert.ToInt32(_screenshotQuality.Value);
         section["ScreenshotPath"] = _screenshotPath.Text;
         section["LogPath"] = _logPath.Text;
         section["ReportsPath"] = _reportsPath.Text;
@@ -348,9 +352,9 @@ public class SettingsForm : Form
         section["MonitorNetwork"] = _monitorNetwork.Checked;
         section["AllowedProcesses"] = new JArray(_allowedProcesses.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
         section["BlockedProcesses"] = new JArray(_blockedProcesses.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
-        section["HeartbeatIntervalMs"] = _heartbeatInterval.Value;
-        section["PolicyUpdateIntervalMs"] = _policyUpdateInterval.Value;
-        section["DirectoryListingIntervalMs"] = _directoryListingInterval.Value;
+        section["HeartbeatIntervalMs"] = Convert.ToInt32(_heartbeatInterval.Value);
+        section["PolicyUpdateIntervalMs"] = Convert.ToInt32(_policyUpdateInterval.Value);
+        section["DirectoryListingIntervalMs"] = Convert.ToInt32(_directoryListingInterval.Value);
         section["DirectoryRoots"] = new JArray(_directoryRoots.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
         section["AdminPasswordHash"] = _settings.AdminPasswordHash;
 

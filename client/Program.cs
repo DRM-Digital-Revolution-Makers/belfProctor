@@ -6,6 +6,7 @@ using BelfProctor.Services;
 using BelfProctor.Models;
 using System.Windows.Forms;
 using Microsoft.Extensions.Options;
+using System.Globalization;
 
 namespace BelfProctor;
 
@@ -66,11 +67,13 @@ public class Program
 
             builder.Services.AddWindowsService(options => options.ServiceName = "BelfProctor");
             
-            var tempConfig = builder.Configuration.GetSection("ProctorSettings").Get<ProctorSettings>() ?? new ProctorSettings();
+            var section = builder.Configuration.GetSection("ProctorSettings");
+            var clientIdStr = section["ClientId"] ?? string.Empty;
+            var serverUrlStr = section["ServerUrl"] ?? string.Empty;
             
             bool isAutoStart = args.Contains("--auto-start");
-            bool needsConfig = string.IsNullOrWhiteSpace(tempConfig.ClientId) || 
-                               string.IsNullOrWhiteSpace(tempConfig.ServerUrl) || 
+            bool needsConfig = string.IsNullOrWhiteSpace(clientIdStr) || 
+                               string.IsNullOrWhiteSpace(serverUrlStr) || 
                                args.Contains("--config-ui");
 
             // If running manually (not auto-start) AND not installed (e.g. from Downloads),
@@ -84,7 +87,37 @@ public class Program
             }
 
             // Log config status
-            try { File.AppendAllText(Path.Combine(localAppData, "startup_log.txt"), $"{DateTime.Now}: AutoStart={isAutoStart}, NeedsConfig={needsConfig}, ClientId={tempConfig.ClientId}\n"); } catch { }
+            try { File.AppendAllText(Path.Combine(localAppData, "startup_log.txt"), $"{DateTime.Now}: AutoStart={isAutoStart}, NeedsConfig={needsConfig}, ClientId={clientIdStr}\n"); } catch { }
+
+            // Sanitize numeric values that may be stored as "300000.0" strings
+            var overrides = new Dictionary<string, string>();
+            void SanitizeInt(string name, int fallback)
+            {
+                var raw = section[name];
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    overrides[$"ProctorSettings:{name}"] = fallback.ToString(CultureInfo.InvariantCulture);
+                    return;
+                }
+                var s = raw.Trim();
+                if (s.EndsWith(".0")) s = s.Substring(0, s.Length - 2);
+                if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
+                {
+                    iv = fallback;
+                }
+                overrides[$"ProctorSettings:{name}"] = iv.ToString(CultureInfo.InvariantCulture);
+            }
+            SanitizeInt("ScreenshotIntervalMs", 300000);
+            SanitizeInt("ScreenshotQuality", 75);
+            SanitizeInt("HeartbeatIntervalMs", 60000);
+            SanitizeInt("PolicyUpdateIntervalMs", 300000);
+            SanitizeInt("DirectoryListingIntervalMs", 600000);
+            SanitizeInt("MaxScreenshotAge", 7);
+            SanitizeInt("ScreenshotRetentionMinutes", 60);
+            if (overrides.Count > 0)
+            {
+                builder.Configuration.AddInMemoryCollection(overrides);
+            }
 
             // If auto-start and config missing, we can't run.
             if (isAutoStart && needsConfig)
@@ -101,20 +134,59 @@ public class Program
                 Application.SetCompatibleTextRenderingDefault(false);
                 
                 var cfg = builder.Configuration;
-                var services = new ServiceCollection();
-                services.Configure<ProctorSettings>(cfg.GetSection("ProctorSettings"));
-                using var sp = services.BuildServiceProvider();
-                var opts = sp.GetRequiredService<IOptions<ProctorSettings>>();
+                var safeSettings = new ProctorSettings
+                {
+                    ClientId = clientIdStr,
+                    ServerUrl = serverUrlStr,
+                    ScreenshotIntervalMs = int.Parse(overrides["ProctorSettings:ScreenshotIntervalMs"]),
+                    ScreenshotQuality = int.Parse(overrides["ProctorSettings:ScreenshotQuality"]),
+                    HeartbeatIntervalMs = int.Parse(overrides["ProctorSettings:HeartbeatIntervalMs"]),
+                    PolicyUpdateIntervalMs = int.Parse(overrides["ProctorSettings:PolicyUpdateIntervalMs"]),
+                    DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
+                    MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
+                    ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
+                    EncryptionKey = section["EncryptionKey"] ?? string.Empty,
+                    ScreenshotPath = section["ScreenshotPath"] ?? string.Empty,
+                    LogPath = section["LogPath"] ?? string.Empty,
+                    ReportsPath = section["ReportsPath"] ?? string.Empty,
+                    MonitorUSB = bool.TryParse(section["MonitorUSB"], out var usb) ? usb : true,
+                    MonitorProcesses = bool.TryParse(section["MonitorProcesses"], out var proc) ? proc : true,
+                    MonitorNetwork = bool.TryParse(section["MonitorNetwork"], out var net) ? net : true,
+                    RunOnStartup = bool.TryParse(section["RunOnStartup"], out var run) ? run : true,
+                };
                 
                 var savePaths = new[] { appDataConfig, baseConfig };
-                Application.Run(new UI.SettingsForm(cfg, opts.Value, savePaths));
+                Application.Run(new UI.SettingsForm(cfg, safeSettings, savePaths));
                 return; // Exit after config
             }
 
             // Final check before running services
             builder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
-            
-            builder.Services.Configure<ProctorSettings>(builder.Configuration.GetSection("ProctorSettings"));
+
+            // Build strongly-typed sanitized settings to avoid binder Int32 failures on "300000.0"
+            var sanitizedSection = builder.Configuration.GetSection("ProctorSettings");
+            var settings = new ProctorSettings
+            {
+                ClientId = sanitizedSection["ClientId"] ?? string.Empty,
+                ServerUrl = sanitizedSection["ServerUrl"] ?? string.Empty,
+                ScreenshotIntervalMs = int.Parse(overrides["ProctorSettings:ScreenshotIntervalMs"]),
+                ScreenshotQuality = int.Parse(overrides["ProctorSettings:ScreenshotQuality"]),
+                HeartbeatIntervalMs = int.Parse(overrides["ProctorSettings:HeartbeatIntervalMs"]),
+                PolicyUpdateIntervalMs = int.Parse(overrides["ProctorSettings:PolicyUpdateIntervalMs"]),
+                DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
+                MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
+                ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
+                EncryptionKey = sanitizedSection["EncryptionKey"] ?? string.Empty,
+                ScreenshotPath = sanitizedSection["ScreenshotPath"] ?? string.Empty,
+                LogPath = sanitizedSection["LogPath"] ?? string.Empty,
+                ReportsPath = sanitizedSection["ReportsPath"] ?? string.Empty,
+                MonitorUSB = bool.TryParse(sanitizedSection["MonitorUSB"], out var usb) ? usb : true,
+                MonitorProcesses = bool.TryParse(sanitizedSection["MonitorProcesses"], out var proc) ? proc : true,
+                MonitorNetwork = bool.TryParse(sanitizedSection["MonitorNetwork"], out var net) ? net : true,
+                RunOnStartup = bool.TryParse(sanitizedSection["RunOnStartup"], out var run) ? run : true,
+            };
+            builder.Services.AddSingleton<IOptions<ProctorSettings>>(Options.Create(settings));
+
             builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
             builder.Services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
             builder.Services.AddSingleton<IActivityMonitorService, ActivityMonitorService>();

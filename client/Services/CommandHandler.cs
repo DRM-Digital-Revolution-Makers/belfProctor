@@ -32,9 +32,13 @@ public class CommandHandler
             }
 
             ApplyIfPresent(cmd.Payload, "ScreenshotInterval", v => _settings.ScreenshotIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "ScreenshotIntervalMs", v => _settings.ScreenshotIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "HeartbeatInterval", v => _settings.HeartbeatIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "HeartbeatIntervalMs", v => _settings.HeartbeatIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "PolicyUpdateInterval", v => _settings.PolicyUpdateIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "PolicyUpdateIntervalMs", v => _settings.PolicyUpdateIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "DirectoryListingInterval", v => _settings.DirectoryListingIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "DirectoryListingIntervalMs", v => _settings.DirectoryListingIntervalMs = v);
             var ok = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true }));
             await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);
             return;
