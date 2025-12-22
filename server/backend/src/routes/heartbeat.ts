@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../prisma";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
+import { appendHeartbeat } from "../store";
 
 const router = Router();
 
@@ -10,11 +11,19 @@ router.post("/", async (req, res) => {
     if (!clientId)
       return res.status(400).json({ message: "X-Client-Id header required" });
 
-    const client = await prisma.client.findUnique({ where: { id: clientId } });
-    if (!client || !client.encryptionKey) {
-      return res
-        .status(400)
-        .json({ message: "Client not registered or missing key" });
+    let encryptionKey = "";
+    if (process.env.NO_DB) {
+      encryptionKey = "ABCDEFGHIJKLMNOP";
+    } else {
+      const client = await prisma.client.findUnique({
+        where: { id: clientId },
+      });
+      if (!client || !client.encryptionKey) {
+        return res
+          .status(400)
+          .json({ message: "Client not registered or missing key" });
+      }
+      encryptionKey = client.encryptionKey;
     }
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
@@ -22,9 +31,19 @@ router.post("/", async (req, res) => {
       : Buffer.from([]);
     const decryptedJson = decryptAes256CbcPrefixedIv(
       encrypted,
-      client.encryptionKey
+      encryptionKey
     ).toString("utf-8");
     const payload = JSON.parse(decryptedJson);
+
+    if (process.env.NO_DB) {
+      appendHeartbeat({
+        clientId,
+        timestamp: new Date(),
+        status: payload.Status || payload.status || "Online",
+        version: payload.Version || payload.version || "",
+      });
+      return res.json({ ok: true });
+    }
 
     await prisma.heartbeat.create({
       data: {
@@ -43,6 +62,8 @@ router.post("/", async (req, res) => {
 });
 
 router.get("/", async (req, res) => {
+  if (process.env.NO_DB) return res.json({ data: [], total: 0 });
+
   const { page = "1", pageSize = "20", clientId } = req.query as any;
   const skip = (parseInt(page) - 1) * parseInt(pageSize);
   const where = clientId ? { clientId: String(clientId) } : {};
@@ -59,6 +80,8 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/latest", async (_req, res) => {
+  if (process.env.NO_DB) return res.json({ data: [] });
+
   const items = await prisma.heartbeat.findMany({
     orderBy: { timestamp: "desc" },
     distinct: ["clientId"],

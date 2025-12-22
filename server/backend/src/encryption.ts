@@ -40,7 +40,10 @@ export function encryptAes256CbcPrefixedIv(
 }
 
 import fs from "fs";
-import { pipeline } from "stream/promises";
+import util from "util";
+import stream from "stream";
+
+const pipeline = util.promisify(stream.pipeline);
 
 export async function decryptFileStream(
   inputPath: string,

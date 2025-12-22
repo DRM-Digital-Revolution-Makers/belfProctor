@@ -48,7 +48,17 @@ export default function EventsList() {
         );
       })
       .catch((err) => console.error("Failed to load clients", err));
-  }, []);
+
+    // Fetch App Stats
+    authFetch(`${API_URL}/events/stats`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setAppStats(data);
+        }
+      })
+      .catch((err) => console.error("Failed to load stats", err));
+  }, []); // Reload on mount. Ideally should reload periodically or when filter changes if we want to filter stats by client.
 
   const load = () => {
     const params = new URLSearchParams({
@@ -65,28 +75,7 @@ export default function EventsList() {
         const data = json.data || [];
         setItems(data);
         setTotal(json.total || 0);
-
-        // Simple client-side processing for "Recent Apps" from the fetched page
-        // Ideally this should be a separate API call if we want global stats
-        const apps = {};
-        data.forEach((e) => {
-          if (e.processName) {
-            if (!apps[e.processName]) {
-              apps[e.processName] = {
-                name: e.processName,
-                lastSeen: e.timestamp,
-                count: 0,
-              };
-            }
-            apps[e.processName].count++;
-            if (
-              new Date(e.timestamp) > new Date(apps[e.processName].lastSeen)
-            ) {
-              apps[e.processName].lastSeen = e.timestamp;
-            }
-          }
-        });
-        setAppStats(Object.values(apps).sort((a, b) => b.count - a.count));
+        // Removed client-side aggregation
       })
       .catch(() => {
         setItems([]);
@@ -111,7 +100,7 @@ export default function EventsList() {
 
       {/* App Usage Summary Block */}
       <Card style={{ marginBottom: 24 }}>
-        <Title level={4}>Активность приложений (на этой странице)</Title>
+        <Title level={4}>Часто используемые приложения</Title>
         {appStats.length === 0 ? (
           <Empty
             description="Нет данных о приложениях"
@@ -123,14 +112,20 @@ export default function EventsList() {
               const diffMins = dayjs().diff(dayjs(app.lastSeen), "minute");
               const isActive = diffMins < 10;
               return (
-                <Col key={app.name} xs={24} sm={12} md={8} lg={6}>
+                <Col
+                  key={`${app.clientId}_${app.processName}`}
+                  xs={24}
+                  sm={12}
+                  md={8}
+                  lg={6}
+                >
                   <Card
                     size="small"
                     bordered={false}
                     style={{ background: "#fafafa" }}
                   >
                     <Statistic
-                      title={app.name}
+                      title={app.processName || app.name}
                       value={isActive ? "Активно" : `${diffMins} мин. назад`}
                       valueStyle={{
                         color: isActive ? "#52c41a" : undefined,

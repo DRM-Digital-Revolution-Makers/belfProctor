@@ -84,6 +84,19 @@ app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 
+// Serve frontend build (if present) on the same server for Win8 compatibility
+const FRONT_DIST = path.join(process.cwd(), "..", "frontend", "dist");
+if (fs.existsSync(FRONT_DIST)) {
+  app.use(express.static(FRONT_DIST));
+  app.get("/", (_req, res) => {
+    res.sendFile(path.join(FRONT_DIST, "index.html"));
+  });
+  // SPA fallback for client-side routing, avoid intercepting /api/*
+  app.get(/^\/(?!api).*/, (_req, res) => {
+    res.sendFile(path.join(FRONT_DIST, "index.html"));
+  });
+}
+
 // Command results (JSON, encrypted octet-stream)
 app.post(
   "/api/commands/:id/json",
