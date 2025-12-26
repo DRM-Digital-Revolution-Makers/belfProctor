@@ -1,7 +1,6 @@
 import { Router } from "express";
-import { prisma } from "../prisma";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
-import { appendHeartbeat } from "../store";
+import { appendHeartbeat, getClient, saveClient } from "../store";
 
 const router = Router();
 
@@ -12,49 +11,92 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "X-Client-Id header required" });
 
     let encryptionKey = "";
-    if (process.env.NO_DB) {
-      encryptionKey = "ABCDEFGHIJKLMNOP";
-    } else {
-      const client = await prisma.client.findUnique({
-        where: { id: clientId },
-      });
-      if (!client || !client.encryptionKey) {
-        return res
-          .status(400)
-          .json({ message: "Client not registered or missing key" });
-      }
-      encryptionKey = client.encryptionKey;
+    const client = getClient(clientId);
+
+    // Strategy: Try client-specific key first, then global key
+    let keysToTry: string[] = [];
+
+    if (client && client.encryptionKey) {
+      keysToTry.push(client.encryptionKey);
+    }
+
+    const globalKey =
+      process.env.ENCRYPTION_KEY ||
+      "0000000000000000000000000000000000000000000000000000000000000000";
+    if (!keysToTry.includes(globalKey)) {
+      keysToTry.push(globalKey);
     }
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
       ? (req.body as Buffer)
       : Buffer.from([]);
-    const decryptedJson = decryptAes256CbcPrefixedIv(
-      encrypted,
-      encryptionKey
-    ).toString("utf-8");
-    const payload = JSON.parse(decryptedJson);
 
-    if (process.env.NO_DB) {
-      appendHeartbeat({
-        clientId,
-        timestamp: new Date(),
-        status: payload.Status || payload.status || "Online",
-        version: payload.Version || payload.version || "",
-      });
-      return res.json({ ok: true });
+    let decryptedJson = "";
+    let usedKey = "";
+
+    for (const key of keysToTry) {
+      try {
+        decryptedJson = decryptAes256CbcPrefixedIv(encrypted, key).toString(
+          "utf-8"
+        );
+        // Validate JSON to ensure it wasn't just random garbage that happened to decrypt without error
+        JSON.parse(decryptedJson);
+        usedKey = key;
+        break;
+      } catch (e) {
+        continue;
+      }
     }
 
-    await prisma.heartbeat.create({
-      data: {
-        clientId,
-        timestamp: new Date(), // Always use server time for reliable online/offline status
-        status: payload.Status || payload.status || "Online",
-        version: payload.Version || payload.version || "",
-      },
-    });
+    if (!usedKey) {
+      console.error(
+        `Failed to decrypt heartbeat for client ${clientId}. Tried ${keysToTry.length} keys.`
+      );
+      return res.status(400).json({ message: "Decryption failed" });
+    }
 
-    res.json({ ok: true });
+    const payload = JSON.parse(decryptedJson);
+
+    // Auto-register or Update
+    if (!client) {
+      saveClient({
+        id: clientId,
+        encryptionKey: usedKey,
+        hostname: payload.Machine || payload.machine || "",
+        os: payload.OS || payload.os || "",
+        version: payload.Version || payload.version || "",
+        lastSeen: new Date(),
+        createdAt: new Date(),
+      });
+      console.log(`Auto-registered new client: ${clientId}`);
+    } else {
+      // Update last seen AND encryption key if it changed (e.g. we recovered using global key)
+      const updateData: any = {
+        id: clientId,
+        lastSeen: new Date(),
+        hostname: payload.Machine || payload.machine || client.hostname,
+        os: payload.OS || payload.os || client.os,
+        version: payload.Version || payload.version || client.version,
+      };
+
+      // If we used a key different from what was stored, update it!
+      if (client.encryptionKey !== usedKey) {
+        console.log(
+          `Updating encryption key for client ${clientId} (Recovered via fallback)`
+        );
+        updateData.encryptionKey = usedKey;
+      }
+
+      saveClient(updateData);
+    }
+
+    appendHeartbeat({
+      clientId,
+      timestamp: new Date(),
+      status: payload.Status || payload.status || "Online",
+      version: payload.Version || payload.version || "",
+    });
+    return res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to ingest heartbeat" });
@@ -62,32 +104,11 @@ router.post("/", async (req, res) => {
 });
 
 router.get("/", async (req, res) => {
-  if (process.env.NO_DB) return res.json({ data: [], total: 0 });
-
-  const { page = "1", pageSize = "20", clientId } = req.query as any;
-  const skip = (parseInt(page) - 1) * parseInt(pageSize);
-  const where = clientId ? { clientId: String(clientId) } : {};
-  const [items, total] = await Promise.all([
-    prisma.heartbeat.findMany({
-      where,
-      orderBy: { timestamp: "desc" },
-      skip,
-      take: parseInt(pageSize),
-    }),
-    prisma.heartbeat.count({ where }),
-  ]);
-  res.json({ data: items, total });
+  return res.json({ data: [], total: 0 });
 });
 
 router.get("/latest", async (_req, res) => {
-  if (process.env.NO_DB) return res.json({ data: [] });
-
-  const items = await prisma.heartbeat.findMany({
-    orderBy: { timestamp: "desc" },
-    distinct: ["clientId"],
-    take: 1000,
-  });
-  res.json({ data: items });
+  return res.json({ data: [] });
 });
 
 export default router;

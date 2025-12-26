@@ -7,7 +7,15 @@ if %errorLevel% neq 0 (
     pause
     exit /b 1
 )
+
+echo Copying appsettings.json...
+copy /Y appsettings.json .\publish\appsettings.json
+
 echo.
 echo Build successful!
-echo The file is located at: client\publish\SystemWorker.exe
+echo The files are located at: client\publish\
+echo  - SystemWorker.exe
+echo  - appsettings.json
+echo.
+echo IMPORTANT: Copy BOTH files to the target machine!
 pause

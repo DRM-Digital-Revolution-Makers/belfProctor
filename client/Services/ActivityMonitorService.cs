@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
-
 namespace BelfProctor.Services;
 
 public class ActivityMonitorService : IActivityMonitorService

@@ -1,19 +1,19 @@
 import { Router } from "express";
-import { prisma } from "../prisma";
 import { requireAuth } from "../middleware/auth";
+import { getClients, getClient, saveClient, deleteClient, getClientActivity, getClientEvents } from "../store";
 
 const router = Router();
 
 router.get("/", requireAuth, async (req, res) => {
-  const clients = await prisma.client.findMany({
-    orderBy: { createdAt: "desc" },
-  });
+  const clients = getClients();
+  // Sort by createdAt desc
+  clients.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   res.json(clients);
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
   const id = String(req.params.id);
-  const client = await prisma.client.findUnique({ where: { id } });
+  const client = getClient(id);
   if (!client) return res.status(404).json({ message: "Not found" });
   res.json(client);
 });
@@ -26,18 +26,15 @@ router.post("/register", requireAuth, async (req, res) => {
   };
   if (!id || !encryptionKey)
     return res.status(400).json({ message: "id and encryptionKey required" });
-  const client = await prisma.client.upsert({
-    where: { id },
-    create: { id, encryptionKey },
-    update: { encryptionKey },
-  });
-  res.json(client);
+  
+  saveClient({ id, encryptionKey });
+  res.json(getClient(id));
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
   const id = String(req.params.id);
   try {
-    await prisma.client.delete({ where: { id } });
+    deleteClient(id);
     res.json({ ok: true });
   } catch (e) {
     res.status(404).json({ message: "Not found" });
@@ -58,23 +55,14 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
 
-  // 1. Calculate Activity Summary
-  // Instead of summing (which is wrong for cumulative counters), we fetch all records and sum the deltas.
-  const activityRecords = await prisma.activity.findMany({
-    where: {
-      clientId: id,
-      timestamp: {
-        gte: startOfDay,
-        lte: endOfDay,
-      },
-    },
-    orderBy: { timestamp: "asc" },
-    select: {
-      timestamp: true,
-      activeMilliseconds: true,
-      inactiveMilliseconds: true,
-    },
+  // 1. Calculate Activity Summary from file
+  const allActivity = getClientActivity(id);
+  const activityRecords = allActivity.filter(r => {
+      const t = new Date(r.timestamp);
+      return t >= startOfDay && t <= endOfDay;
   });
+  // Sort asc
+  activityRecords.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   let activeMs = 0;
   let inactiveMs = 0;
@@ -93,10 +81,8 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
       const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
       const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
 
-      const hour = curr.timestamp.getHours();
+      const hour = new Date(curr.timestamp).getHours();
 
-      // Add positive deltas. If delta is negative, it means a counter reset (e.g. reboot),
-      // so we add the current value as the new accumulated time.
       let addActive = 0;
       let addInactive = 0;
 
@@ -122,63 +108,31 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     }
   }
 
-  // Clamp to 24 hours (86400000 ms) to avoid impossible values
+  // Clamp to 24 hours
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   activeMs = Math.min(activeMs, ONE_DAY_MS);
   inactiveMs = Math.min(inactiveMs, ONE_DAY_MS - activeMs);
 
-  // 2. Fetch Screenshots
-  const screenshots = await prisma.screenshot.findMany({
-    where: {
-      clientId: id,
-      timestamp: {
-        gte: startOfDay,
-        lte: endOfDay,
-      },
-    },
-    orderBy: { timestamp: "asc" },
-    select: {
-      id: true,
-      timestamp: true,
-      filename: true,
-      isFavorite: true,
-    },
+  // 2. Fetch Screenshots (not implemented in file mode yet, return empty)
+  const screenshots: any[] = []; 
+
+  // 3. Fetch Top 5 Apps (from events file)
+  const allEvents = getClientEvents(id);
+  const appEvents = allEvents.filter(e => {
+      const t = new Date(e.timestamp);
+      return e.eventType === "AppUsage" && t >= startOfDay && t <= endOfDay;
   });
 
-  // 3. Fetch Top 5 Apps (by count)
-  const appEvents = await prisma.event.groupBy({
-    by: ["processName"],
-    where: {
-      clientId: id,
-      eventType: "AppUsage",
-      timestamp: {
-        gte: startOfDay,
-        lte: endOfDay,
-      },
-    },
-    _count: {
-      processName: true,
-    },
-    orderBy: {
-      _count: {
-        processName: "desc",
-      },
-    },
-    take: 5,
+  const appCounts: Record<string, number> = {};
+  appEvents.forEach(e => {
+      const name = e.processName || "Unknown";
+      appCounts[name] = (appCounts[name] || 0) + 1;
   });
-
-  const topApps = appEvents.map((e: any) => ({
-    name: e.processName || "Unknown",
-    count: e._count.processName,
-  }));
-
-  // Distribute screenshots to hours
-  screenshots.forEach((s: any) => {
-    const hour = s.timestamp.getHours();
-    if (hour >= 0 && hour < 24) {
-      hourlyStats[hour].screenshotsCount++;
-    }
-  });
+  
+  const topApps = Object.entries(appCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
 
   res.json({
     date: dateStr,
@@ -186,10 +140,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     inactiveMs,
     hourly: hourlyStats,
     topApps,
-    screenshots: screenshots.map((s: any) => ({
-      ...s,
-      url: `/api/screenshots/${s.id}/file`,
-    })),
+    screenshots: [],
   });
 });
 
@@ -206,21 +157,12 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
   const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
 
   // 1. Fetch all activity records for the month
-  const activityRecords = await prisma.activity.findMany({
-    where: {
-      clientId: id,
-      timestamp: {
-        gte: startOfMonth,
-        lte: endOfMonth,
-      },
-    },
-    orderBy: { timestamp: "asc" },
-    select: {
-      timestamp: true,
-      activeMilliseconds: true,
-      inactiveMilliseconds: true,
-    },
+  const allActivity = getClientActivity(id);
+  const activityRecords = allActivity.filter(r => {
+      const t = new Date(r.timestamp);
+      return t >= startOfMonth && t <= endOfMonth;
   });
+  activityRecords.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   // 2. Process daily activity
   const dailyActivity = new Map<
@@ -233,11 +175,14 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
       const prev = activityRecords[i - 1];
       const curr = activityRecords[i];
 
-      // Check if same day
-      const prevDay = prev.timestamp.toISOString().split("T")[0];
-      const currDay = curr.timestamp.toISOString().split("T")[0];
+      const prevDate = new Date(prev.timestamp);
+      const currDate = new Date(curr.timestamp);
 
-      if (prevDay !== currDay) continue; // Skip boundary crossing for simplicity or handle strictly
+      // Check if same day
+      const prevDay = prevDate.toISOString().split("T")[0];
+      const currDay = currDate.toISOString().split("T")[0];
+
+      if (prevDay !== currDay) continue; 
 
       const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
       const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
@@ -261,25 +206,8 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
     }
   }
 
-  // 3. Fetch all screenshots for the month
-  const screenshots = await prisma.screenshot.findMany({
-    where: {
-      clientId: id,
-      timestamp: {
-        gte: startOfMonth,
-        lte: endOfMonth,
-      },
-    },
-    select: {
-      timestamp: true,
-    },
-  });
-
+  // 3. Screenshots (empty)
   const dailyScreenshots = new Map<string, number>();
-  for (const s of screenshots) {
-    const day = s.timestamp.toISOString().split("T")[0];
-    dailyScreenshots.set(day, (dailyScreenshots.get(day) || 0) + 1);
-  }
 
   // 4. Combine into daily list
   const daysInMonth = endOfMonth.getDate();
@@ -313,31 +241,22 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
   }
 
   // 5. Fetch Top 5 Apps for the month
-  const appEvents = await prisma.event.groupBy({
-    by: ["processName"],
-    where: {
-      clientId: id,
-      eventType: "AppUsage",
-      timestamp: {
-        gte: startOfMonth,
-        lte: endOfMonth,
-      },
-    },
-    _count: {
-      processName: true,
-    },
-    orderBy: {
-      _count: {
-        processName: "desc",
-      },
-    },
-    take: 5,
+  const allEvents = getClientEvents(id);
+  const appEvents = allEvents.filter(e => {
+      const t = new Date(e.timestamp);
+      return e.eventType === "AppUsage" && t >= startOfMonth && t <= endOfMonth;
   });
 
-  const topApps = appEvents.map((e: any) => ({
-    name: e.processName || "Unknown",
-    count: e._count.processName,
-  }));
+  const appCounts: Record<string, number> = {};
+  appEvents.forEach(e => {
+      const name = e.processName || "Unknown";
+      appCounts[name] = (appCounts[name] || 0) + 1;
+  });
+
+  const topApps = Object.entries(appCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
 
   res.json({
     month: dateStr,

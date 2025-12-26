@@ -16,10 +16,10 @@ import heartbeatRouter from "./routes/heartbeat";
 import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
-import { prisma } from "./prisma";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
+import { getUser, saveUser, getClient } from "./store";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "8080", 10);
@@ -84,16 +84,33 @@ app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 
-// Serve frontend build (if present) on the same server for Win8 compatibility
+// Serve frontend build
+const LOCAL_PUBLIC = path.join(process.cwd(), "public");
 const FRONT_DIST = path.join(process.cwd(), "..", "frontend", "dist");
-if (fs.existsSync(FRONT_DIST)) {
-  app.use(express.static(FRONT_DIST));
+
+console.log("DEBUG: Current working directory:", process.cwd());
+console.log("DEBUG: Looking for static files at:", LOCAL_PUBLIC);
+
+let staticDir = "";
+if (fs.existsSync(LOCAL_PUBLIC)) {
+  console.log("DEBUG: Found local public folder");
+  staticDir = LOCAL_PUBLIC;
+} else if (fs.existsSync(FRONT_DIST)) {
+  console.log("DEBUG: Found frontend dist folder at:", FRONT_DIST);
+  staticDir = FRONT_DIST;
+} else {
+  console.log("DEBUG: No static files found!");
+}
+
+if (staticDir) {
+  console.log("DEBUG: Serving static files from:", staticDir);
+  app.use(express.static(staticDir));
   app.get("/", (_req, res) => {
-    res.sendFile(path.join(FRONT_DIST, "index.html"));
+    res.sendFile(path.join(staticDir, "index.html"));
   });
   // SPA fallback for client-side routing, avoid intercepting /api/*
   app.get(/^\/(?!api).*/, (_req, res) => {
-    res.sendFile(path.join(FRONT_DIST, "index.html"));
+    res.sendFile(path.join(staticDir, "index.html"));
   });
 }
 
@@ -108,9 +125,7 @@ app.post(
       if (!clientId)
         return res.status(400).json({ message: "X-Client-Id header required" });
 
-      const client = await prisma.client.findUnique({
-        where: { id: clientId },
-      });
+      const client = getClient(clientId);
       if (!client || !client.encryptionKey) {
         return res
           .status(400)
@@ -213,10 +228,10 @@ async function ensureAdmin() {
   const email = process.env.DEFAULT_ADMIN_EMAIL;
   const password = process.env.DEFAULT_ADMIN_PASSWORD;
   if (!email || !password) return;
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = getUser(email);
   if (!existing) {
     const passwordHash = await bcrypt.hash(password, 10);
-    await prisma.user.create({ data: { email, passwordHash, role: "ADMIN" } });
+    saveUser({ email, passwordHash, role: "ADMIN" });
     console.log(`Created default admin: ${email}`);
   }
 }

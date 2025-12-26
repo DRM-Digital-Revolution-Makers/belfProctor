@@ -97,12 +97,14 @@ public class DataTransmissionService : IDataTransmissionService
             }
             if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
+                _logger.LogWarning("GetWithAutoDiscoverAsync: No server found for {Url}", relativeUrl);
                 return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
             }
             var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
             var resp = await _httpClient.GetAsync(uri);
             if (!resp.IsSuccessStatusCode)
             {
+                _logger.LogWarning("GetAsync failed: {StatusCode} for {Url}. Retrying discovery...", resp.StatusCode, relativeUrl);
                 _currentBaseUrl = string.Empty;
                 TryInitializeBaseAddress(extendedScan: true);
                 if (string.IsNullOrWhiteSpace(_currentBaseUrl))
@@ -114,17 +116,6 @@ public class DataTransmissionService : IDataTransmissionService
             }
             return resp;
         }
-        catch (HttpRequestException)
-        {
-            _currentBaseUrl = string.Empty;
-            TryInitializeBaseAddress(extendedScan: true);
-            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
-            {
-                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
-            }
-            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
-            return await _httpClient.GetAsync(uri);
-        }
         catch (TaskCanceledException)
         {
             _currentBaseUrl = string.Empty;
@@ -132,6 +123,18 @@ public class DataTransmissionService : IDataTransmissionService
             if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
                 return new HttpResponseMessage(System.Net.HttpStatusCode.RequestTimeout);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.GetAsync(uri);
+        }
+        catch (Exception ex)
+        {
+             _logger.LogError(ex, "GetWithAutoDiscoverAsync failed for {Url}", relativeUrl);
+            _currentBaseUrl = string.Empty;
+            TryInitializeBaseAddress(extendedScan: true);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
             }
             var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
             return await _httpClient.GetAsync(uri);
@@ -214,33 +217,29 @@ public class DataTransmissionService : IDataTransmissionService
             }
             if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
+                _logger.LogWarning("PostWithAutoDiscoverAsync: No server found for {Url}", relativeUrl);
                 return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
             }
             var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
             var resp = await _httpClient.PostAsync(uri, content);
             if (!resp.IsSuccessStatusCode)
             {
-                _currentBaseUrl = string.Empty;
-                TryInitializeBaseAddress(extendedScan: true);
-                if (string.IsNullOrWhiteSpace(_currentBaseUrl))
-                {
-                    return resp;
+                 var body = await resp.Content.ReadAsStringAsync();
+                _logger.LogWarning("PostAsync failed: {StatusCode} for {Url}. Body: {Body}", resp.StatusCode, relativeUrl, body);
+                
+                // If 400 or 500, maybe key mismatch, don't retry discovery immediately unless connection failed
+                if ((int)resp.StatusCode >= 500 || resp.StatusCode == System.Net.HttpStatusCode.RequestTimeout) {
+                    _currentBaseUrl = string.Empty;
+                    TryInitializeBaseAddress(extendedScan: true);
+                    if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+                    {
+                        return resp;
+                    }
+                    uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+                    resp = await _httpClient.PostAsync(uri, content);
                 }
-                uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
-                resp = await _httpClient.PostAsync(uri, content);
             }
             return resp;
-        }
-        catch (HttpRequestException)
-        {
-            _currentBaseUrl = string.Empty;
-            TryInitializeBaseAddress(extendedScan: true);
-            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
-            {
-                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
-            }
-            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
-            return await _httpClient.PostAsync(uri, content);
         }
         catch (TaskCanceledException)
         {
@@ -249,6 +248,18 @@ public class DataTransmissionService : IDataTransmissionService
             if (string.IsNullOrWhiteSpace(_currentBaseUrl))
             {
                 return new HttpResponseMessage(System.Net.HttpStatusCode.RequestTimeout);
+            }
+            var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+            return await _httpClient.PostAsync(uri, content);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "PostWithAutoDiscoverAsync failed for {Url}", relativeUrl);
+            _currentBaseUrl = string.Empty;
+            TryInitializeBaseAddress(extendedScan: true);
+            if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
             }
             var uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
             return await _httpClient.PostAsync(uri, content);
