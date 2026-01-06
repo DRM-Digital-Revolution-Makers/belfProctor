@@ -142,6 +142,23 @@ public class DataTransmissionService : IDataTransmissionService
     }
     private void TryInitializeBaseAddress(bool extendedScan = false)
     {
+        var configured = NormalizeServerUrl(_settings.ServerUrl);
+        if (!string.IsNullOrWhiteSpace(configured) && Uri.TryCreate(configured, UriKind.Absolute, out _))
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var probeUri = new Uri(new Uri(configured), "heartbeat/latest");
+                var resp = _httpClient.GetAsync(probeUri, cts.Token).GetAwaiter().GetResult();
+                if (resp.IsSuccessStatusCode)
+                {
+                    _currentBaseUrl = configured;
+                    _logger.LogInformation("Discovered server: {BaseAddress}", _currentBaseUrl);
+                    return;
+                }
+            }
+            catch { }
+        }
         foreach (var candidate in GetServerCandidates(extendedScan))
         {
             try
@@ -163,6 +180,8 @@ public class DataTransmissionService : IDataTransmissionService
     private IEnumerable<string> GetServerCandidates(bool extendedScan)
     {
         var list = new List<string>();
+        var configured = NormalizeServerUrl(_settings.ServerUrl);
+        if (!string.IsNullOrWhiteSpace(configured)) list.Add(configured);
         list.Add(NormalizeServerUrl($"http://localhost:8080/api"));
         list.Add(NormalizeServerUrl($"http://127.0.0.1:8080/api"));
         try
