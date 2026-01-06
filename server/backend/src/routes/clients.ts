@@ -1,13 +1,24 @@
 import { Router } from "express";
+import path from "path";
+import fs from "fs";
 import { requireAuth } from "../middleware/auth";
-import { getClients, getClient, saveClient, deleteClient, getClientActivity, getClientEvents } from "../store";
+import {
+  getClients,
+  getClient,
+  saveClient,
+  deleteClient,
+  getClientActivity,
+  getClientEvents,
+} from "../store";
 
 const router = Router();
 
 router.get("/", requireAuth, async (req, res) => {
   const clients = getClients();
   // Sort by createdAt desc
-  clients.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  clients.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
   res.json(clients);
 });
 
@@ -26,7 +37,7 @@ router.post("/register", requireAuth, async (req, res) => {
   };
   if (!id || !encryptionKey)
     return res.status(400).json({ message: "id and encryptionKey required" });
-  
+
   saveClient({ id, encryptionKey });
   res.json(getClient(id));
 });
@@ -57,12 +68,14 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
 
   // 1. Calculate Activity Summary from file
   const allActivity = getClientActivity(id);
-  const activityRecords = allActivity.filter(r => {
-      const t = new Date(r.timestamp);
-      return t >= startOfDay && t <= endOfDay;
+  const activityRecords = allActivity.filter((r) => {
+    const t = new Date(r.timestamp);
+    return t >= startOfDay && t <= endOfDay;
   });
   // Sort asc
-  activityRecords.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  activityRecords.sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
 
   let activeMs = 0;
   let inactiveMs = 0;
@@ -113,26 +126,66 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
   activeMs = Math.min(activeMs, ONE_DAY_MS);
   inactiveMs = Math.min(inactiveMs, ONE_DAY_MS - activeMs);
 
-  // 2. Fetch Screenshots (not implemented in file mode yet, return empty)
-  const screenshots: any[] = []; 
+  // 2. Fetch Screenshots (from file system)
+  const screenshots: any[] = [];
+  const screenshotsDir = path.join(process.cwd(), "storage", "screenshots", id);
+  if (fs.existsSync(screenshotsDir)) {
+    const files = fs.readdirSync(screenshotsDir);
+    for (const f of files) {
+      if (!f.endsWith(".jpg") && !f.endsWith(".png")) continue;
+
+      let timestamp: Date | null = null;
+      // Parse filename: CLIENT02_2025-12-21T16-04-48.694Z.jpg
+      const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+      if (match) {
+        const datePart = match[1].substring(0, 10);
+        const timePart = match[1].substring(11).replace(/-/g, ":");
+        const validIso = `${datePart}T${timePart}`;
+        const d = new Date(validIso);
+        if (!isNaN(d.getTime())) timestamp = d;
+      } else {
+        // Fallback to mtime if name parse fails
+        const stats = fs.statSync(path.join(screenshotsDir, f));
+        timestamp = stats.mtime;
+      }
+
+      if (timestamp && timestamp >= startOfDay && timestamp <= endOfDay) {
+        screenshots.push({
+          id: f,
+          filename: f,
+          timestamp: timestamp,
+          isFavorite: false,
+          url: `/api/screenshots/${f}/file`,
+        });
+
+        // Add to hourly stats
+        const hour = timestamp.getHours();
+        if (hour >= 0 && hour < 24) {
+          hourlyStats[hour].screenshotsCount++;
+        }
+      }
+    }
+  }
+  // Sort screenshots by time desc
+  screenshots.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   // 3. Fetch Top 5 Apps (from events file)
   const allEvents = getClientEvents(id);
-  const appEvents = allEvents.filter(e => {
-      const t = new Date(e.timestamp);
-      return e.eventType === "AppUsage" && t >= startOfDay && t <= endOfDay;
+  const appEvents = allEvents.filter((e) => {
+    const t = new Date(e.timestamp);
+    return e.eventType === "AppUsage" && t >= startOfDay && t <= endOfDay;
   });
 
   const appCounts: Record<string, number> = {};
-  appEvents.forEach(e => {
-      const name = e.processName || "Unknown";
-      appCounts[name] = (appCounts[name] || 0) + 1;
+  appEvents.forEach((e) => {
+    const name = e.processName || "Unknown";
+    appCounts[name] = (appCounts[name] || 0) + 1;
   });
-  
+
   const topApps = Object.entries(appCounts)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
 
   res.json({
     date: dateStr,
@@ -140,7 +193,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     inactiveMs,
     hourly: hourlyStats,
     topApps,
-    screenshots: [],
+    screenshots,
   });
 });
 
@@ -158,11 +211,13 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
 
   // 1. Fetch all activity records for the month
   const allActivity = getClientActivity(id);
-  const activityRecords = allActivity.filter(r => {
-      const t = new Date(r.timestamp);
-      return t >= startOfMonth && t <= endOfMonth;
+  const activityRecords = allActivity.filter((r) => {
+    const t = new Date(r.timestamp);
+    return t >= startOfMonth && t <= endOfMonth;
   });
-  activityRecords.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  activityRecords.sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
 
   // 2. Process daily activity
   const dailyActivity = new Map<
@@ -182,7 +237,7 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
       const prevDay = prevDate.toISOString().split("T")[0];
       const currDay = currDate.toISOString().split("T")[0];
 
-      if (prevDay !== currDay) continue; 
+      if (prevDay !== currDay) continue;
 
       const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
       const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
@@ -242,21 +297,21 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
 
   // 5. Fetch Top 5 Apps for the month
   const allEvents = getClientEvents(id);
-  const appEvents = allEvents.filter(e => {
-      const t = new Date(e.timestamp);
-      return e.eventType === "AppUsage" && t >= startOfMonth && t <= endOfMonth;
+  const appEvents = allEvents.filter((e) => {
+    const t = new Date(e.timestamp);
+    return e.eventType === "AppUsage" && t >= startOfMonth && t <= endOfMonth;
   });
 
   const appCounts: Record<string, number> = {};
-  appEvents.forEach(e => {
-      const name = e.processName || "Unknown";
-      appCounts[name] = (appCounts[name] || 0) + 1;
+  appEvents.forEach((e) => {
+    const name = e.processName || "Unknown";
+    appCounts[name] = (appCounts[name] || 0) + 1;
   });
 
   const topApps = Object.entries(appCounts)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
 
   res.json({
     month: dateStr,

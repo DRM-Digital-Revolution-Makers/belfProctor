@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import { decryptAes256CbcPrefixedIv, decryptFileStream } from "../encryption";
 import { requireAuth } from "../middleware/auth";
-import { getClient } from "../store";
+import { getClient, getFavorites, setFavorite } from "../store";
 
 const router = Router();
 const storage = multer.diskStorage({
@@ -164,15 +164,108 @@ router.post("/reports", upload.single("report"), async (req, res) => {
   }
 });
 
-// Listings for admin
-router.get("/screenshots", requireAuth, async (req, res) => {
-  // File-based listing not implemented yet for screenshots/reports
-  return res.json({ data: [], total: 0 });
+// Toggle favorite
+router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { isFavorite } = req.body;
+    setFavorite(id, isFavorite);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to update favorite" });
+  }
 });
 
-router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
-  // Not implemented in file-based mode
-  res.status(404).json({ message: "Not found" });
+// Listings for admin
+router.get("/screenshots", requireAuth, async (req, res) => {
+  try {
+    const screenshotsDir = path.join(UPLOAD_DIR, "screenshots");
+    if (!fs.existsSync(screenshotsDir)) {
+      return res.json({ data: [], total: 0 });
+    }
+
+    const favorites = new Set(getFavorites());
+    let allFiles: any[] = [];
+    const clientDirs = fs.readdirSync(screenshotsDir);
+
+    for (const clientId of clientDirs) {
+      const clientDir = path.join(screenshotsDir, clientId);
+      if (!fs.statSync(clientDir).isDirectory()) continue;
+
+      const files = fs.readdirSync(clientDir);
+      for (const f of files) {
+        if (!f.endsWith(".jpg") && !f.endsWith(".png")) continue;
+
+        // Parse filename: CLIENT02_2025-12-21T16-04-48.694Z.jpg
+        // or just rely on file mtime if name parsing fails
+        const filePath = path.join(clientDir, f);
+        const stats = fs.statSync(filePath);
+
+        let timestamp = stats.mtime;
+        // Try to extract date from filename if possible
+        const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+        if (match) {
+          timestamp = new Date(
+            match[1].replace(/-/g, (m, offset) => {
+              // Replace - with : only in the time part (after T)
+              // 2025-12-21T16-04-48 -> 2025-12-21T16:04:48
+              // But simplified: the standard iso format uses : which we replaced with - for filename safe.
+              // We need to reverse it carefully.
+              // Actually easier: new Date() might not parse "2025-12-21T16-04-48.694Z" correctly in all envs.
+              // Let's just use mtime as fallback or simple replace.
+              return m;
+            })
+          );
+          // Re-reconstruct proper ISO for parsing:
+          // 2025-12-26T14-06-43.385Z -> 2025-12-26T14:06:43.385Z
+          // The filename has - for colons.
+          const datePart = match[1].substring(0, 10); // 2025-12-26
+          const timePart = match[1].substring(11).replace(/-/g, ":"); // 14:06:43.385Z
+          const validIso = `${datePart}T${timePart}`;
+          const d = new Date(validIso);
+          if (!isNaN(d.getTime())) timestamp = d;
+        }
+
+        allFiles.push({
+          id: f, // use filename as ID
+          clientId,
+          filename: f,
+          path: filePath, // internal path
+          timestamp: timestamp,
+          createdAt: timestamp,
+          isFavorite: favorites.has(f),
+        });
+      }
+    }
+
+    // Sort desc
+    allFiles.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    // Pagination
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+
+    // Filter by clientId if needed
+    const filterClient = req.query.clientId as string;
+    if (filterClient) {
+      allFiles = allFiles.filter((f) => f.clientId === filterClient);
+    }
+
+    // Filter by isFavorite
+    if (req.query.isFavorite === "true") {
+      allFiles = allFiles.filter((f) => f.isFavorite);
+    }
+
+    const total = allFiles.length;
+    const start = (page - 1) * pageSize;
+    const slice = allFiles.slice(start, start + pageSize);
+
+    return res.json({ data: slice, total });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Failed to list screenshots" });
+  }
 });
 
 router.get("/reports", requireAuth, async (req, res) => {
@@ -180,11 +273,27 @@ router.get("/reports", requireAuth, async (req, res) => {
 });
 
 // Secure file serving
-router.get("/screenshots/:id/file", requireAuth, async (req, res) => {
-  // Need to find path from ID. In file mode ID contains info or we scan.
-  // ID format: clientId_timestamp.jpg (filename is ID mostly)
-  // For now return 404 as we haven't implemented file index
-  return res.status(404).json({ message: "Not found" });
+router.get("/screenshots/:filename/file", requireAuth, async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    // filename format: CLIENT02_...jpg
+    // We need to find which client dir it is in.
+    const clientIdMatch = filename.match(/^([^_]+)_/);
+    if (!clientIdMatch)
+      return res.status(404).json({ message: "Invalid filename format" });
+
+    const clientId = clientIdMatch[1];
+    const filePath = path.join(UPLOAD_DIR, "screenshots", clientId, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    res.sendFile(filePath);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to serve file" });
+  }
 });
 
 router.get("/reports/:id/file", requireAuth, async (req, res) => {

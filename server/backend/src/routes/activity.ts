@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
-import { appendActivity, getClient } from "../store";
+import { appendActivity, getClient, getLatestActivity } from "../store";
 
 const router = Router();
 
@@ -51,13 +51,13 @@ router.post("/", async (req, res) => {
 });
 
 router.get("/", async (req, res) => {
-  // Activity log is not implemented in file-based mode yet (would require scanning jsonl)
-  // For now return empty
-  return res.json({ data: [], total: 0 });
+  const data = getLatestActivity(100);
+  return res.json({ data, total: data.length });
 });
 
 router.get("/latest", async (_req, res) => {
-  return res.json({ data: [] });
+  const data = getLatestActivity(20);
+  return res.json({ data });
 });
 
 export default router;

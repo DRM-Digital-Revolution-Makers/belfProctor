@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
-import { appendHeartbeat, getClient, saveClient } from "../store";
+import {
+  appendHeartbeat,
+  getClient,
+  saveClient,
+  getLatestHeartbeats,
+} from "../store";
 
 const router = Router();
 
@@ -104,11 +109,13 @@ router.post("/", async (req, res) => {
 });
 
 router.get("/", async (req, res) => {
-  return res.json({ data: [], total: 0 });
+  const data = getLatestHeartbeats();
+  return res.json({ data, total: data.length });
 });
 
 router.get("/latest", async (_req, res) => {
-  return res.json({ data: [] });
+  const data = getLatestHeartbeats();
+  return res.json({ data });
 });
 
 export default router;

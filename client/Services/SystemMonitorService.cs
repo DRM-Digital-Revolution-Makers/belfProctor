@@ -21,6 +21,7 @@ public class SystemMonitorService : ISystemMonitorService
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _processPollingTask;
     private readonly HashSet<int> _seenPids = new();
+    private readonly Dictionary<string, FileSystemWatcher> _usbWatchers = new();
 
     private static readonly HashSet<string> IgnoredProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -101,6 +102,12 @@ public class SystemMonitorService : ISystemMonitorService
         
         _usbWatcher?.Stop();
         _usbWatcher?.Dispose();
+
+        foreach (var w in _usbWatchers.Values)
+        {
+            w.Dispose();
+        }
+        _usbWatchers.Clear();
         
         _logger.LogInformation("System monitoring stopped");
         await Task.CompletedTask;
@@ -207,11 +214,17 @@ public class SystemMonitorService : ISystemMonitorService
         {
             try
             {
-                // Мониторинг подключения USB устройств
-                var usbQuery = new WqlEventQuery("SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2");
+                // Мониторинг подключения/отключения USB устройств (Volume Change)
+                var usbQuery = new WqlEventQuery("SELECT * FROM Win32_VolumeChangeEvent");
                 _usbWatcher = new ManagementEventWatcher(usbQuery);
-                _usbWatcher.EventArrived += OnUSBDeviceConnected;
+                _usbWatcher.EventArrived += OnVolumeChangeEvent;
                 _usbWatcher.Start();
+
+                // Инициализация вотчеров для уже подключенных дисков (Removable)
+                foreach (var drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Removable && d.IsReady))
+                {
+                    SetupUsbWatcher(drive.Name);
+                }
 
                 _logger.LogInformation("USB monitoring started");
             }
@@ -348,27 +361,181 @@ public class SystemMonitorService : ISystemMonitorService
         return !IgnoredProcesses.Contains(processName);
     }
 
-    private void OnUSBDeviceConnected(object sender, EventArrivedEventArgs e)
+    private void OnVolumeChangeEvent(object sender, EventArrivedEventArgs e)
     {
         try
         {
-            var driveName = e.NewEvent["DriveName"]?.ToString() ?? "Unknown";
+            var driveName = e.NewEvent["DriveName"]?.ToString();
+            var eventType = Convert.ToUInt16(e.NewEvent["EventType"]); // 2 = Insert, 3 = Remove
+
+            if (string.IsNullOrEmpty(driveName)) return;
+
+            if (eventType == 2) // Mounted
+            {
+                 // Give it a moment to mount
+                Task.Delay(1000).Wait();
+                HandleUsbInsertion(driveName);
+            }
+            else if (eventType == 3) // Unmounted
+            {
+                HandleUsbRemoval(driveName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing Volume Change event");
+        }
+    }
+
+    private void HandleUsbInsertion(string driveName)
+    {
+        try
+        {
+            var driveInfo = new DriveInfo(driveName);
+            if (!driveInfo.IsReady) return;
+
+            // Gather characteristics
+            string label = driveInfo.VolumeLabel;
+            string format = driveInfo.DriveFormat;
+            long totalSize = driveInfo.TotalSize;
+            long freeSpace = driveInfo.TotalFreeSpace;
+            string sizeGb = (totalSize / (1024.0 * 1024 * 1024)).ToString("F2") + " GB";
 
             var systemEvent = new SystemEvent
             {
                 Timestamp = DateTime.Now,
                 EventType = SystemEventType.USBConnected,
-                Description = $"USB device connected: {driveName}",
-                DeviceId = driveName
+                Description = $"USB Connected: {driveName} ({label})",
+                DeviceId = driveName,
+                AdditionalData = new Dictionary<string, object>
+                {
+                    ["Label"] = label,
+                    ["Format"] = format,
+                    ["TotalSize"] = sizeGb,
+                    ["FreeSpace"] = freeSpace,
+                    ["DriveType"] = driveInfo.DriveType.ToString()
+                }
             };
 
+            AddEvent(systemEvent);
+            SystemEventOccurred?.Invoke(this, systemEvent);
+
+            SetupUsbWatcher(driveName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Failed to handle USB insertion for {driveName}");
+        }
+    }
+
+    private void HandleUsbRemoval(string driveName)
+    {
+        try 
+        {
+            RemoveUsbWatcher(driveName);
+
+            var systemEvent = new SystemEvent
+            {
+                Timestamp = DateTime.Now,
+                EventType = SystemEventType.USBDisconnected,
+                Description = $"USB Disconnected: {driveName}",
+                DeviceId = driveName
+            };
+            
             AddEvent(systemEvent);
             SystemEventOccurred?.Invoke(this, systemEvent);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing USB connection event");
+             _logger.LogError(ex, $"Failed to handle USB removal for {driveName}");
         }
+    }
+
+    private void SetupUsbWatcher(string driveName)
+    {
+        try
+        {
+            if (_usbWatchers.ContainsKey(driveName)) return;
+
+            // Ensure driveName ends with backslash for path
+            string path = driveName.EndsWith("\\") ? driveName : driveName + "\\";
+
+            var watcher = new FileSystemWatcher(path);
+            watcher.IncludeSubdirectories = true;
+            // Watch for file creation (copying/moving to drive)
+            watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite;
+            
+            watcher.Created += (s, e) => OnFileCopiedToUsb(s, e, driveName);
+            watcher.Renamed += (s, e) => OnFileRenamedOnUsb(s, e, driveName);
+            
+            watcher.EnableRaisingEvents = true;
+
+            _usbWatchers[driveName] = watcher;
+            _logger.LogInformation($"Started watching USB drive: {driveName}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Failed to setup watcher for {driveName}");
+        }
+    }
+
+    private void RemoveUsbWatcher(string driveName)
+    {
+        if (_usbWatchers.TryGetValue(driveName, out var watcher))
+        {
+            watcher.Dispose();
+            _usbWatchers.Remove(driveName);
+            _logger.LogInformation($"Stopped watching USB drive: {driveName}");
+        }
+    }
+
+    private void OnFileCopiedToUsb(object sender, FileSystemEventArgs e, string driveName)
+    {
+        // Avoid spamming events for temp files or system files
+        if (e.Name.StartsWith("~$") || e.Name.EndsWith(".tmp")) return;
+
+        try
+        {
+             var systemEvent = new SystemEvent
+            {
+                Timestamp = DateTime.Now,
+                EventType = SystemEventType.FileAccess,
+                Description = $"File copied to USB ({driveName}): {e.Name}",
+                AdditionalData = new Dictionary<string, object>
+                {
+                    ["Action"] = "Created",
+                    ["Path"] = e.FullPath,
+                    ["Drive"] = driveName,
+                    ["FileName"] = e.Name
+                }
+            };
+            AddEvent(systemEvent);
+            SystemEventOccurred?.Invoke(this, systemEvent);
+        }
+        catch {}
+    }
+
+    private void OnFileRenamedOnUsb(object sender, RenamedEventArgs e, string driveName)
+    {
+         try
+        {
+             var systemEvent = new SystemEvent
+            {
+                Timestamp = DateTime.Now,
+                EventType = SystemEventType.FileAccess,
+                Description = $"File renamed on USB ({driveName}): {e.OldName} -> {e.Name}",
+                AdditionalData = new Dictionary<string, object>
+                {
+                    ["Action"] = "Renamed",
+                    ["Path"] = e.FullPath,
+                    ["OldPath"] = e.OldFullPath,
+                    ["Drive"] = driveName
+                }
+            };
+            AddEvent(systemEvent);
+            SystemEventOccurred?.Invoke(this, systemEvent);
+        }
+        catch {}
     }
 
     private void AnalyzeNetworkOutput(string output)

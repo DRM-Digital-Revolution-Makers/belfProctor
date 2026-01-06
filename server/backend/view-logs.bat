@@ -1,9 +1,9 @@
 @echo off
-echo Viewing logs for belfproctor-server...
+cd /d "%~dp0"
+echo ===================================================
+echo   BelfProctor Server Logs
+echo ===================================================
 echo Press Ctrl+C to exit log view.
-call pm2 logs belfproctor-server
-if %errorLevel% neq 0 (
-    echo Global PM2 not found, trying local npx...
-    call npx pm2 logs belfproctor-server
-)
+echo.
+call pm2 logs belfproctor-server --lines 100
 pause

@@ -201,29 +201,111 @@ export function getClient(id: string): any | undefined {
   if (!fs.existsSync(filePath)) return undefined;
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  } catch (e) {
+  } catch {
     return undefined;
   }
 }
 
-export function saveClient(client: any) {
-  if (!client.id) return;
-  const filePath = path.join(CLIENTS_DIR, `${client.id}.json`);
-  const existing = getClient(client.id) || {};
-  const merged = {
-    ...existing,
-    ...client,
-    updatedAt: new Date(),
-    createdAt: existing.createdAt || new Date(),
-  };
+export function saveClient(data: any) {
+  const filePath = path.join(CLIENTS_DIR, `${data.id}.json`);
+  let existing: any = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {}
+  }
+  const merged = { ...existing, ...data };
   fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf-8");
 }
 
 export function deleteClient(id: string) {
   const filePath = path.join(CLIENTS_DIR, `${id}.json`);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+}
+
+// Global Activity Helper
+export function getLatestActivity(limit: number = 50): any[] {
+  if (!fs.existsSync(ACTIVITY_DIR)) return [];
+  const files = fs
+    .readdirSync(ACTIVITY_DIR)
+    .filter((f) => f.endsWith(".jsonl"));
+  let all: any[] = [];
+
+  for (const f of files) {
+    try {
+      const content = fs.readFileSync(path.join(ACTIVITY_DIR, f), "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim());
+      // Optimization: take only last 'limit' lines from each file before parsing
+      const lastLines = lines.slice(-limit);
+      lastLines.forEach((l) => {
+        try {
+          all.push(JSON.parse(l));
+        } catch {}
+      });
+    } catch {}
   }
+
+  // Sort desc by timestamp
+  all.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+  return all.slice(0, limit);
+}
+
+// Global Heartbeat Helper
+export function getLatestHeartbeats(): any[] {
+  // We need to iterate over all files in clients dir or maybe heartbeats are stored differently?
+  // In the current store.ts, appendHeartbeat appends to "heartbeats.jsonl" (monolithic).
+  // Ideally we should have per-client heartbeats too, but let's read the monolithic one for now or check if we refactored it.
+  // The appendHeartbeat function in this file (lines 86-90) writes to "heartbeats.jsonl".
+  // So we read that file.
+
+  const filePath = path.join(DATA_DIR, "heartbeats.jsonl");
+  if (!fs.existsSync(filePath)) return [];
+
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.trim());
+
+    // We want latest heartbeat per client
+    const latestMap = new Map();
+    lines.forEach((line) => {
+      try {
+        const hb = JSON.parse(line);
+        if (hb.clientId) {
+          // Assuming lines are appended in order, later ones overwrite
+          latestMap.set(hb.clientId, hb);
+        }
+      } catch {}
+    });
+
+    return Array.from(latestMap.values());
+  } catch {
+    return [];
+  }
+}
+
+// Favorites Storage
+const FAVORITES_FILE = path.join(DATA_DIR, "favorites.json");
+
+export function getFavorites(): string[] {
+  if (!fs.existsSync(FAVORITES_FILE)) return [];
+  try {
+    const content = fs.readFileSync(FAVORITES_FILE, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return [];
+  }
+}
+
+export function setFavorite(filename: string, isFavorite: boolean) {
+  let favs = new Set(getFavorites());
+  if (isFavorite) {
+    favs.add(filename);
+  } else {
+    favs.delete(filename);
+  }
+  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(Array.from(favs)), "utf-8");
 }
 
 // Policies Storage for NO_DB

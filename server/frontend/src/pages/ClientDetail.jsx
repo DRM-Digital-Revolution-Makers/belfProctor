@@ -496,7 +496,7 @@ const ClientDetail = () => {
 
                     {dailyData.topApps && dailyData.topApps.length > 0 && (
                       <Card
-                        title="Топ 5 приложений"
+                        title={t("reports.topApps")}
                         style={{ marginTop: 24 }}
                         size="small"
                       >
@@ -506,9 +506,9 @@ const ClientDetail = () => {
                           pagination={false}
                           size="small"
                           columns={[
-                            { title: "Приложение", dataIndex: "name" },
+                            { title: t("reports.application"), dataIndex: "name" },
                             {
-                              title: "Запусков/Активности",
+                              title: t("reports.launchesActivity"),
                               dataIndex: "count",
                             },
                           ]}

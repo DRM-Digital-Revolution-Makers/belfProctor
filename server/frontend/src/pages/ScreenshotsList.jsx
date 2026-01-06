@@ -152,7 +152,10 @@ export default function ScreenshotsList() {
         title: t("common.client"),
         dataIndex: "clientId",
         key: "clientId",
-        filters: clients.map((c) => ({ text: c.id, value: c.id })),
+        filters: clients.map((c) => ({
+          text: c.hostname || c.id,
+          value: c.id,
+        })),
         filteredValue: filters.clientId ? [filters.clientId] : null,
         filterMultiple: false,
       },

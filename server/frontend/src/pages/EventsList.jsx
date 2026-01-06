@@ -87,11 +87,16 @@ export default function EventsList() {
   return (
     <List title={t("events.title")}>
       <Select
+        showSearch
         style={{ width: 300, marginBottom: 16 }}
         placeholder="Фильтр по клиенту"
         allowClear
         options={clientOptions}
         value={clientFilter}
+        filterOption={(input, option) =>
+          (option?.label ?? "").toLowerCase().includes(input.toLowerCase()) ||
+          (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+        }
         onChange={(val) => {
           setClientFilter(val);
           setPage(1); // Reset to first page on filter change
@@ -100,10 +105,10 @@ export default function EventsList() {
 
       {/* App Usage Summary Block */}
       <Card style={{ marginBottom: 24 }}>
-        <Title level={4}>Часто используемые приложения</Title>
+        <Title level={4}>{t("events.topApps")}</Title>
         {appStats.length === 0 ? (
           <Empty
-            description="Нет данных о приложениях"
+            description={t("events.noAppsData")}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ) : (
@@ -158,7 +163,50 @@ export default function EventsList() {
             render: (v) => dayjs(v).format("DD.MM.YYYY HH:mm:ss"),
           },
           { title: t("common.type"), dataIndex: "eventType" },
-          { title: t("common.description"), dataIndex: "description" },
+          {
+            title: t("common.description"),
+            dataIndex: "description",
+            render: (text, record) => {
+              if (
+                record.eventType === "USBConnected" &&
+                record.additionalData
+              ) {
+                const { Label, Format, TotalSize, DriveType } =
+                  record.additionalData;
+                return (
+                  <div>
+                    <div style={{ fontWeight: "bold" }}>{text}</div>
+                    <div style={{ fontSize: "12px", color: "#666" }}>
+                      {[Label, Format, TotalSize, DriveType]
+                        .filter(Boolean)
+                        .join(" | ")}
+                    </div>
+                  </div>
+                );
+              }
+              if (record.eventType === "FileAccess" && record.additionalData) {
+                const { Action, Path, Drive } = record.additionalData;
+                if (Drive) {
+                  return (
+                    <div>
+                      <div style={{ fontWeight: "bold" }}>
+                        {Action === "Created"
+                          ? "Файл скопирован на USB"
+                          : Action === "Renamed"
+                          ? "Файл переименован на USB"
+                          : text}
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#666" }}>
+                        <div>Накопитель: {Drive}</div>
+                        <div>Путь: {Path}</div>
+                      </div>
+                    </div>
+                  );
+                }
+              }
+              return text;
+            },
+          },
           { title: t("common.process"), dataIndex: "processName" },
           { title: t("common.device"), dataIndex: "deviceId" },
           { title: t("common.network"), dataIndex: "networkAddress" },
