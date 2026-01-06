@@ -415,7 +415,7 @@ public class DataTransmissionService : IDataTransmissionService
         }
     }
 
-    public async Task SendHeartbeatAsync()
+    public async Task<bool> SendHeartbeatAsync()
     {
         try
         {
@@ -447,17 +447,20 @@ public class DataTransmissionService : IDataTransmissionService
             {
                 _logger.LogDebug("Heartbeat sent successfully");
                 _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+                return true;
             }
             else
             {
                 _logger.LogWarning("Failed to send heartbeat. Status: {StatusCode}", response.StatusCode);
                 try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
+                return false;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
             try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.Now, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
+            return false;
         }
     }
 

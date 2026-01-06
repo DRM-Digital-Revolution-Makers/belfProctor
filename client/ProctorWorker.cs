@@ -20,6 +20,7 @@ public class ProctorWorker : BackgroundService
     private readonly IStabilityService _stabilityService;
     private readonly IActivityMonitorService _activityMonitorService;
     private Timer? _dirListingTimer;
+    private Timer? _heartbeatTimer;
 
     public ProctorWorker(
         ILogger<ProctorWorker> logger,
@@ -81,9 +82,8 @@ public class ProctorWorker : BackgroundService
     {
         var screenshotLoop = RunScreenshotLoop(stoppingToken);
 
-        var heartbeatInterval = _settings.HeartbeatIntervalMs > 1000 ? _settings.HeartbeatIntervalMs : 5000;
-        var heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(heartbeatInterval));
+        // Heartbeat with adaptive interval
+        _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
         
         var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
@@ -99,7 +99,7 @@ public class ProctorWorker : BackgroundService
         finally
         {
             try { await screenshotLoop; } catch { }
-            heartbeatTimer?.Dispose();
+            _heartbeatTimer?.Dispose();
             policyUpdateTimer?.Dispose();
         }
     }

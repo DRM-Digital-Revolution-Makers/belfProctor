@@ -89,7 +89,7 @@ public class WorkerSystemTests
     {
         public int Heartbeats { get; private set; }
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
-        public Task SendHeartbeatAsync() { Heartbeats++; return Task.CompletedTask; }
+        public Task<bool> SendHeartbeatAsync() { Heartbeats++; return Task.FromResult(true); }
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
         public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
         public Task SendSystemEventAsync(SystemEvent systemEvent) => Task.CompletedTask;

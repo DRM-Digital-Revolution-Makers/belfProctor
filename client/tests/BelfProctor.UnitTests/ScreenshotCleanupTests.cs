@@ -47,7 +47,7 @@ public class ScreenshotCleanupTests
     {
         public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
         public Task SendSystemEventAsync(BelfProctor.Models.SystemEvent systemEvent) => Task.CompletedTask;
-        public Task SendHeartbeatAsync() => Task.CompletedTask;
+        public Task<bool> SendHeartbeatAsync() => Task.FromResult(true);
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) => Task.CompletedTask;

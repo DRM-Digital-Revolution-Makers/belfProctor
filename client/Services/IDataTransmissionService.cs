@@ -6,7 +6,7 @@ public interface IDataTransmissionService
 {
     Task SendScreenshotAsync(string filePath);
     Task SendSystemEventAsync(SystemEvent systemEvent);
-    Task SendHeartbeatAsync();
+    Task<bool> SendHeartbeatAsync();
     Task<byte[]> DownloadPolicyAsync(string policyId);
     Task SendReportAsync(string reportPath);
     Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes);
