@@ -50,10 +50,15 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
       };
     }
 
-    if (!client || !client.encryptionKey) {
-      return res
-        .status(400)
-        .json({ message: "Client not registered or missing key" });
+    let keysToTry: string[] = [];
+    if (client && client.encryptionKey) {
+      keysToTry.push(client.encryptionKey);
+    }
+    const globalKey =
+      process.env.ENCRYPTION_KEY ||
+      "0000000000000000000000000000000000000000000000000000000000000000";
+    if (!keysToTry.includes(globalKey)) {
+      keysToTry.push(globalKey);
     }
 
     const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
@@ -79,7 +84,25 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
     const filename = `${clientId}_${iso}.jpg`;
     const filepath = path.join(clientDir, filename);
 
-    await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    let usedKey = "";
+    for (const key of keysToTry) {
+      try {
+        await decryptFileStream(tempPath, filepath, key);
+        usedKey = key;
+        break;
+      } catch (e) {
+        // If failed, delete partial file
+        if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+        continue;
+      }
+    }
+
+    if (!usedKey) {
+      console.error(
+        `[Screenshots] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`
+      );
+      return res.status(400).json({ message: "Decryption failed" });
+    }
 
     const rec = {
       id: `${clientId}_${Date.now()}`,

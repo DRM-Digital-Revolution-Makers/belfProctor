@@ -12,6 +12,8 @@ const router = Router();
 router.post("/", async (req, res) => {
   try {
     const clientId = (req.headers["x-client-id"] as string) || "";
+    console.log(`[Heartbeat] Received request from ${clientId}`);
+
     if (!clientId)
       return res.status(400).json({ message: "X-Client-Id header required" });
 

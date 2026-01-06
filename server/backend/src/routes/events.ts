@@ -28,21 +28,46 @@ router.post("/", async (req, res) => {
 
     let encryptionKey = "";
     const client = getClient(clientId);
+    let keysToTry: string[] = [];
+
     if (client && client.encryptionKey) {
-      encryptionKey = client.encryptionKey;
-    } else {
-      encryptionKey =
-        process.env.ENCRYPTION_KEY ||
-        "0000000000000000000000000000000000000000000000000000000000000000";
+      keysToTry.push(client.encryptionKey);
+    }
+
+    const globalKey =
+      process.env.ENCRYPTION_KEY ||
+      "0000000000000000000000000000000000000000000000000000000000000000";
+    if (!keysToTry.includes(globalKey)) {
+      keysToTry.push(globalKey);
     }
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
       ? (req.body as Buffer)
       : Buffer.from([]);
-    const decryptedJson = decryptAes256CbcPrefixedIv(
-      encrypted,
-      encryptionKey
-    ).toString("utf-8");
+
+    let decryptedJson = "";
+    let usedKey = "";
+
+    for (const key of keysToTry) {
+      try {
+        decryptedJson = decryptAes256CbcPrefixedIv(encrypted, key).toString(
+          "utf-8"
+        );
+        JSON.parse(decryptedJson); // Validate JSON
+        usedKey = key;
+        break;
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (!usedKey) {
+      console.error(
+        `[Events] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`
+      );
+      return res.status(400).json({ message: "Decryption failed" });
+    }
+
     const payload = JSON.parse(decryptedJson);
 
     const processPayload = (p: any) => {
