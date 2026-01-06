@@ -1,14 +1,6 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import {
-  Button,
-  Segmented,
-  Select,
-  Breadcrumb,
-  Table,
-  message,
-  Progress,
-} from "antd";
+import { Button, Select, Breadcrumb, Table, message, Progress } from "antd";
 import {
   FolderFilled,
   FileTextOutlined,
@@ -19,9 +11,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 import { useParams } from "react-router-dom";
-import ApexCharts from "apexcharts";
-import _ from "lodash";
-import "flyonui/dist/helper-apexcharts.js";
+// Removed charts and flyonui helpers
 
 export default function ActivityDetail() {
   const { t, i18n } = useTranslation();
@@ -29,22 +19,13 @@ export default function ActivityDetail() {
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
-  const [activity, setActivity] = React.useState([]);
   const [shots, setShots] = React.useState([]);
-  const chartRef = React.useRef(null);
-  const [chartElId] = React.useState(
-    () => `chart_${Math.random().toString(36).slice(2)}`
-  );
-  const inactChartRef = React.useRef(null);
-  const [chartElIdInactive] = React.useState(
-    () => `chart_inact_${Math.random().toString(36).slice(2)}`
-  );
+  const [usbEvents, setUsbEvents] = React.useState([]);
   const [currentPath, setCurrentPath] = React.useState("");
   const [dirItems, setDirItems] = React.useState([]);
   const [dirLoading, setDirLoading] = React.useState(false);
   const [dirError, setDirError] = React.useState(null);
   const [retryTrigger, setRetryTrigger] = React.useState(0);
-  const [range, setRange] = React.useState("7d");
   const [authToken, setAuthToken] = React.useState(
     () => localStorage.getItem("token") || ""
   );
@@ -183,24 +164,33 @@ export default function ActivityDetail() {
   }, [authToken]);
 
   const loadData = React.useCallback(async () => {
-    const aParams = new URLSearchParams({
+    // Load events for USB section
+    const eParams = new URLSearchParams({
       page: "1",
-      pageSize: "300",
+      pageSize: "500",
       clientId,
     });
-    const aRes = await fetch(`${API_URL}/activity?${aParams.toString()}`, {
+    const eRes = await fetch(`${API_URL}/events?${eParams.toString()}`, {
       headers: headersAuth,
       cache: "no-store",
     });
-    if (aRes.status === 401) {
+    if (eRes.status === 401) {
       localStorage.removeItem("token");
       setAuthToken("");
       window.dispatchEvent(new Event("auth:changed"));
       return;
     }
-    const aJson = await aRes.json().catch(() => ({}));
-    const aData = Array.isArray(aJson.data) ? aJson.data : [];
-    setActivity(aData);
+    const eJson = await eRes.json().catch(() => ({}));
+    const eData = Array.isArray(eJson.data) ? eJson.data : [];
+    const usbOnly = eData.filter(
+      (ev) =>
+        ev &&
+        (ev.eventType === "USBConnected" ||
+          ev.eventType === "USBDisconnected" ||
+          ev.eventType === "FileAccess") &&
+        (ev.deviceId || (ev.additionalData && ev.additionalData.Drive))
+    );
+    setUsbEvents(usbOnly);
     const sParams = new URLSearchParams({ page: "1", pageSize: "6", clientId });
     const sRes = await fetch(`${API_URL}/screenshots?${sParams.toString()}`, {
       headers: headersAuth,
@@ -267,7 +257,6 @@ export default function ActivityDetail() {
       }
       if (!cancelled) {
         setDriveOptions(found.length ? found : candidates);
-        const newRoot = found.length ? found[0] : candidates[0];
         // Only set root/current if not already set or invalid
         setRootPath((prev) => {
           const valid = found.length ? found : candidates;
@@ -280,7 +269,7 @@ export default function ActivityDetail() {
     return () => {
       cancelled = true;
     };
-  }, [API_URL, clientId, headersAuth]);
+  }, [API_URL, clientId, headersAuth, t]);
 
   // Fetch directory contents when currentPath changes
   React.useEffect(() => {
@@ -320,7 +309,9 @@ export default function ActivityDetail() {
             } else if (errJson.message) {
               errMsg = errJson.message;
             }
-          } catch {}
+          } catch (e) {
+            void e;
+          }
           throw new Error(errMsg);
         }
         const json = await res.json();
@@ -567,238 +558,79 @@ export default function ActivityDetail() {
     },
   ];
 
-  const now = Date.now();
-  const spanMs =
-    { "7d": 7 * 24 * 60 * 60 * 1000, "30d": 30 * 24 * 60 * 60 * 1000 }[range] ||
-    7 * 24 * 60 * 60 * 1000;
-  const filtered = activity.filter(
-    (d) => new Date(d.timestamp).getTime() >= now - spanMs
-  );
-  const groups = (() => {
-    const map = new Map();
-    for (const rec of filtered) {
-      const dt = new Date(rec.timestamp);
-      const key = new Date(
-        dt.getFullYear(),
-        dt.getMonth(),
-        dt.getDate()
-      ).toISOString();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(rec);
-    }
-    const entries = Array.from(map.entries()).sort(
-      (a, b) => new Date(a[0]).getTime() - new Date(b[0]).getTime()
-    );
-    return entries;
-  })();
-  const daily = groups.map(([key, arr]) => {
-    const sorted = arr
-      .slice()
-      .sort(
-        (a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
-    let sum = 0;
-    const MAX_GAP = 2 * 60 * 1000;
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const cur = sorted[i];
-      const nxt = sorted[i + 1];
-      const diff =
-        new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
-      const duration = Math.min(diff, MAX_GAP);
-      if (cur.isActive) sum += duration;
-    }
-    const last = sorted[sorted.length - 1];
-    const dayDate = new Date(last.timestamp);
-    const isToday = new Date().toDateString() === dayDate.toDateString();
-    const timeSinceLast = now - new Date(last.timestamp).getTime();
-
-    if (isToday && last.isActive && timeSinceLast < MAX_GAP)
-      sum += timeSinceLast;
-
-    const hours = Math.max(0, sum / (60 * 60 * 1000));
-    const label = dayDate.toLocaleDateString(undefined, {
-      day: "2-digit",
-      month: "short",
-    });
-    return { key, hours, label };
-  });
-  const dailyInactive = groups.map(([key, arr]) => {
-    const sorted = arr
-      .slice()
-      .sort(
-        (a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
-    let sum = 0;
-    const MAX_GAP = 2 * 60 * 1000;
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const cur = sorted[i];
-      const nxt = sorted[i + 1];
-      const diff =
-        new Date(nxt.timestamp).getTime() - new Date(cur.timestamp).getTime();
-
-      if (!cur.isActive) {
-        sum += diff;
-      } else {
-        if (diff > MAX_GAP) {
-          sum += diff - MAX_GAP;
-        }
-      }
-    }
-    const last = sorted[sorted.length - 1];
-    const dayDate = new Date(last.timestamp);
-    const isToday = new Date().toDateString() === dayDate.toDateString();
-    const timeSinceLast = now - new Date(last.timestamp).getTime();
-
-    if (isToday && !last.isActive) {
-      sum += timeSinceLast;
-    } else if (isToday && last.isActive && timeSinceLast > MAX_GAP) {
-      sum += timeSinceLast - MAX_GAP;
-    }
-
-    const hours = Math.max(0, sum / (60 * 60 * 1000));
-    const label = dayDate.toLocaleDateString(undefined, {
-      day: "2-digit",
-      month: "short",
-    });
-    return { key, hours, label };
-  });
-  React.useEffect(() => {
-    // expose globals for FlyonUI helper
-    // @ts-ignore
-    window._ = _;
-    // @ts-ignore
-    window.ApexCharts = ApexCharts;
-    if (chartRef.current) {
-      chartRef.current.destroy();
-      chartRef.current = null;
-    }
-    if (!daily.length) return;
-    const series = [
-      {
-        name: t("common.dayActivity"),
-        data: daily.map((d) => Number(d.hours.toFixed(1))),
-      },
-    ];
-    const options = {
-      chart: { type: "area", height: 360, animations: { enabled: true } },
-      dataLabels: { enabled: false },
-      stroke: { curve: "smooth" },
-      fill: {
-        type: "gradient",
-        gradient: {
-          shadeIntensity: 0.4,
-          opacityFrom: 0.5,
-          opacityTo: 0.1,
-          stops: [0, 90, 100],
-        },
-      },
-      xaxis: { categories: daily.map((d) => d.label) },
-      yaxis: { min: 0, labels: { formatter: (v) => `${v} ${t("common.h")}` } },
-      colors: ["#1677ff"],
-      tooltip: { enabled: true },
-    };
-    const el = document.querySelector(`#${chartElId}`);
-    if (el) {
-      // Prefer FlyonUI helper if available
-      const buildChart = window.buildChart;
-      if (typeof buildChart === "function") {
-        const chart = buildChart(`#${chartElId}`, () => ({
-          series,
-          ...options,
-        }));
-        chartRef.current = chart;
-      } else {
-        const chart = new ApexCharts(el, { series, ...options });
-        chart.render();
-        chartRef.current = chart;
-      }
-    }
-    return () => {
-      chartRef.current?.destroy();
-      chartRef.current = null;
-    };
-  }, [daily, chartElId]);
-
-  React.useEffect(() => {
-    window._ = _;
-    window.ApexCharts = ApexCharts;
-    if (inactChartRef.current) {
-      inactChartRef.current.destroy();
-      inactChartRef.current = null;
-    }
-    if (!dailyInactive.length) return;
-    const series = [
-      {
-        name: t("common.dayInactivity"),
-        data: dailyInactive.map((d) => Number(d.hours.toFixed(1))),
-      },
-    ];
-    const options = {
-      chart: { type: "area", height: 240, animations: { enabled: true } },
-      dataLabels: { enabled: false },
-      stroke: { curve: "smooth" },
-      fill: {
-        type: "gradient",
-        gradient: {
-          shadeIntensity: 0.4,
-          opacityFrom: 0.5,
-          opacityTo: 0.1,
-          stops: [0, 90, 100],
-        },
-      },
-      xaxis: { categories: dailyInactive.map((d) => d.label) },
-      yaxis: { min: 0, labels: { formatter: (v) => `${v} ${t("common.h")}` } },
-      colors: ["#ff4d4f"],
-      tooltip: { enabled: true },
-    };
-    const el = document.querySelector(`#${chartElIdInactive}`);
-    if (el) {
-      const buildChart = window.buildChart;
-      if (typeof buildChart === "function") {
-        const chart = buildChart(`#${chartElIdInactive}`, () => ({
-          series,
-          ...options,
-        }));
-        inactChartRef.current = chart;
-      } else {
-        const chart = new ApexCharts(el, { series, ...options });
-        chart.render();
-        inactChartRef.current = chart;
-      }
-    }
-    return () => {
-      inactChartRef.current?.destroy();
-      inactChartRef.current = null;
-    };
-  }, [dailyInactive, chartElIdInactive]);
+  // Removed chart computations and effects
 
   return (
     <List title={`${t("common.client")} ${clientId}`}>
-      <div
-        style={{
-          marginBottom: 8,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ fontWeight: 600 }}>{t("common.activeChart")}</div>
-        <Segmented
-          value={range}
-          onChange={setRange}
-          options={[
-            { label: t("common.week"), value: "7d" },
-            { label: t("common.month"), value: "30d" },
-          ]}
-        />
+      <div style={{ marginTop: 8, marginBottom: 8, fontWeight: 600 }}>
+        USB-активность
       </div>
-      <div id={chartElId} />
-      <div style={{ marginTop: 16, marginBottom: 8, fontWeight: 600 }}>
-        {t("common.inactiveChart")}
-      </div>
-      <div id={chartElIdInactive} />
+      <Table
+        rowKey={(r) =>
+          `${r.timestamp}_${r.eventType}_${r.deviceId || ""}_${
+            r?.additionalData?.Path || ""
+          }`
+        }
+        dataSource={usbEvents}
+        pagination={false}
+        size="small"
+        columns={[
+          {
+            title: "Время",
+            dataIndex: "timestamp",
+            render: (v) =>
+              new Date(v).toLocaleString(
+                i18n.language === "uz" ? "uz-UZ" : "ru-RU"
+              ),
+          },
+          { title: "Тип", dataIndex: "eventType" },
+          { title: "Устройство", dataIndex: "deviceId" },
+          {
+            title: "Детали",
+            dataIndex: "description",
+            render: (text, record) => {
+              if (
+                record.eventType === "USBConnected" &&
+                record.additionalData
+              ) {
+                const { Label, Format, TotalSize, DriveType } =
+                  record.additionalData;
+                return (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{text}</div>
+                    <div style={{ fontSize: 12, color: "#666" }}>
+                      {[Label, Format, TotalSize, DriveType]
+                        .filter(Boolean)
+                        .join(" | ")}
+                    </div>
+                  </div>
+                );
+              }
+              if (record.eventType === "FileAccess" && record.additionalData) {
+                const { Action, Path, Drive, FileName } = record.additionalData;
+                return (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>
+                      {Action === "Created"
+                        ? "Файл скопирован на USB"
+                        : Action === "Renamed"
+                        ? "Файл переименован на USB"
+                        : text}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#666" }}>
+                      {Drive ? <div>Накопитель: {Drive}</div> : null}
+                      <div>Путь: {Path}</div>
+                      {FileName ? <div>Файл: {FileName}</div> : null}
+                    </div>
+                  </div>
+                );
+              }
+              return text;
+            },
+          },
+        ]}
+        locale={{ emptyText: "Нет данных по USB" }}
+      />
       <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>
         {t("common.lastScreenshots")}
       </div>

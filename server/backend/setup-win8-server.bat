@@ -6,7 +6,7 @@ echo ===================================================
 echo   BelfProctor Server Installer for Windows 8
 echo ===================================================
 
-echo [1/4] Checking Node.js...
+echo [1/6] Checking Node.js...
 node -v
 if %errorLevel% neq 0 (
     echo ERROR: Node.js is not installed!
@@ -15,20 +15,36 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
-echo [2/4] Installing dependencies...
+echo [2/6] Building Frontend...
+pushd ..\frontend
+call npm install
+if %errorLevel% neq 0 (
+    echo ERROR: Frontend install failed.
+    pause
+    exit /b 1
+)
+call npm run build
+if %errorLevel% neq 0 (
+    echo ERROR: Frontend build failed.
+    pause
+    exit /b 1
+)
+popd
+
+echo [3/6] Installing backend dependencies...
 call npm install
 if %errorLevel% neq 0 (
     echo Warning: npm install failed.
 )
 
-echo [3/4] Checking PM2...
+echo [4/6] Checking PM2...
 call npm list -g pm2 >nul 2>&1
 if %errorLevel% neq 0 (
     echo Installing PM2 globally...
     call npm install -g pm2
 )
 
-echo [4/4] Starting Server...
+echo [5/6] Starting Server...
 
 echo Setting environment variables...
 set NO_DB=1
@@ -41,6 +57,18 @@ echo Building project...
 call npm run build
 if %errorLevel% neq 0 (
     echo Build failed! Exiting.
+    pause
+    exit /b 1
+)
+
+echo Preparing static frontend...
+if exist public (
+    rmdir /s /q public
+)
+mkdir public
+xcopy /E /I /Y "..\frontend\dist" "public"
+if %errorLevel% neq 0 (
+    echo ERROR: Copying frontend dist to public failed.
     pause
     exit /b 1
 )

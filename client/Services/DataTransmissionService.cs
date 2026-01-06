@@ -226,18 +226,14 @@ public class DataTransmissionService : IDataTransmissionService
             {
                  var body = await resp.Content.ReadAsStringAsync();
                 _logger.LogWarning("PostAsync failed: {StatusCode} for {Url}. Body: {Body}", resp.StatusCode, relativeUrl, body);
-                
-                // If 400 or 500, maybe key mismatch, don't retry discovery immediately unless connection failed
-                if ((int)resp.StatusCode >= 500 || resp.StatusCode == System.Net.HttpStatusCode.RequestTimeout) {
-                    _currentBaseUrl = string.Empty;
-                    TryInitializeBaseAddress(extendedScan: true);
-                    if (string.IsNullOrWhiteSpace(_currentBaseUrl))
-                    {
-                        return resp;
-                    }
-                    uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
-                    resp = await _httpClient.PostAsync(uri, content);
+                _currentBaseUrl = string.Empty;
+                TryInitializeBaseAddress(extendedScan: true);
+                if (string.IsNullOrWhiteSpace(_currentBaseUrl))
+                {
+                    return resp;
                 }
+                uri = new Uri(new Uri(_currentBaseUrl), relativeUrl);
+                resp = await _httpClient.PostAsync(uri, content);
             }
             return resp;
         }
@@ -943,12 +939,16 @@ public class DataTransmissionService : IDataTransmissionService
     {
         if (e.IsAvailable)
         {
+            _currentBaseUrl = string.Empty;
+            TryInitializeBaseAddress(extendedScan: true);
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
         }
     }
 
     private void OnNetworkAddressChanged(object? sender, EventArgs e)
     {
+        _currentBaseUrl = string.Empty;
+        TryInitializeBaseAddress(extendedScan: true);
         _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
     }
 

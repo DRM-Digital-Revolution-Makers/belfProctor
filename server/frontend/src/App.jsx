@@ -19,32 +19,6 @@ import { customDataProvider } from "./dataProvider.js";
 const API_URL =
   import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
 
-const authProvider = {
-  login: async ({ email, password }) => {
-    const res = await fetch(`${API_URL}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    if (!res.ok) {
-      return Promise.reject();
-    }
-    const data = await res.json();
-    localStorage.setItem("token", data.token);
-    return Promise.resolve();
-  },
-  logout: async () => {
-    localStorage.removeItem("token");
-    return Promise.resolve();
-  },
-  check: async () => {
-    return localStorage.getItem("token") ? Promise.resolve() : Promise.reject();
-  },
-  getIdentity: async () => {
-    return Promise.resolve({ id: 1, name: "Admin" });
-  },
-};
-
 export default function App() {
   const [authed, setAuthed] = React.useState(
     Boolean(localStorage.getItem("token"))

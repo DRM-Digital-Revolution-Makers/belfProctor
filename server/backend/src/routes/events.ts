@@ -109,43 +109,55 @@ router.get("/", async (req, res) => {
   const p = parseInt(page);
   const ps = parseInt(pageSize);
 
-  // Read events.jsonl
-  const filePath = path.join(process.cwd(), "storage", "events.jsonl");
-  if (!fs.existsSync(filePath)) return res.json({ data: [], total: 0 });
+  const eventsDir = path.join(process.cwd(), "storage", "events");
+  if (!fs.existsSync(eventsDir)) {
+    return res.json({ data: [], total: 0 });
+  }
 
-  const fileStream = fs.readFileSync(filePath, "utf-8");
-  const lines = fileStream.split("\n").filter((l) => l.trim());
+  let allEvents: any[] = [];
 
-  let allEvents = lines
-    .map((l) => {
-      try {
-        return JSON.parse(l);
-      } catch (e) {
-        return null;
+  try {
+    if (clientId) {
+      const filePath = path.join(eventsDir, `${clientId}.jsonl`);
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const lines = content.split("\n").filter((l) => l.trim());
+        allEvents = lines
+          .map((l) => {
+            try {
+              return JSON.parse(l);
+            } catch {
+              return null;
+            }
+          })
+          .filter((e) => e !== null) as any[];
       }
-    })
-    .filter((e) => e !== null);
+    } else {
+      const files = fs
+        .readdirSync(eventsDir)
+        .filter((f) => f.endsWith(".jsonl"));
+      for (const f of files) {
+        try {
+          const content = fs.readFileSync(path.join(eventsDir, f), "utf-8");
+          const lines = content.split("\n").filter((l) => l.trim());
+          // Optimization: only parse the last 200 lines per file
+          const lastLines = lines.slice(-200);
+          lastLines.forEach((l) => {
+            try {
+              const obj = JSON.parse(l);
+              allEvents.push(obj);
+            } catch {}
+          });
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
 
-  // Sort desc
   allEvents.sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
-
-  if (clientId) {
-    allEvents = allEvents.filter((e) => e.clientId === clientId);
-  }
-
-  // Filter out system noise as per user request ("Only applications")
-  const NOISE_EVENTS = [
-    "NetworkConnection",
-    "NetworkDisconnection",
-    "USBConnected",
-    "USBDisconnected",
-    "FileAccess",
-    "RegistryAccess",
-    "SystemError",
-  ];
-  allEvents = allEvents.filter((e) => !NOISE_EVENTS.includes(e.eventType));
 
   const total = allEvents.length;
   const paginated = allEvents.slice((p - 1) * ps, p * ps);

@@ -20,7 +20,7 @@ export default function ScreenshotsList() {
   });
   const pageSize = 50;
 
-  const handleTableChange = (pagination, tableFilters, sorter) => {
+  const handleTableChange = (pagination, tableFilters) => {
     setPage(pagination.current);
     const newClientId =
       tableFilters.clientId && tableFilters.clientId.length > 0
