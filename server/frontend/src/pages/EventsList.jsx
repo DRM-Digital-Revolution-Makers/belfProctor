@@ -42,7 +42,7 @@ export default function EventsList() {
         const list = Array.isArray(data) ? data : data.data || [];
         setClientOptions(
           list.map((c) => ({
-            label: c.hostname || c.id,
+            label: c.id,
             value: c.id,
           }))
         );

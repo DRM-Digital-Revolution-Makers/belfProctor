@@ -47,7 +47,7 @@ public class DataTransmissionService : IDataTransmissionService
         // Настройка HTTP клиента
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "BelfProctor/1.0");
         _httpClient.DefaultRequestHeaders.Add("X-Client-Id", _settings.ClientId);
-        _httpClient.Timeout = TimeSpan.FromMinutes(5);
+        _httpClient.Timeout = TimeSpan.FromSeconds(30);
 
         var serverUrl = NormalizeServerUrl(_settings.ServerUrl);
         if (Uri.TryCreate(serverUrl, UriKind.Absolute, out _))
@@ -446,6 +446,7 @@ public class DataTransmissionService : IDataTransmissionService
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Heartbeat sent successfully");
+                _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
             }
             else
             {
