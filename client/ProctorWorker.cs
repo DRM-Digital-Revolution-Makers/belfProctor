@@ -198,11 +198,20 @@ public class ProctorWorker : BackgroundService
     {
         try
         {
-            await _dataTransmissionService.SendHeartbeatAsync();
+            var success = await _dataTransmissionService.SendHeartbeatAsync();
+            
+            // Adaptive interval: fast retry on failure (5s), normal interval on success
+            var interval = success 
+                ? (_settings.HeartbeatIntervalMs > 1000 ? _settings.HeartbeatIntervalMs : 60000)
+                : 5000; 
+
+            _heartbeatTimer?.Change(interval, Timeout.Infinite);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send heartbeat");
+            // Retry quickly on error
+            _heartbeatTimer?.Change(5000, Timeout.Infinite);
         }
     }
 

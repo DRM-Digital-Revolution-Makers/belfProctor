@@ -86,11 +86,7 @@ export function clearEvents() {
 export function appendHeartbeat(data: any) {
   // Overwrite or append? For heartbeats, we might want latest status.
   // For simplicity in file mode, we just append log.
-  console.log(
-    `[Store] Appending heartbeat for ${
-      data.clientId
-    } at ${new Date().toISOString()}`
-  );
+  console.log(`[Store] Appending heartbeat for ${data.clientId} at ${new Date().toISOString()}`);
   appendToFile("heartbeats.jsonl", { ...data, _ingestedAt: new Date() });
 }
 

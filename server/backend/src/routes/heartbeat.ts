@@ -12,8 +12,6 @@ const router = Router();
 router.post("/", async (req, res) => {
   try {
     const clientId = (req.headers["x-client-id"] as string) || "";
-    console.log(`[Heartbeat] Received request from ${clientId}`);
-
     if (!clientId)
       return res.status(400).json({ message: "X-Client-Id header required" });
 
@@ -57,12 +55,13 @@ router.post("/", async (req, res) => {
 
     if (!usedKey) {
       console.error(
-        `Failed to decrypt heartbeat for client ${clientId}. Tried ${keysToTry.length} keys.`
+        `[Heartbeat] Failed to decrypt heartbeat for client ${clientId}. Tried ${keysToTry.length} keys.`
       );
       return res.status(400).json({ message: "Decryption failed" });
     }
 
     const payload = JSON.parse(decryptedJson);
+    console.log(`[Heartbeat] Successfully decrypted for ${clientId}. Payload size: ${decryptedJson.length}`);
 
     // Auto-register or Update
     if (!client) {
