@@ -263,7 +263,7 @@ export default function ClientsList() {
             <div style={{ display: "flex", gap: 8 }}>
               <Input />
               <Button onClick={() => form.setFieldValue("id", genId())}>
-                Gen
+                {t("common.gen")}
               </Button>
             </div>
           </Form.Item>
@@ -277,7 +277,7 @@ export default function ClientsList() {
               <Button
                 onClick={() => form.setFieldValue("encryptionKey", genKey())}
               >
-                Gen
+                {t("common.gen")}
               </Button>
             </div>
           </Form.Item>

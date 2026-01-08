@@ -15,7 +15,7 @@ public class ActivityMonitorService : IActivityMonitorService
     private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
     private readonly ILogger<ActivityMonitorService> _logger;
-    private readonly TimeSpan _inactivityThreshold = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _inactivityThreshold = TimeSpan.FromMinutes(3);
     private readonly object _lock = new();
     private System.Threading.Timer? _timer;
     private bool _active;

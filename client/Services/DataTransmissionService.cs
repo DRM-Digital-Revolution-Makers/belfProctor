@@ -414,7 +414,7 @@ public class DataTransmissionService : IDataTransmissionService
 
                     try
                     {
-                        var json = JsonConvert.SerializeObject(batch);
+                        var json = JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified });
                         var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
                         
                         using var content = new ByteArrayContent(encryptedData);
@@ -436,7 +436,7 @@ public class DataTransmissionService : IDataTransmissionService
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error sending system event batch");
-                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch)); } catch { }
+                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified })); } catch { }
                     }
                 }
             }
@@ -459,7 +459,7 @@ public class DataTransmissionService : IDataTransmissionService
                 ActiveMilliseconds = activeMilliseconds,
                 InactiveMilliseconds = inactiveMilliseconds
             };
-            var json = JsonConvert.SerializeObject(payload);
+            var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified });
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");

@@ -48,6 +48,13 @@ export default function App() {
       <Refine
         routerProvider={routerProvider}
         dataProvider={customDataProvider(API_URL)}
+        options={{
+          disableTelemetry: true,
+          syncWithLocation: true,
+          warnWhenUnsavedChanges: true,
+          useNewQueryKeys: true,
+          projectId: "some-id",
+        }}
         // authProvider disabled to skip login temporarily
         resources={[
           { name: "clients", list: "/clients" },

@@ -38,7 +38,7 @@ const { Title } = Typography;
 const ClientDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -63,6 +63,7 @@ const ClientDetail = () => {
       setLoading(true);
       try {
         const dateStr = date.format("YYYY-MM-DD");
+        // We use dateStr as is, backend should interpret it correctly
         const res = await authFetch(
           `${API_URL}/clients/${id}/daily-summary?date=${dateStr}`
         );
@@ -239,17 +240,29 @@ const ClientDetail = () => {
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
 
-    const parts = [];
-    if (days > 0) parts.push(`${days} ${getNoun(days, "день", "дня", "дней")}`);
-    if (hours > 0)
-      parts.push(`${hours} ${getNoun(hours, "час", "часа", "часов")}`);
-    if (minutes > 0) parts.push(`${minutes} мин`);
-    if (seconds > 0)
-      parts.push(
-        `${seconds} ${getNoun(seconds, "секунда", "секунды", "секунд")}`
-      );
+    const lang = i18n.language;
 
-    return parts.length > 0 ? parts.join(" ") : "0 секунд";
+    if (lang === "ru") {
+      const parts = [];
+      if (days > 0)
+        parts.push(`${days} ${getNoun(days, "день", "дня", "дней")}`);
+      if (hours > 0)
+        parts.push(`${hours} ${getNoun(hours, "час", "часа", "часов")}`);
+      if (minutes > 0) parts.push(`${minutes} мин`);
+      if (seconds > 0)
+        parts.push(
+          `${seconds} ${getNoun(seconds, "секунда", "секунды", "секунд")}`
+        );
+      return parts.length > 0 ? parts.join(" ") : "0 секунд";
+    } else {
+      // Generic / Uzbek
+      const parts = [];
+      if (days > 0) parts.push(`${days} ${t("common.days")}`);
+      if (hours > 0) parts.push(`${hours} ${t("common.hours")}`);
+      if (minutes > 0) parts.push(`${minutes} ${t("common.minutes")}`);
+      if (seconds > 0) parts.push(`${seconds} ${t("common.seconds")}`);
+      return parts.length > 0 ? parts.join(" ") : `0 ${t("common.seconds")}`;
+    }
   };
 
   const escapeCSV = (val) => {
@@ -274,10 +287,10 @@ const ClientDetail = () => {
 
     // Daily Summary
     const summaryRows = [
-      ["Дата", selectedDate.format("YYYY-MM-DD")],
-      ["Активное время", formatDurationVerbose(dailyData.activeMs)],
-      ["Неактивное время", formatDurationVerbose(dailyData.inactiveMs)],
-      ["Количество скриншотов", dailyData.screenshots.length],
+      [t("csv.date"), selectedDate.format("YYYY-MM-DD")],
+      [t("csv.activeTime"), formatDurationVerbose(dailyData.activeMs)],
+      [t("csv.inactiveTime"), formatDurationVerbose(dailyData.inactiveMs)],
+      [t("csv.screenshotsCount"), dailyData.screenshots.length],
       [],
     ]
       .map((row) => row.map(escapeCSV).join(";"))
@@ -286,23 +299,25 @@ const ClientDetail = () => {
     // Top 5 Apps
     let topAppsSection = "";
     if (dailyData.topApps && dailyData.topApps.length > 0) {
-      const topAppsHeader = ["Приложение", "Количество использований"]
+      const topAppsHeader = [t("csv.application"), t("csv.usageCount")]
         .map(escapeCSV)
         .join(";");
       const topAppsRows = dailyData.topApps
         .map((app) => [app.name, app.count].map(escapeCSV).join(";"))
         .join("\n");
-      topAppsSection = `\n\n"Топ 5 приложений"\n${topAppsHeader}\n${topAppsRows}`;
+      topAppsSection = `\n\n"${t(
+        "csv.top5Apps"
+      )}"\n${topAppsHeader}\n${topAppsRows}`;
     }
 
     // Hourly Activity
     let hourlySection = "";
     if (dailyData.hourly) {
       const hourlyHeader = [
-        "Час",
-        "Активное время",
-        "Неактивное время",
-        "Количество скриншотов",
+        t("csv.hour"),
+        t("csv.activeTime"),
+        t("csv.inactiveTime"),
+        t("csv.screenshotsCount"),
       ]
         .map(escapeCSV)
         .join(";");
@@ -320,11 +335,17 @@ const ClientDetail = () => {
             .join(";")
         )
         .join("\n");
-      hourlySection = `\n\n"Почасовая активность"\n${hourlyHeader}\n${hourlyRows}`;
+      hourlySection = `\n\n"${t(
+        "csv.hourlyActivity"
+      )}"\n${hourlyHeader}\n${hourlyRows}`;
     }
 
     // Screenshots
-    const screenshotsHeader = ["Время", "Имя файла", "Избранное"]
+    const screenshotsHeader = [
+      t("csv.time"),
+      t("csv.filename"),
+      t("csv.favorite"),
+    ]
       .map(escapeCSV)
       .join(";");
     const screenshotsRows = dailyData.screenshots
@@ -332,13 +353,15 @@ const ClientDetail = () => {
         [
           dayjs(s.timestamp).format("HH:mm:ss"),
           s.filename,
-          s.isFavorite ? "Да" : "Нет",
+          s.isFavorite ? t("common.yes") : t("common.no"),
         ]
           .map(escapeCSV)
           .join(";")
       )
       .join("\n");
-    const screenshotsSection = `\n\n"Скриншоты"\n${screenshotsHeader}\n${screenshotsRows}`;
+    const screenshotsSection = `\n\n"${t(
+      "csv.screenshots"
+    )}"\n${screenshotsHeader}\n${screenshotsRows}`;
 
     downloadCSV(
       summaryRows + topAppsSection + hourlySection + screenshotsSection,
@@ -506,7 +529,10 @@ const ClientDetail = () => {
                           pagination={false}
                           size="small"
                           columns={[
-                            { title: t("reports.application"), dataIndex: "name" },
+                            {
+                              title: t("reports.application"),
+                              dataIndex: "name",
+                            },
                             {
                               title: t("reports.launchesActivity"),
                               dataIndex: "count",
@@ -563,7 +589,14 @@ const ClientDetail = () => {
                               }
                             >
                               <Card.Meta
-                                title={dayjs(s.timestamp).format("HH:mm:ss")}
+                                title={new Date(s.timestamp).toLocaleTimeString(
+                                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                                  {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                    second: "2-digit",
+                                  }
+                                )}
                                 description={s.filename}
                               />
                             </Card>
@@ -647,7 +680,7 @@ const ClientDetail = () => {
 
                   {monthlyData.topApps && monthlyData.topApps.length > 0 && (
                     <Card
-                      title="Топ 5 приложений (за месяц)"
+                      title={t("common.topAppsMonth")}
                       style={{ marginTop: 24 }}
                       size="small"
                     >
@@ -657,8 +690,14 @@ const ClientDetail = () => {
                         pagination={false}
                         size="small"
                         columns={[
-                          { title: "Приложение", dataIndex: "name" },
-                          { title: "Запусков/Активности", dataIndex: "count" },
+                          {
+                            title: t("reports.application"),
+                            dataIndex: "name",
+                          },
+                          {
+                            title: t("reports.launchesActivity"),
+                            dataIndex: "count",
+                          },
                         ]}
                       />
                     </Card>

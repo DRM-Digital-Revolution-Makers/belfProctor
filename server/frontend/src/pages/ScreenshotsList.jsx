@@ -139,14 +139,16 @@ export default function ScreenshotsList() {
         title: t("common.time"),
         dataIndex: "timestamp",
         render: (value) =>
-          new Date(value).toLocaleString("ru-RU", {
-            timeZone: "Asia/Tashkent",
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          new Date(value).toLocaleString(
+            i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+            {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            }
+          ),
       },
       {
         title: t("common.client"),

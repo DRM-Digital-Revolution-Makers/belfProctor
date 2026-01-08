@@ -500,12 +500,16 @@ export default function ActivityDetail() {
       dataIndex: "lastWriteTime",
       key: "lastWriteTime",
       width: 200,
-      render: (text) =>
-        text
-          ? new Date(text).toLocaleString(
-              i18n.language === "uz" ? "uz-UZ" : "ru-RU"
-            )
-          : "-",
+      render: (text) => {
+        if (!text) return "-";
+        try {
+          const d = new Date(text);
+          if (isNaN(d.getTime())) return "-";
+          return d.toLocaleString(i18n.language === "uz" ? "uz-UZ" : "ru-RU");
+        } catch (e) {
+          return "-";
+        }
+      },
     },
     {
       title: t("common.actions"),
@@ -563,7 +567,7 @@ export default function ActivityDetail() {
   return (
     <List title={`${t("common.client")} ${clientId}`}>
       <div style={{ marginTop: 8, marginBottom: 8, fontWeight: 600 }}>
-        USB-активность
+        {t("common.usbActivity")}
       </div>
       <Table
         rowKey={(r) =>
@@ -576,33 +580,70 @@ export default function ActivityDetail() {
         size="small"
         columns={[
           {
-            title: "Время",
+            title: t("common.time"),
             dataIndex: "timestamp",
-            render: (v) =>
-              new Date(v).toLocaleString(
-                i18n.language === "uz" ? "uz-UZ" : "ru-RU"
-              ),
+            render: (v) => {
+              if (!v) return "-";
+              try {
+                const d = new Date(v);
+                if (isNaN(d.getTime())) return "-";
+                d.setHours(d.getHours() - 2);
+                return d.toLocaleString(
+                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                  {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }
+                );
+              } catch (e) {
+                return "-";
+              }
+            },
           },
-          { title: "Тип", dataIndex: "eventType" },
-          { title: "Устройство", dataIndex: "deviceId" },
+          { title: t("common.type"), dataIndex: "eventType" },
+          { title: t("common.device"), dataIndex: "deviceId" },
           {
-            title: "Детали",
+            title: t("common.details"),
             dataIndex: "description",
             render: (text, record) => {
+              const translateDriveType = (type) => {
+                if (!type) return "";
+                const key = type.toLowerCase();
+                if (key === "removable") return t("common.removable");
+                if (key === "fixed") return t("common.fixed");
+                if (key === "cdrom") return t("common.cdrom");
+                if (key === "network") return t("common.network");
+                if (key === "ram") return t("common.ram");
+                return type;
+              };
+
               if (
                 record.eventType === "USBConnected" &&
                 record.additionalData
               ) {
                 const { Label, Format, TotalSize, DriveType } =
                   record.additionalData;
+                const driveTypeTranslated = translateDriveType(DriveType);
                 return (
                   <div>
-                    <div style={{ fontWeight: 500 }}>{text}</div>
+                    <div style={{ fontWeight: 500 }}>
+                      {t("common.usbConnected")}: {record.deviceId}
+                    </div>
                     <div style={{ fontSize: 12, color: "#666" }}>
-                      {[Label, Format, TotalSize, DriveType]
+                      {[Label, Format, TotalSize, driveTypeTranslated]
                         .filter(Boolean)
                         .join(" | ")}
                     </div>
+                  </div>
+                );
+              }
+              if (record.eventType === "USBDisconnected") {
+                return (
+                  <div style={{ fontWeight: 500 }}>
+                    {t("common.usbDisconnected")}: {record.deviceId}
                   </div>
                 );
               }
@@ -612,15 +653,25 @@ export default function ActivityDetail() {
                   <div>
                     <div style={{ fontWeight: 500 }}>
                       {Action === "Created"
-                        ? "Файл скопирован на USB"
+                        ? t("common.fileCopiedToUsb")
                         : Action === "Renamed"
-                        ? "Файл переименован на USB"
+                        ? t("common.fileRenamedOnUsb")
                         : text}
                     </div>
                     <div style={{ fontSize: 12, color: "#666" }}>
-                      {Drive ? <div>Накопитель: {Drive}</div> : null}
-                      <div>Путь: {Path}</div>
-                      {FileName ? <div>Файл: {FileName}</div> : null}
+                      {Drive ? (
+                        <div>
+                          {t("common.drive")}: {Drive}
+                        </div>
+                      ) : null}
+                      <div>
+                        {t("common.path")}: {Path}
+                      </div>
+                      {FileName ? (
+                        <div>
+                          {t("common.file")}: {FileName}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -629,7 +680,7 @@ export default function ActivityDetail() {
             },
           },
         ]}
-        locale={{ emptyText: "Нет данных по USB" }}
+        locale={{ emptyText: t("common.noUsbData") }}
       />
       <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 600 }}>
         {t("common.lastScreenshots")}
@@ -666,16 +717,24 @@ export default function ActivityDetail() {
               </div>
             )}
             <div style={{ marginTop: 8, fontSize: 12 }}>
-              {new Date(s.timestamp).toLocaleString(
-                i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                {
-                  timeZone: "Asia/Tashkent",
-                  day: "2-digit",
-                  month: "short",
-                  hour: "2-digit",
-                  minute: "2-digit",
+              {(() => {
+                if (!s.timestamp) return "-";
+                try {
+                  const d = new Date(s.timestamp);
+                  if (isNaN(d.getTime())) return "-";
+                  return d.toLocaleString(
+                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                    {
+                      day: "2-digit",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    }
+                  );
+                } catch (e) {
+                  return "-";
                 }
-              )}
+              })()}
             </div>
           </div>
         ))}

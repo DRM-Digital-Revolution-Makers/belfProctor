@@ -18,7 +18,7 @@ import dayjs from "dayjs";
 const { Title } = Typography;
 
 export default function EventsList() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -160,27 +160,68 @@ export default function EventsList() {
           {
             title: t("common.time"),
             dataIndex: "timestamp",
-            render: (v) => dayjs(v).format("DD.MM.YYYY HH:mm:ss"),
+            render: (v) => {
+              if (!v) return "-";
+              try {
+                const d = new Date(v);
+                if (isNaN(d.getTime())) return "-";
+                d.setHours(d.getHours() - 2);
+                return d.toLocaleString(
+                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
+                  {
+                    day: "2-digit",
+                    month: "2-digit",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  }
+                );
+              } catch (e) {
+                return "-";
+              }
+            },
           },
           { title: t("common.type"), dataIndex: "eventType" },
           {
             title: t("common.description"),
             dataIndex: "description",
             render: (text, record) => {
+              const translateDriveType = (type) => {
+                if (!type) return "";
+                const key = type.toLowerCase();
+                if (key === "removable") return t("common.removable");
+                if (key === "fixed") return t("common.fixed");
+                if (key === "cdrom") return t("common.cdrom");
+                if (key === "network") return t("common.network");
+                if (key === "ram") return t("common.ram");
+                return type;
+              };
+
               if (
                 record.eventType === "USBConnected" &&
                 record.additionalData
               ) {
                 const { Label, Format, TotalSize, DriveType } =
                   record.additionalData;
+                const driveTypeTranslated = translateDriveType(DriveType);
                 return (
                   <div>
-                    <div style={{ fontWeight: "bold" }}>{text}</div>
+                    <div style={{ fontWeight: "bold" }}>
+                      {t("common.usbConnected")}: {record.deviceId}
+                    </div>
                     <div style={{ fontSize: "12px", color: "#666" }}>
-                      {[Label, Format, TotalSize, DriveType]
+                      {[Label, Format, TotalSize, driveTypeTranslated]
                         .filter(Boolean)
                         .join(" | ")}
                     </div>
+                  </div>
+                );
+              }
+              if (record.eventType === "USBDisconnected") {
+                return (
+                  <div style={{ fontWeight: "bold" }}>
+                    {t("common.usbDisconnected")}: {record.deviceId}
                   </div>
                 );
               }
@@ -191,14 +232,18 @@ export default function EventsList() {
                     <div>
                       <div style={{ fontWeight: "bold" }}>
                         {Action === "Created"
-                          ? "Файл скопирован на USB"
+                          ? t("common.fileCopiedToUsb")
                           : Action === "Renamed"
-                          ? "Файл переименован на USB"
+                          ? t("common.fileRenamedOnUsb")
                           : text}
                       </div>
                       <div style={{ fontSize: "12px", color: "#666" }}>
-                        <div>Накопитель: {Drive}</div>
-                        <div>Путь: {Path}</div>
+                        <div>
+                          {t("common.drive")}: {Drive}
+                        </div>
+                        <div>
+                          {t("common.path")}: {Path}
+                        </div>
                       </div>
                     </div>
                   );
