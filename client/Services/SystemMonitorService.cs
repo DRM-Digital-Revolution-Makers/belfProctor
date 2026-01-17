@@ -678,11 +678,14 @@ public class SystemMonitorService : ISystemMonitorService
             }
         }
 
-        if (title.IndexOf("Яндекс Браузер", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (title.IndexOf("Яндекс Браузер", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("Yandex Browser", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             var normalized = title
                 .Replace("— Яндекс Браузер", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace("- Яндекс Браузер", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("— Yandex Browser", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("- Yandex Browser", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Trim();
 
             var host = ExtractHostLikeToken(normalized);

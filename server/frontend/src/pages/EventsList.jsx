@@ -52,7 +52,7 @@ export default function EventsList() {
           list.map((c) => ({
             label: c.id,
             value: c.id,
-          }))
+          })),
         );
       })
       .catch((err) => console.error("Failed to load clients", err));
@@ -182,7 +182,7 @@ export default function EventsList() {
                   if (isNaN(d.getTime())) return "-";
                   d.setHours(d.getHours() - 2);
                   return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU"
+                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
                   );
                 } catch {
                   return "-";
@@ -193,6 +193,10 @@ export default function EventsList() {
               title: "Браузер",
               dataIndex: "processName",
               width: 120,
+              render: (processName) => {
+                if (processName === "browser") return "Yandex";
+                return processName || "-";
+              },
             },
             {
               title: "Заголовок / Ссылка",
@@ -294,9 +298,9 @@ export default function EventsList() {
                     hour: "2-digit",
                     minute: "2-digit",
                     second: "2-digit",
-                  }
+                  },
                 );
-              } catch (e) {
+              } catch {
                 return "-";
               }
             },
@@ -353,8 +357,8 @@ export default function EventsList() {
                         {Action === "Created"
                           ? t("common.fileCopiedToUsb")
                           : Action === "Renamed"
-                          ? t("common.fileRenamedOnUsb")
-                          : text}
+                            ? t("common.fileRenamedOnUsb")
+                            : text}
                       </div>
                       <div style={{ fontSize: "12px", color: "#666" }}>
                         <div>
