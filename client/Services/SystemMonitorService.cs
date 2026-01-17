@@ -622,17 +622,25 @@ public class SystemMonitorService : ISystemMonitorService
                                 var processName = "Unknown";
                                 try { processName = Process.GetProcessById((int)processId).ProcessName; } catch { }
 
+                                var additional = new Dictionary<string, object>
+                                {
+                                    ["WindowTitle"] = title,
+                                    ["ProcessId"] = processId
+                                };
+
+                                var url = TryExtractUrlFromTitle(title, processName);
+                                if (!string.IsNullOrWhiteSpace(url))
+                                {
+                                    additional["Url"] = url;
+                                }
+
                                 var systemEvent = new SystemEvent
                                 {
                                     Timestamp = DateTime.Now,
                                     EventType = SystemEventType.AppUsage,
                                     Description = $"User opened: {title}",
                                     ProcessName = processName,
-                                    AdditionalData = new Dictionary<string, object>
-                                    {
-                                        ["WindowTitle"] = title,
-                                        ["ProcessId"] = processId
-                                    }
+                                    AdditionalData = additional
                                 };
                                 
                                 AddEvent(systemEvent);
@@ -648,6 +656,97 @@ public class SystemMonitorService : ISystemMonitorService
                  // Ignore errors in loop
             }
         }
+    }
+
+    private static string? TryExtractUrlFromTitle(string title, string processName)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+
+        if (processName.Equals("chrome", StringComparison.OrdinalIgnoreCase))
+        {
+            const string chromeSuffix = " - Google Chrome";
+            var idx = title.IndexOf(chromeSuffix, StringComparison.OrdinalIgnoreCase);
+            if (idx > 0)
+            {
+                var core = title.Substring(0, idx);
+                var host = ExtractHostLikeToken(core);
+                if (!string.IsNullOrWhiteSpace(host))
+                {
+                    return host;
+                }
+            }
+        }
+
+        if (title.IndexOf("Яндекс Браузер", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            var normalized = title
+                .Replace("— Яндекс Браузер", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("- Яндекс Браузер", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Trim();
+
+            var host = ExtractHostLikeToken(normalized);
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                return host;
+            }
+        }
+
+        if (title.IndexOf("Opera", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            var operaSuffixes = new[]
+            {
+                " - Opera GX",
+                " - Opera"
+            };
+
+            foreach (var suffix in operaSuffixes)
+            {
+                var idx = title.IndexOf(suffix, StringComparison.OrdinalIgnoreCase);
+                if (idx > 0)
+                {
+                    var core = title.Substring(0, idx);
+                    var host = ExtractHostLikeToken(core);
+                    if (!string.IsNullOrWhiteSpace(host))
+                    {
+                        return host;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractHostLikeToken(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var separators = new[] { ' ', '–', '-', '—', '|' };
+        var tokens = text.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+
+        for (int i = tokens.Length - 1; i >= 0; i--)
+        {
+            var token = tokens[i].Trim();
+            if (token.Contains('.') && !token.Contains(' '))
+            {
+                var cleaned = token.TrimEnd('.', ',', ';', ':', '!', '?', ')', ']', '»');
+                cleaned = cleaned.TrimStart('(', '[', '«');
+                if (!string.IsNullOrWhiteSpace(cleaned))
+                {
+                    return cleaned;
+                }
+            }
+        }
+
+        var trimmed = text.Trim();
+        if (trimmed.Contains('.') && !trimmed.Contains(' '))
+        {
+            return trimmed;
+        }
+
+        return null;
     }
 
     [DllImport("user32.dll")]
