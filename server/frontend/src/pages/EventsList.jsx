@@ -10,10 +10,13 @@ import {
   Empty,
   Tag,
   Select,
+  Button,
+  Modal,
 } from "antd";
 import { authFetch } from "../dataProvider.js";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
+import { GlobalOutlined } from "@ant-design/icons";
 
 const { Title } = Typography;
 
@@ -30,6 +33,11 @@ export default function EventsList() {
   // Client filter
   const [clientFilter, setClientFilter] = React.useState(null);
   const [clientOptions, setClientOptions] = React.useState([]);
+
+  // Browser History Modal
+  const [browserHistoryOpen, setBrowserHistoryOpen] = React.useState(false);
+  const [browserEvents, setBrowserEvents] = React.useState([]);
+  const [browserLoading, setBrowserLoading] = React.useState(false);
 
   // New state for apps
   const [appStats, setAppStats] = React.useState([]);
@@ -58,7 +66,37 @@ export default function EventsList() {
         }
       })
       .catch((err) => console.error("Failed to load stats", err));
-  }, []); // Reload on mount. Ideally should reload periodically or when filter changes if we want to filter stats by client.
+  }, []); // Reload on mount
+
+  const loadBrowserHistory = React.useCallback(async () => {
+    if (!clientFilter) return;
+    setBrowserLoading(true);
+    try {
+      // Fetch more events to find browser usage
+      const params = new URLSearchParams({
+        page: "1",
+        pageSize: "1000",
+        clientId: clientFilter,
+      });
+      const res = await authFetch(`${API_URL}/events?${params.toString()}`);
+      const json = await res.json();
+      const allEvents = json.data || [];
+
+      // Show all AppUsage events; browser type виден по processName
+      const history = allEvents.filter((e) => e.eventType === "AppUsage");
+      setBrowserEvents(history);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBrowserLoading(false);
+    }
+  }, [API_URL, clientFilter]);
+
+  React.useEffect(() => {
+    if (browserHistoryOpen) {
+      loadBrowserHistory();
+    }
+  }, [browserHistoryOpen, loadBrowserHistory]);
 
   const load = () => {
     const params = new URLSearchParams({
@@ -86,22 +124,103 @@ export default function EventsList() {
 
   return (
     <List title={t("events.title")}>
-      <Select
-        showSearch
-        style={{ width: 300, marginBottom: 16 }}
-        placeholder="Фильтр по клиенту"
-        allowClear
-        options={clientOptions}
-        value={clientFilter}
-        filterOption={(input, option) =>
-          (option?.label ?? "").toLowerCase().includes(input.toLowerCase()) ||
-          (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
-        }
-        onChange={(val) => {
-          setClientFilter(val);
-          setPage(1); // Reset to first page on filter change
+      <div
+        style={{
+          display: "flex",
+          gap: 16,
+          alignItems: "center",
+          marginBottom: 16,
         }}
-      />
+      >
+        <Select
+          showSearch
+          style={{ width: 300 }}
+          placeholder="Фильтр по клиенту"
+          allowClear
+          options={clientOptions}
+          value={clientFilter}
+          filterOption={(input, option) =>
+            (option?.label ?? "").toLowerCase().includes(input.toLowerCase()) ||
+            (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+          }
+          onChange={(val) => {
+            setClientFilter(val);
+            setPage(1); // Reset to first page on filter change
+          }}
+        />
+        {clientFilter && (
+          <Button
+            icon={<GlobalOutlined />}
+            onClick={() => setBrowserHistoryOpen(true)}
+          >
+            История браузера
+          </Button>
+        )}
+      </div>
+
+      <Modal
+        title={`История браузера: ${clientFilter}`}
+        open={browserHistoryOpen}
+        onCancel={() => setBrowserHistoryOpen(false)}
+        width={800}
+        footer={null}
+      >
+        <Table
+          loading={browserLoading}
+          dataSource={browserEvents}
+          rowKey="id"
+          pagination={{ pageSize: 10 }}
+          columns={[
+            {
+              title: t("common.time"),
+              dataIndex: "timestamp",
+              width: 180,
+              render: (v) => {
+                if (!v) return "-";
+                try {
+                  const d = new Date(v);
+                  if (isNaN(d.getTime())) return "-";
+                  d.setHours(d.getHours() - 2);
+                  return d.toLocaleString(
+                    i18n.language === "uz" ? "uz-UZ" : "ru-RU"
+                  );
+                } catch {
+                  return "-";
+                }
+              },
+            },
+            {
+              title: "Браузер",
+              dataIndex: "processName",
+              width: 120,
+            },
+            {
+              title: "Заголовок / Ссылка",
+              dataIndex: "additionalData",
+              render: (data) => {
+                const title = data?.WindowTitle || "-";
+                const url = data?.Url;
+                return (
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{title}</div>
+                    {url && (
+                      <div style={{ fontSize: 12, color: "#1890ff" }}>
+                        <a
+                          href={url.startsWith("http") ? url : `https://${url}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {url}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                );
+              },
+            },
+          ]}
+        />
+      </Modal>
 
       {/* App Usage Summary Block */}
       <Card style={{ marginBottom: 24 }}>

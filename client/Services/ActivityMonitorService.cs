@@ -1,5 +1,8 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using BelfProctor.Models;
+
 namespace BelfProctor.Services;
 
 public class ActivityMonitorService : IActivityMonitorService
@@ -15,16 +18,21 @@ public class ActivityMonitorService : IActivityMonitorService
     private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
     private readonly ILogger<ActivityMonitorService> _logger;
-    private readonly TimeSpan _inactivityThreshold = TimeSpan.FromMinutes(3);
+    private readonly ProctorSettings _settings;
+    private readonly TimeSpan _inactivityThreshold;
     private readonly object _lock = new();
     private System.Threading.Timer? _timer;
     private bool _active;
     private readonly System.Diagnostics.Stopwatch _activeStopwatch = new();
     private readonly System.Diagnostics.Stopwatch _inactiveStopwatch = new();
 
-    public ActivityMonitorService(ILogger<ActivityMonitorService> logger)
+    public ActivityMonitorService(
+        ILogger<ActivityMonitorService> logger,
+        IOptions<ProctorSettings> settings)
     {
         _logger = logger;
+        _settings = settings.Value;
+        _inactivityThreshold = TimeSpan.FromMinutes(_settings.InactivityThresholdMinutes > 0 ? _settings.InactivityThresholdMinutes : 3);
     }
 
     public bool IsUserActive => _active;

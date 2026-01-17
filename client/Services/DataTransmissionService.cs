@@ -7,6 +7,8 @@ using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using BelfProctor.Models;
 using System.Net.NetworkInformation;
+using System.Net.Http;
+using System.IO;
 
 namespace BelfProctor.Services;
 

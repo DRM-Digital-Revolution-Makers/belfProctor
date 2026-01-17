@@ -7,6 +7,7 @@ using BelfProctor.Models;
 using System.Windows.Forms;
 using Microsoft.Extensions.Options;
 using System.Globalization;
+using System.IO;
 
 namespace BelfProctor;
 
@@ -114,6 +115,7 @@ public class Program
             SanitizeInt("DirectoryListingIntervalMs", 600000);
             SanitizeInt("MaxScreenshotAge", 7);
             SanitizeInt("ScreenshotRetentionMinutes", 60);
+            SanitizeInt("InactivityThresholdMinutes", 3);
             if (overrides.Count > 0)
             {
                 builder.Configuration.AddInMemoryCollection(overrides);
@@ -145,6 +147,7 @@ public class Program
                     DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
                     MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
                     ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
+                    InactivityThresholdMinutes = int.Parse(overrides["ProctorSettings:InactivityThresholdMinutes"]),
                     EncryptionKey = section["EncryptionKey"] ?? string.Empty,
                     ScreenshotPath = section["ScreenshotPath"] ?? string.Empty,
                     LogPath = section["LogPath"] ?? string.Empty,
@@ -176,6 +179,7 @@ public class Program
                 DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
                 MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
                 ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
+                InactivityThresholdMinutes = int.Parse(overrides["ProctorSettings:InactivityThresholdMinutes"]),
                 EncryptionKey = sanitizedSection["EncryptionKey"] ?? string.Empty,
                 ScreenshotPath = sanitizedSection["ScreenshotPath"] ?? string.Empty,
                 LogPath = sanitizedSection["LogPath"] ?? string.Empty,

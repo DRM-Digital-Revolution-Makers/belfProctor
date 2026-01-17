@@ -259,21 +259,25 @@ export default function ClientsList() {
         okText={t("common.create")}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="id" label="ClientId" rules={[{ required: true }]}>
+          <Form.Item label="ClientId" required>
             <div style={{ display: "flex", gap: 8 }}>
-              <Input />
+              <Form.Item name="id" noStyle rules={[{ required: true }]}>
+                <Input />
+              </Form.Item>
               <Button onClick={() => form.setFieldValue("id", genId())}>
                 {t("common.gen")}
               </Button>
             </div>
           </Form.Item>
-          <Form.Item
-            name="encryptionKey"
-            label="EncryptionKey"
-            rules={[{ required: true }]}
-          >
+          <Form.Item label="EncryptionKey" required>
             <div style={{ display: "flex", gap: 8 }}>
-              <Input />
+              <Form.Item
+                name="encryptionKey"
+                noStyle
+                rules={[{ required: true }]}
+              >
+                <Input />
+              </Form.Item>
               <Button
                 onClick={() => form.setFieldValue("encryptionKey", genKey())}
               >

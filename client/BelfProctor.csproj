@@ -11,6 +11,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnableDefaultItems>false</EnableDefaultItems>
     <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
     <NuGetAudit>false</NuGetAudit>
     <Authors>System Maintenance</Authors>
     <Company>System Maintenance Provider</Company>

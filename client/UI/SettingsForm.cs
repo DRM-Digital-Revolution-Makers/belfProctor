@@ -6,6 +6,8 @@ using Newtonsoft.Json.Linq;
 using BelfProctor.Models;
 using System.Security.Principal;
 using System.Security.Cryptography;
+using System.IO;
+using System.Net.Http;
 
 using Microsoft.Win32;
 
@@ -41,7 +43,7 @@ public class SettingsForm : Form
     private Button _save = new();
     private Button _cancel = new();
 
-    public SettingsForm(IConfiguration configuration, ProctorSettings settings, string[] configPaths)
+    public SettingsForm(IConfiguration configuration, ProctorSettings settings, string?[] configPaths)
     {
         _configuration = configuration;
         _settings = settings;

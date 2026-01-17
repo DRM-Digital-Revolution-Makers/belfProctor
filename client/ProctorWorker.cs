@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using BelfProctor.Models;
 using BelfProctor.Services;
 using Timer = System.Threading.Timer;
+using System.IO;
 
 namespace BelfProctor;
 
@@ -21,6 +22,7 @@ public class ProctorWorker : BackgroundService
     private readonly IActivityMonitorService _activityMonitorService;
     private Timer? _dirListingTimer;
     private Timer? _heartbeatTimer;
+    private Timer? _activityReportTimer;
 
     public ProctorWorker(
         ILogger<ProctorWorker> logger,
@@ -85,6 +87,10 @@ public class ProctorWorker : BackgroundService
         // Heartbeat with adaptive interval
         _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
         
+        // Activity reporting (every 1 minute)
+        _activityReportTimer = new Timer(async _ => await SendActivitySnapshot(), null, 
+            TimeSpan.Zero, TimeSpan.FromMinutes(1));
+
         var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
             TimeSpan.Zero, TimeSpan.FromMilliseconds(policyInterval));
@@ -247,13 +253,16 @@ public class ProctorWorker : BackgroundService
 
     private void OnActivityChanged(object? sender, bool isActive)
     {
+        _ = Task.Run(async () => await SendActivitySnapshot());
+    }
+
+    private async Task SendActivitySnapshot()
+    {
+        var isActive = _activityMonitorService.IsUserActive;
         var ms = (long)_activityMonitorService.ActiveElapsed.TotalMilliseconds;
         var ims = (long)_activityMonitorService.InactiveElapsed.TotalMilliseconds;
-        _ = Task.Run(async () =>
-        {
-            try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
-            catch { }
-        });
+        try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
+        catch { }
     }
 
     private void OnSystemEventOccurred(object? sender, SystemEvent e)
