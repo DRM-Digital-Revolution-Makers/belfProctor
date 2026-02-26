@@ -1,8 +1,14 @@
 import { Router } from "express";
-import { decryptAes256CbcPrefixedIv } from "../encryption";
-import { appendEvent, upsertAppStat, getAppStats, getClient } from "../store";
 import fs from "fs";
 import path from "path";
+import { decryptAes256CbcPrefixedIv } from "../encryption";
+import {
+  appendEvent,
+  upsertAppStat,
+  getAppStats,
+  getClient,
+  getClientEvents,
+} from "../store";
 
 const router = Router();
 
@@ -27,7 +33,7 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "X-Client-Id header required" });
 
     let encryptionKey = "";
-    const client = getClient(clientId);
+    const client = await getClient(clientId);
     let keysToTry: string[] = [];
 
     if (client && client.encryptionKey) {
@@ -51,7 +57,7 @@ router.post("/", async (req, res) => {
     for (const key of keysToTry) {
       try {
         decryptedJson = decryptAes256CbcPrefixedIv(encrypted, key).toString(
-          "utf-8"
+          "utf-8",
         );
         JSON.parse(decryptedJson); // Validate JSON
         usedKey = key;
@@ -63,14 +69,14 @@ router.post("/", async (req, res) => {
 
     if (!usedKey) {
       console.error(
-        `[Events] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`
+        `[Events] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
       return res.status(400).json({ message: "Decryption failed" });
     }
 
     const payload = JSON.parse(decryptedJson);
 
-    const processPayload = (p: any) => {
+    const processPayload = async (p: any) => {
       const rawType = p.EventType ?? p.eventType;
       const eventType =
         typeof rawType === "number" ? EVENT_TYPE_MAP[rawType] : rawType;
@@ -82,7 +88,7 @@ router.post("/", async (req, res) => {
         (eventType === "ProcessStarted" || eventType === "AppUsage") &&
         processName
       ) {
-        upsertAppStat(clientId, processName, timestamp);
+        await upsertAppStat(clientId, processName, timestamp);
       }
 
       // Hide ProcessStarted from main log (noise reduction)
@@ -104,14 +110,14 @@ router.post("/", async (req, res) => {
     };
 
     if (Array.isArray(payload)) {
-      payload.forEach((p) => {
-        const event = processPayload(p);
-        if (event) appendEvent(event);
-      });
+      for (const p of payload) {
+        const event = await processPayload(p);
+        if (event) await appendEvent(event);
+      }
       return res.json({ count: payload.length });
     } else {
-      const event = processPayload(payload);
-      if (event) appendEvent(event);
+      const event = await processPayload(payload);
+      if (event) await appendEvent(event);
       return res.json({ id: "file-saved" });
     }
   } catch (e) {
@@ -123,7 +129,7 @@ router.post("/", async (req, res) => {
 router.get("/stats", async (req, res) => {
   // Return aggregated app stats
   // In NO_DB mode, read from apps.json
-  const stats = getAppStats();
+  const stats = await getAppStats();
   // Sort by count desc
   stats.sort((a, b) => b.count - a.count);
   return res.json(stats);
@@ -131,8 +137,8 @@ router.get("/stats", async (req, res) => {
 
 router.get("/", async (req, res) => {
   const { page = "1", pageSize = "20", clientId } = req.query as any;
-  const p = parseInt(page);
-  const ps = parseInt(pageSize);
+  const p = parseInt(page, 10);
+  const ps = Math.min(parseInt(pageSize, 10) || 20, 50);
 
   const eventsDir = path.join(process.cwd(), "storage", "events");
   if (!fs.existsSync(eventsDir)) {
@@ -140,40 +146,16 @@ router.get("/", async (req, res) => {
   }
 
   let allEvents: any[] = [];
-
   try {
     if (clientId) {
-      const filePath = path.join(eventsDir, `${clientId}.jsonl`);
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const lines = content.split("\n").filter((l) => l.trim());
-        allEvents = lines
-          .map((l) => {
-            try {
-              return JSON.parse(l);
-            } catch {
-              return null;
-            }
-          })
-          .filter((e) => e !== null) as any[];
-      }
+      allEvents = getClientEvents(clientId, 20, 4096);
     } else {
       const files = fs
         .readdirSync(eventsDir)
         .filter((f) => f.endsWith(".jsonl"));
       for (const f of files) {
-        try {
-          const content = fs.readFileSync(path.join(eventsDir, f), "utf-8");
-          const lines = content.split("\n").filter((l) => l.trim());
-          // Optimization: only parse the last 200 lines per file
-          const lastLines = lines.slice(-200);
-          lastLines.forEach((l) => {
-            try {
-              const obj = JSON.parse(l);
-              allEvents.push(obj);
-            } catch {}
-          });
-        } catch {}
+        const id = f.replace(/\.jsonl$/, "");
+        allEvents.push(...getClientEvents(id, 8, 2048));
       }
     }
   } catch (e) {
@@ -181,7 +163,7 @@ router.get("/", async (req, res) => {
   }
 
   allEvents.sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
   );
 
   const total = allEvents.length;

@@ -35,7 +35,7 @@ fs.mkdirSync(path.join(UPLOAD_DIR, "reports"), { recursive: true });
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-  })
+  }),
 );
 const corsOptions: cors.CorsOptions = {
   origin: true,
@@ -52,26 +52,33 @@ const corsOptions: cors.CorsOptions = {
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
-app.use(morgan("combined"));
-app.use(express.json({ limit: "10mb" }));
+// Skip morgan in prod to avoid per-request allocation (flat 50-70MB for 20 clients)
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("combined"));
+}
+app.use(express.json({ limit: "256kb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiter for ingestion endpoints
-const limiter = rateLimit({ windowMs: 60 * 1000, max: 5000 });
+// Rate limiter: 600 req/min (50+ clients). Env RATE_LIMIT_MAX overrides.
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "600", 10);
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number.isFinite(RATE_LIMIT_MAX) ? RATE_LIMIT_MAX : 600,
+});
 app.use("/api/", limiter);
 
-// Raw parser for octet-stream endpoints
+// Raw parsers: minimal buffers for ingestion
 app.use(
   "/api/events",
-  express.raw({ type: "application/octet-stream", limit: "20mb" })
+  express.raw({ type: "application/octet-stream", limit: "64kb" }),
 );
 app.use(
   "/api/heartbeat",
-  express.raw({ type: "application/octet-stream", limit: "5mb" })
+  express.raw({ type: "application/octet-stream", limit: "16kb" }),
 );
 app.use(
   "/api/activity",
-  express.raw({ type: "application/octet-stream", limit: "2mb" })
+  express.raw({ type: "application/octet-stream", limit: "32kb" }),
 );
 // Use raw parser only for the specific octet-stream endpoint to avoid breaking JSON admin endpoints under /api/commands
 
@@ -84,26 +91,28 @@ app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 
+// Lazy load: ~200KB saved until first request (flat memory for 20 clients)
+let _legacyTimesheet: any = null;
+app.get("/api/legacy-timesheet", requireAuth, async (_req, res) => {
+  if (!_legacyTimesheet) {
+    const m = await import("./data/legacyTimesheet");
+    _legacyTimesheet = m.legacyTimesheet;
+  }
+  res.json(_legacyTimesheet);
+});
+
 // Serve frontend build
 const LOCAL_PUBLIC = path.join(process.cwd(), "public");
 const FRONT_DIST = path.join(process.cwd(), "..", "frontend", "dist");
 
-console.log("DEBUG: Current working directory:", process.cwd());
-console.log("DEBUG: Looking for static files at:", LOCAL_PUBLIC);
-
 let staticDir = "";
-if (fs.existsSync(LOCAL_PUBLIC)) {
-  console.log("DEBUG: Found local public folder");
-  staticDir = LOCAL_PUBLIC;
-} else if (fs.existsSync(FRONT_DIST)) {
-  console.log("DEBUG: Found frontend dist folder at:", FRONT_DIST);
+if (fs.existsSync(FRONT_DIST)) {
   staticDir = FRONT_DIST;
-} else {
-  console.log("DEBUG: No static files found!");
+} else if (fs.existsSync(LOCAL_PUBLIC)) {
+  staticDir = LOCAL_PUBLIC;
 }
 
 if (staticDir) {
-  console.log("DEBUG: Serving static files from:", staticDir);
   app.use(express.static(staticDir));
   app.get("/", (_req, res) => {
     res.sendFile(path.join(staticDir, "index.html"));
@@ -117,7 +126,7 @@ if (staticDir) {
 // Command results (JSON, encrypted octet-stream)
 app.post(
   "/api/commands/:id/json",
-  express.raw({ type: "application/octet-stream", limit: "20mb" }),
+  express.raw({ type: "application/octet-stream", limit: "512kb" }),
   async (req, res) => {
     try {
       const commandId = req.params.id;
@@ -125,7 +134,7 @@ app.post(
       if (!clientId)
         return res.status(400).json({ message: "X-Client-Id header required" });
 
-      const client = getClient(clientId);
+      const client = await getClient(clientId);
       if (!client || !client.encryptionKey) {
         return res
           .status(400)
@@ -137,7 +146,7 @@ app.post(
         : Buffer.from([]);
       const decryptedJson = decryptAes256CbcPrefixedIv(
         encrypted,
-        client.encryptionKey
+        client.encryptionKey,
       ).toString("utf-8");
 
       const dir = path.join(UPLOAD_DIR, "commands", clientId);
@@ -151,7 +160,7 @@ app.post(
       console.error(e);
       res.status(500).json({ message: "Failed to ingest command result" });
     }
-  }
+  },
 );
 
 // Admin: read latest command result by id (JSON)
@@ -228,10 +237,10 @@ async function ensureAdmin() {
   const email = process.env.DEFAULT_ADMIN_EMAIL;
   const password = process.env.DEFAULT_ADMIN_PASSWORD;
   if (!email || !password) return;
-  const existing = getUser(email);
+  const existing = await getUser(email);
   if (!existing) {
     const passwordHash = await bcrypt.hash(password, 10);
-    saveUser({ email, passwordHash, role: "ADMIN" });
+    await saveUser({ email, passwordHash, role: "ADMIN" });
     console.log(`Created default admin: ${email}`);
   }
 }
@@ -243,9 +252,13 @@ const server = app.listen(PORT, HOST as any, () => {
   console.log(`Backend listening on http://${HOST}:${PORT}`);
 });
 
-// WebSocket server for commands
+// WebSocket: no compression, 64KB max payload (flat memory for 20 clients)
 const clients = new Map<string, WebSocket>();
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  perMessageDeflate: false,
+  maxPayload: 65536,
+});
 wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);

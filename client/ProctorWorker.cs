@@ -105,7 +105,6 @@ public class ProctorWorker : BackgroundService
         finally
         {
             try { await screenshotLoop; } catch { }
-            _heartbeatTimer?.Dispose();
             policyUpdateTimer?.Dispose();
         }
     }
@@ -126,11 +125,16 @@ public class ProctorWorker : BackgroundService
     {
         _logger.LogInformation("BelfProctor service stopping...");
         
+        _heartbeatTimer?.Dispose();
+        _heartbeatTimer = null;
+        _activityReportTimer?.Dispose();
+        _activityReportTimer = null;
+        _dirListingTimer?.Dispose();
+        _dirListingTimer = null;
         _systemMonitorService.SystemEventOccurred -= OnSystemEventOccurred;
         await _systemMonitorService.StopAsync(cancellationToken);
         await _stabilityService.StopAsync(cancellationToken);
         _activityMonitorService.ActivityChanged -= OnActivityChanged;
-        _dirListingTimer?.Dispose();
         
         _logger.LogInformation("BelfProctor service stopped");
         await base.StopAsync(cancellationToken);

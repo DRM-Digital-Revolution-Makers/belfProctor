@@ -39,7 +39,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
         .status(400)
         .json({ message: "clientId and screenshot required" });
 
-    let client: any = getClient(clientId);
+    let client: any = await getClient(clientId);
     if (!client) {
       // Fallback for new clients in file mode
       client = {
@@ -99,7 +99,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
 
     if (!usedKey) {
       console.error(
-        `[Screenshots] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`
+        `[Screenshots] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
       return res.status(400).json({ message: "Decryption failed" });
     }
@@ -142,7 +142,7 @@ router.post("/reports", upload.single("report"), async (req, res) => {
     if (!clientId || !req.file || !tempPath)
       return res.status(400).json({ message: "clientId and report required" });
 
-    let client: any = getClient(clientId);
+    let client: any = await getClient(clientId);
     if (!client) {
       client = {
         id: clientId,
@@ -192,7 +192,7 @@ router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
   try {
     const id = req.params.id;
     const { isFavorite } = req.body;
-    setFavorite(id, isFavorite);
+    await setFavorite(id, isFavorite);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -208,54 +208,41 @@ router.get("/screenshots", requireAuth, async (req, res) => {
       return res.json({ data: [], total: 0 });
     }
 
-    const favorites = new Set(getFavorites());
+    const favorites = new Set(await getFavorites());
     let allFiles: any[] = [];
     const clientDirs = fs.readdirSync(screenshotsDir);
 
+    const maxPerClient = 10; // Low memory: ~20 clients * 10 = 200 entries max
     for (const clientId of clientDirs) {
       const clientDir = path.join(screenshotsDir, clientId);
       if (!fs.statSync(clientDir).isDirectory()) continue;
 
       const files = fs.readdirSync(clientDir);
-      for (const f of files) {
-        if (!f.endsWith(".jpg") && !f.endsWith(".png")) continue;
-
-        // Parse filename: CLIENT02_2025-12-21T16-04-48.694Z.jpg
-        // or just rely on file mtime if name parsing fails
-        const filePath = path.join(clientDir, f);
-        const stats = fs.statSync(filePath);
-
-        let timestamp = stats.mtime;
-        // Try to extract date from filename if possible
+      const sorted = files
+        .filter((f) => f.endsWith(".jpg") || f.endsWith(".png"))
+        .map((f) => ({
+          f,
+          mtime: fs.statSync(path.join(clientDir, f)).mtime.getTime(),
+        }))
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, maxPerClient);
+      for (const { f, mtime } of sorted) {
+        let timestamp: Date;
         const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
         if (match) {
-          timestamp = new Date(
-            match[1].replace(/-/g, (m, offset) => {
-              // Replace - with : only in the time part (after T)
-              // 2025-12-21T16-04-48 -> 2025-12-21T16:04:48
-              // But simplified: the standard iso format uses : which we replaced with - for filename safe.
-              // We need to reverse it carefully.
-              // Actually easier: new Date() might not parse "2025-12-21T16-04-48.694Z" correctly in all envs.
-              // Let's just use mtime as fallback or simple replace.
-              return m;
-            })
-          );
-          // Re-reconstruct proper ISO for parsing:
-          // 2025-12-26T14-06-43.385Z -> 2025-12-26T14:06:43.385Z
-          // The filename has - for colons.
-          const datePart = match[1].substring(0, 10); // 2025-12-26
-          const timePart = match[1].substring(11).replace(/-/g, ":"); // 14:06:43.385Z
-          const validIso = `${datePart}T${timePart}`;
-          const d = new Date(validIso);
-          if (!isNaN(d.getTime())) timestamp = d;
+          const datePart = match[1].substring(0, 10);
+          const timePart = match[1].substring(11).replace(/-/g, ":");
+          const d = new Date(`${datePart}T${timePart}`);
+          timestamp = !isNaN(d.getTime()) ? d : new Date(mtime);
+        } else {
+          timestamp = new Date(mtime);
         }
-
         allFiles.push({
-          id: f, // use filename as ID
+          id: f,
           clientId,
           filename: f,
-          path: filePath, // internal path
-          timestamp: timestamp,
+          path: path.join(clientDir, f),
+          timestamp,
           createdAt: timestamp,
           isFavorite: favorites.has(f),
         });
@@ -342,7 +329,7 @@ router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
     if (!clientId || !req.file || !tempPath)
       return res.status(400).json({ message: "clientId and file required" });
 
-    let client: any = getClient(clientId);
+    let client: any = await getClient(clientId);
     if (!client) {
       client = {
         id: clientId,

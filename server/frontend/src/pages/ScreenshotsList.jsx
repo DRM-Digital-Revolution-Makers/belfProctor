@@ -78,8 +78,8 @@ export default function ScreenshotsList() {
       if (res.ok) {
         setItems((prev) =>
           prev.map((item) =>
-            item.id === id ? { ...item, isFavorite: newStatus } : item
-          )
+            item.id === id ? { ...item, isFavorite: newStatus } : item,
+          ),
         );
       }
     } catch (e) {
@@ -147,7 +147,7 @@ export default function ScreenshotsList() {
               year: "numeric",
               hour: "2-digit",
               minute: "2-digit",
-            }
+            },
           ),
       },
       {
@@ -174,7 +174,7 @@ export default function ScreenshotsList() {
         ),
       },
     ],
-    [t, i18n.language, filters, clients, items]
+    [t, i18n.language, filters, clients, items],
   );
 
   return (

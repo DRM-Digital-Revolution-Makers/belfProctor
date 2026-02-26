@@ -72,7 +72,6 @@ export default function EventsList() {
     if (!clientFilter) return;
     setBrowserLoading(true);
     try {
-      // Fetch more events to find browser usage
       const params = new URLSearchParams({
         page: "1",
         pageSize: "1000",
@@ -82,8 +81,21 @@ export default function EventsList() {
       const json = await res.json();
       const allEvents = json.data || [];
 
-      // Show all AppUsage events; browser type виден по processName
-      const history = allEvents.filter((e) => e.eventType === "AppUsage");
+      const browserNames = new Set([
+        "browser", // Yandex
+        "chrome",
+        "msedge",
+        "firefox",
+        "opera",
+        "opera_gx",
+      ]);
+
+      const history = allEvents.filter((e) => {
+        if (e.eventType !== "AppUsage") return false;
+        const name = (e.processName || "").toLowerCase();
+        return browserNames.has(name);
+      });
+
       setBrowserEvents(history);
     } catch (e) {
       console.error(e);
@@ -110,10 +122,14 @@ export default function EventsList() {
     authFetch(`${API_URL}/events?${params.toString()}`)
       .then((r) => r.json())
       .then((json) => {
-        const data = json.data || [];
+        const raw = json.data || [];
+        const data = raw.filter(
+          (e) =>
+            e.eventType !== "NetworkConnection" &&
+            e.eventType !== "NetworkDisconnection",
+        );
         setItems(data);
         setTotal(json.total || 0);
-        // Removed client-side aggregation
       })
       .catch(() => {
         setItems([]);
@@ -135,7 +151,7 @@ export default function EventsList() {
         <Select
           showSearch
           style={{ width: 300 }}
-          placeholder="Фильтр по клиенту"
+          placeholder={t("common.filterByClient")}
           allowClear
           options={clientOptions}
           value={clientFilter}
@@ -153,13 +169,13 @@ export default function EventsList() {
             icon={<GlobalOutlined />}
             onClick={() => setBrowserHistoryOpen(true)}
           >
-            История браузера
+            {t("common.browserHistory")}
           </Button>
         )}
       </div>
 
       <Modal
-        title={`История браузера: ${clientFilter}`}
+        title={`${t("common.browserHistory")}: ${clientFilter}`}
         open={browserHistoryOpen}
         onCancel={() => setBrowserHistoryOpen(false)}
         width={800}
@@ -190,7 +206,7 @@ export default function EventsList() {
               },
             },
             {
-              title: "Браузер",
+              title: t("common.browser"),
               dataIndex: "processName",
               width: 120,
               render: (processName) => {
@@ -199,7 +215,7 @@ export default function EventsList() {
               },
             },
             {
-              title: "Заголовок / Ссылка",
+              title: t("common.titleUrl"),
               dataIndex: "additionalData",
               render: (data) => {
                 const title = data?.WindowTitle || "-";
@@ -239,6 +255,10 @@ export default function EventsList() {
             {appStats.slice(0, 8).map((app) => {
               const diffMins = dayjs().diff(dayjs(app.lastSeen), "minute");
               const isActive = diffMins < 10;
+              const title =
+                app.processName === "browser"
+                  ? "Yandex"
+                  : app.processName || app.name;
               return (
                 <Col
                   key={`${app.clientId}_${app.processName}`}
@@ -253,8 +273,12 @@ export default function EventsList() {
                     style={{ background: "#fafafa" }}
                   >
                     <Statistic
-                      title={app.processName || app.name}
-                      value={isActive ? "Активно" : `${diffMins} мин. назад`}
+                      title={title}
+                      value={
+                        isActive
+                          ? t("common.active")
+                          : `${diffMins} ${t("common.minsAgo")}`
+                      }
                       valueStyle={{
                         color: isActive ? "#52c41a" : undefined,
                         fontSize: 16,
@@ -375,7 +399,14 @@ export default function EventsList() {
               return text;
             },
           },
-          { title: t("common.process"), dataIndex: "processName" },
+          {
+            title: t("common.process"),
+            dataIndex: "processName",
+            render: (name) => {
+              if (name === "browser") return "Yandex";
+              return name || "-";
+            },
+          },
           { title: t("common.device"), dataIndex: "deviceId" },
           { title: t("common.network"), dataIndex: "networkAddress" },
         ]}

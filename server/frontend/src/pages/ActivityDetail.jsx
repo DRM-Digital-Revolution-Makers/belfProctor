@@ -27,7 +27,7 @@ export default function ActivityDetail() {
   const [dirError, setDirError] = React.useState(null);
   const [retryTrigger, setRetryTrigger] = React.useState(0);
   const [authToken, setAuthToken] = React.useState(
-    () => localStorage.getItem("token") || ""
+    () => localStorage.getItem("token") || "",
   );
   const [imgTs, setImgTs] = React.useState(() => Date.now());
   const [driveOptions, setDriveOptions] = React.useState([]);
@@ -90,7 +90,7 @@ export default function ActivityDetail() {
 
         try {
           const res = await authFetch(
-            `${API_URL}/commands/${state.cmdId}/file/latest`
+            `${API_URL}/commands/${state.cmdId}/file/latest`,
           );
           if (res.ok && res.status === 200) {
             // Download ready
@@ -188,7 +188,7 @@ export default function ActivityDetail() {
         (ev.eventType === "USBConnected" ||
           ev.eventType === "USBDisconnected" ||
           ev.eventType === "FileAccess") &&
-        (ev.deviceId || (ev.additionalData && ev.additionalData.Drive))
+        (ev.deviceId || (ev.additionalData && ev.additionalData.Drive)),
     );
     setUsbEvents(usbOnly);
     const sParams = new URLSearchParams({ page: "1", pageSize: "6", clientId });
@@ -596,7 +596,7 @@ export default function ActivityDetail() {
                     year: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
-                  }
+                  },
                 );
               } catch (e) {
                 return "-";
@@ -655,8 +655,8 @@ export default function ActivityDetail() {
                       {Action === "Created"
                         ? t("common.fileCopiedToUsb")
                         : Action === "Renamed"
-                        ? t("common.fileRenamedOnUsb")
-                        : text}
+                          ? t("common.fileRenamedOnUsb")
+                          : text}
                     </div>
                     <div style={{ fontSize: 12, color: "#666" }}>
                       {Drive ? (
@@ -729,7 +729,7 @@ export default function ActivityDetail() {
                       month: "short",
                       hour: "2-digit",
                       minute: "2-digit",
-                    }
+                    },
                   );
                 } catch (e) {
                   return "-";
@@ -755,7 +755,7 @@ export default function ActivityDetail() {
           style={{ minWidth: 160 }}
           value={rootPath}
           options={(driveOptions.length ? driveOptions : [rootPath]).map(
-            (d) => ({ label: d, value: d })
+            (d) => ({ label: d, value: d }),
           )}
           onChange={handleDriveChange}
         />

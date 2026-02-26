@@ -12,6 +12,9 @@ export default function ActivitiesList() {
     `http://${window.location.hostname}:8080/api`;
   const [items, setItems] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
+  const [serverTime, setServerTime] = React.useState(null);
+  const isDebug =
+    typeof window !== "undefined" && window.location.search.includes("debug=1");
 
   const fetchLatest = React.useCallback(async () => {
     const ts = Date.now();
@@ -26,21 +29,47 @@ export default function ActivitiesList() {
       const activities = activityRes.ok
         ? (await activityRes.json()).data || []
         : [];
-      const heartbeats = heartbeatRes.ok
-        ? (await heartbeatRes.json()).data || []
-        : [];
+
+      const hbJson = heartbeatRes.ok ? await heartbeatRes.json() : {};
+      const heartbeats = hbJson.data || [];
+      setServerTime(
+        hbJson.serverTime ? new Date(hbJson.serverTime) : new Date(),
+      );
 
       setLatestHeartbeats(heartbeats);
 
+      const activityByClient = new Map(
+        (Array.isArray(activities) ? activities : [])
+          .filter((a) => a && a.clientId)
+          .map((a) => [a.clientId, a]),
+      );
+
       const merged = clients.map((c) => {
-        const act = activities.find((a) => a.clientId === c.id) || {};
+        const act = activityByClient.get(c.id);
+        const ts = act?.timestamp || act?.Timestamp || null;
+        const isActive =
+          typeof act?.isActive === "boolean"
+            ? act.isActive
+            : typeof act?.IsActive === "boolean"
+              ? act.IsActive
+              : null;
         return {
           clientId: c.id,
-          timestamp: act.timestamp || new Date().toISOString(), // fallback
-          isActive: Boolean(act.isActive),
-          activeMilliseconds: act.activeMilliseconds || 0,
-          inactiveMilliseconds: act.inactiveMilliseconds || 0,
-          ...act, // keep original id etc if present
+          timestamp: ts,
+          isActive,
+          activeMilliseconds:
+            typeof act?.activeMilliseconds === "number"
+              ? act.activeMilliseconds
+              : typeof act?.ActiveMilliseconds === "number"
+                ? act.ActiveMilliseconds
+                : 0,
+          inactiveMilliseconds:
+            typeof act?.inactiveMilliseconds === "number"
+              ? act.inactiveMilliseconds
+              : typeof act?.InactiveMilliseconds === "number"
+                ? act.InactiveMilliseconds
+                : 0,
+          ...(act || {}),
         };
       });
 
@@ -58,15 +87,23 @@ export default function ActivitiesList() {
 
   const isOnline = (clientId) => {
     const hb = latestHeartbeats.find((h) => h.clientId === clientId);
-    // Reduced timeout to 60 seconds to detect offline status faster
-    return hb && Date.now() - new Date(hb.timestamp).getTime() < 60 * 1000;
+    // lastHeartbeat from API = server-authoritative (from clients/X.json, updated on every heartbeat)
+    const lastSeen =
+      hb?.lastHeartbeat || hb?.lastSeen || hb?.timestamp || hb?.lastActivity;
+    if (!lastSeen) return false;
+    const now = serverTime ? serverTime.getTime() : Date.now();
+    return now - new Date(lastSeen).getTime() < 3 * 60 * 1000;
   };
 
   const renderDuration = (record) => {
-    const now = Date.now();
+    if (!record.timestamp) {
+      return "-";
+    }
+
+    const now = serverTime ? serverTime.getTime() : Date.now();
     const ts = new Date(record.timestamp).getTime();
     const online = isOnline(record.clientId);
-    const isActive = online && record.isActive;
+    const isActive = online && record.isActive === true;
 
     let activeMs = record.activeMilliseconds;
     let inactiveMs = record.inactiveMilliseconds;
@@ -74,9 +111,9 @@ export default function ActivitiesList() {
     if (online) {
       // If online, accumulate time based on current state
       if (isActive) {
-        activeMs += now - ts;
+        activeMs += Math.max(0, now - ts);
       } else {
-        inactiveMs += now - ts;
+        inactiveMs += Math.max(0, now - ts);
       }
     }
     // If offline, we do not add any time to active/inactive current counters
@@ -91,7 +128,7 @@ export default function ActivitiesList() {
       const ss = s % 60;
       if (h > 0)
         return `${h} ${t("common.h")} ${mm} ${t("common.m")} ${ss} ${t(
-          "common.s"
+          "common.s",
         )}`;
       if (m > 0) return `${m} ${t("common.m")} ${ss} ${t("common.s")}`;
       return `${ss} ${t("common.s")}`;
@@ -132,15 +169,47 @@ export default function ActivitiesList() {
             title: t("activity.title"),
             render: (_, r) => {
               const online = isOnline(r.clientId);
-              const effectiveActive = online && r.isActive;
-              return effectiveActive ? (
-                <Tag color="green">{t("common.active")}</Tag>
-              ) : (
-                <Tag color="red">{t("common.inactive")}</Tag>
-              );
+              if (!online) return <Tag color="red">{t("common.inactive")}</Tag>;
+              if (r.isActive === true)
+                return <Tag color="green">{t("common.active")}</Tag>;
+              if (r.isActive === false)
+                return <Tag color="red">{t("common.inactive")}</Tag>;
+              return <Tag color="default">-</Tag>;
             },
           },
           { title: t("common.timers"), render: (_, r) => renderDuration(r) },
+          ...(isDebug
+            ? [
+                {
+                  title: "Debug",
+                  render: (_, r) => {
+                    const hb = latestHeartbeats.find(
+                      (h) => h.clientId === r.clientId,
+                    );
+                    const lastHeartbeat =
+                      hb?.lastHeartbeat ||
+                      hb?.lastSeen ||
+                      hb?.timestamp ||
+                      null;
+                    const lastActivity = hb?.lastActivity || null;
+                    return (
+                      <div
+                        style={{
+                          fontSize: 10,
+                          maxWidth: 420,
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        <div>timestamp: {String(r.timestamp || "")}</div>
+                        <div>isActive: {String(r.isActive)}</div>
+                        <div>lastHeartbeat: {String(lastHeartbeat || "")}</div>
+                        <div>lastActivity: {String(lastActivity || "")}</div>
+                      </div>
+                    );
+                  },
+                },
+              ]
+            : []),
           {
             title: t("common.action"),
             render: (_, r) => (

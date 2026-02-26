@@ -120,6 +120,8 @@ public class Program
             {
                 builder.Configuration.AddInMemoryCollection(overrides);
             }
+            int GetOverride(string key, int fallback) =>
+                overrides.TryGetValue(key, out var s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
             // If auto-start and config missing, we can't run.
             if (isAutoStart && needsConfig)
@@ -140,14 +142,14 @@ public class Program
                 {
                     ClientId = clientIdStr,
                     ServerUrl = serverUrlStr,
-                    ScreenshotIntervalMs = int.Parse(overrides["ProctorSettings:ScreenshotIntervalMs"]),
-                    ScreenshotQuality = int.Parse(overrides["ProctorSettings:ScreenshotQuality"]),
-                    HeartbeatIntervalMs = int.Parse(overrides["ProctorSettings:HeartbeatIntervalMs"]),
-                    PolicyUpdateIntervalMs = int.Parse(overrides["ProctorSettings:PolicyUpdateIntervalMs"]),
-                    DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
-                    MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
-                    ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
-                    InactivityThresholdMinutes = int.Parse(overrides["ProctorSettings:InactivityThresholdMinutes"]),
+                    ScreenshotIntervalMs = GetOverride("ProctorSettings:ScreenshotIntervalMs", 300000),
+                    ScreenshotQuality = GetOverride("ProctorSettings:ScreenshotQuality", 75),
+                    HeartbeatIntervalMs = GetOverride("ProctorSettings:HeartbeatIntervalMs", 60000),
+                    PolicyUpdateIntervalMs = GetOverride("ProctorSettings:PolicyUpdateIntervalMs", 300000),
+                    DirectoryListingIntervalMs = GetOverride("ProctorSettings:DirectoryListingIntervalMs", 600000),
+                    MaxScreenshotAge = GetOverride("ProctorSettings:MaxScreenshotAge", 7),
+                    ScreenshotRetentionMinutes = GetOverride("ProctorSettings:ScreenshotRetentionMinutes", 60),
+                    InactivityThresholdMinutes = GetOverride("ProctorSettings:InactivityThresholdMinutes", 3),
                     EncryptionKey = section["EncryptionKey"] ?? string.Empty,
                     ScreenshotPath = section["ScreenshotPath"] ?? string.Empty,
                     LogPath = section["LogPath"] ?? string.Empty,
@@ -172,14 +174,14 @@ public class Program
             {
                 ClientId = sanitizedSection["ClientId"] ?? string.Empty,
                 ServerUrl = sanitizedSection["ServerUrl"] ?? string.Empty,
-                ScreenshotIntervalMs = int.Parse(overrides["ProctorSettings:ScreenshotIntervalMs"]),
-                ScreenshotQuality = int.Parse(overrides["ProctorSettings:ScreenshotQuality"]),
-                HeartbeatIntervalMs = int.Parse(overrides["ProctorSettings:HeartbeatIntervalMs"]),
-                PolicyUpdateIntervalMs = int.Parse(overrides["ProctorSettings:PolicyUpdateIntervalMs"]),
-                DirectoryListingIntervalMs = int.Parse(overrides["ProctorSettings:DirectoryListingIntervalMs"]),
-                MaxScreenshotAge = int.Parse(overrides["ProctorSettings:MaxScreenshotAge"]),
-                ScreenshotRetentionMinutes = int.Parse(overrides["ProctorSettings:ScreenshotRetentionMinutes"]),
-                InactivityThresholdMinutes = int.Parse(overrides["ProctorSettings:InactivityThresholdMinutes"]),
+                ScreenshotIntervalMs = GetOverride("ProctorSettings:ScreenshotIntervalMs", 300000),
+                ScreenshotQuality = GetOverride("ProctorSettings:ScreenshotQuality", 75),
+                HeartbeatIntervalMs = GetOverride("ProctorSettings:HeartbeatIntervalMs", 60000),
+                PolicyUpdateIntervalMs = GetOverride("ProctorSettings:PolicyUpdateIntervalMs", 300000),
+                DirectoryListingIntervalMs = GetOverride("ProctorSettings:DirectoryListingIntervalMs", 600000),
+                MaxScreenshotAge = GetOverride("ProctorSettings:MaxScreenshotAge", 7),
+                ScreenshotRetentionMinutes = GetOverride("ProctorSettings:ScreenshotRetentionMinutes", 60),
+                InactivityThresholdMinutes = GetOverride("ProctorSettings:InactivityThresholdMinutes", 3),
                 EncryptionKey = sanitizedSection["EncryptionKey"] ?? string.Empty,
                 ScreenshotPath = sanitizedSection["ScreenshotPath"] ?? string.Empty,
                 LogPath = sanitizedSection["LogPath"] ?? string.Empty,

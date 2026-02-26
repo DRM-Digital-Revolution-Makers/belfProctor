@@ -7,8 +7,10 @@ import {
   getClient,
   saveClient,
   deleteClient,
-  getClientActivity,
-  getClientEvents,
+  streamDailyActivitySummary,
+  streamMonthlyActivitySummary,
+  streamAppCounts,
+  getTimesheetDataForMonth,
 } from "../store";
 
 const router = Router();
@@ -20,6 +22,21 @@ router.get("/", requireAuth, async (req, res) => {
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
   res.json(clients);
+});
+
+router.get("/reports/timesheet", requireAuth, async (req, res) => {
+  const monthStr = (req.query.month as string) || "";
+  const match = monthStr.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    return res.status(400).json({ message: "month required (YYYY-MM)" });
+  }
+  try {
+    const data = await getTimesheetDataForMonth(monthStr);
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to get timesheet data" });
+  }
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
@@ -38,7 +55,7 @@ router.post("/register", requireAuth, async (req, res) => {
   if (!id || !encryptionKey)
     return res.status(400).json({ message: "id and encryptionKey required" });
 
-  saveClient({ id, encryptionKey });
+  await saveClient({ id, encryptionKey });
   res.json(getClient(id));
 });
 
@@ -66,67 +83,11 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
   const endOfDay = new Date(dateStr);
   endOfDay.setHours(23, 59, 59, 999);
 
-  // 1. Calculate Activity Summary from file
-  const allActivity = getClientActivity(id);
-  const activityRecords = allActivity.filter((r) => {
-    const t = new Date(r.timestamp);
-    return t >= startOfDay && t <= endOfDay;
-  });
-  // Sort asc
-  activityRecords.sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+  // 1. Activity: stream + compute aggregates (no arrays, CPU-bound)
+  const { activeMs, inactiveMs, hourly: hourlyStats } =
+    await streamDailyActivitySummary(id, startOfDay, endOfDay);
 
-  let activeMs = 0;
-  let inactiveMs = 0;
-  const hourlyStats = new Array(24).fill(0).map((_, i) => ({
-    hour: i,
-    activeMs: 0,
-    inactiveMs: 0,
-    screenshotsCount: 0,
-  }));
-
-  if (activityRecords.length > 0) {
-    for (let i = 1; i < activityRecords.length; i++) {
-      const prev = activityRecords[i - 1];
-      const curr = activityRecords[i];
-
-      const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
-      const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
-
-      const hour = new Date(curr.timestamp).getHours();
-
-      let addActive = 0;
-      let addInactive = 0;
-
-      if (dActive >= 0) {
-        addActive = dActive;
-      } else {
-        addActive = curr.activeMilliseconds;
-      }
-
-      if (dInactive >= 0) {
-        addInactive = dInactive;
-      } else {
-        addInactive = curr.inactiveMilliseconds;
-      }
-
-      activeMs += addActive;
-      inactiveMs += addInactive;
-
-      if (hour >= 0 && hour < 24) {
-        hourlyStats[hour].activeMs += addActive;
-        hourlyStats[hour].inactiveMs += addInactive;
-      }
-    }
-  }
-
-  // Clamp to 24 hours
-  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-  activeMs = Math.min(activeMs, ONE_DAY_MS);
-  inactiveMs = Math.min(inactiveMs, ONE_DAY_MS - activeMs);
-
-  // 2. Fetch Screenshots (from file system)
+  // 2. Screenshots (one dir scan, no heavy alloc)
   const screenshots: any[] = [];
   const screenshotsDir = path.join(process.cwd(), "storage", "screenshots", id);
   if (fs.existsSync(screenshotsDir)) {
@@ -166,26 +127,10 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
       }
     }
   }
-  // Sort screenshots by time desc
   screenshots.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
-  // 3. Fetch Top 5 Apps (from events file)
-  const allEvents = getClientEvents(id);
-  const appEvents = allEvents.filter((e) => {
-    const t = new Date(e.timestamp);
-    return e.eventType === "AppUsage" && t >= startOfDay && t <= endOfDay;
-  });
-
-  const appCounts: Record<string, number> = {};
-  appEvents.forEach((e) => {
-    const name = e.processName || "Unknown";
-    appCounts[name] = (appCounts[name] || 0) + 1;
-  });
-
-  const topApps = Object.entries(appCounts)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+  // 3. Top 5 Apps: stream events, count only (no event array)
+  const topApps = await streamAppCounts(id, startOfDay, endOfDay);
 
   res.json({
     date: dateStr,
@@ -209,115 +154,33 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
   const startOfMonth = new Date(year, month - 1, 1);
   const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
 
-  // 1. Fetch all activity records for the month
-  const allActivity = getClientActivity(id);
-  const activityRecords = allActivity.filter((r) => {
-    const t = new Date(r.timestamp);
-    return t >= startOfMonth && t <= endOfMonth;
-  });
-  activityRecords.sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+  // 1. Activity: stream + compute daily aggregates (no arrays)
+  const { dailyActivity, totalActiveMs, totalInactiveMs } =
+    await streamMonthlyActivitySummary(id, startOfMonth, endOfMonth);
 
-  // 2. Process daily activity
-  const dailyActivity = new Map<
-    string,
-    { activeMs: number; inactiveMs: number }
-  >();
-
-  if (activityRecords.length > 0) {
-    for (let i = 1; i < activityRecords.length; i++) {
-      const prev = activityRecords[i - 1];
-      const curr = activityRecords[i];
-
-      const prevDate = new Date(prev.timestamp);
-      const currDate = new Date(curr.timestamp);
-
-      // Check if same day
-      const prevDay = prevDate.toISOString().split("T")[0];
-      const currDay = currDate.toISOString().split("T")[0];
-
-      if (prevDay !== currDay) continue;
-
-      const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
-      const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
-
-      let activeToAdd = 0;
-      let inactiveToAdd = 0;
-
-      if (dActive >= 0) activeToAdd = dActive;
-      else activeToAdd = curr.activeMilliseconds;
-
-      if (dInactive >= 0) inactiveToAdd = dInactive;
-      else inactiveToAdd = curr.inactiveMilliseconds;
-
-      const dayStats = dailyActivity.get(currDay) || {
-        activeMs: 0,
-        inactiveMs: 0,
-      };
-      dayStats.activeMs += activeToAdd;
-      dayStats.inactiveMs += inactiveToAdd;
-      dailyActivity.set(currDay, dayStats);
-    }
-  }
-
-  // 3. Screenshots (empty)
-  const dailyScreenshots = new Map<string, number>();
-
-  // 4. Combine into daily list
+  // 2. Build days array (dailyActivity already clamped by stream)
   const daysInMonth = endOfMonth.getDate();
   const resultDays = [];
-  let totalActiveMs = 0;
-  let totalInactiveMs = 0;
-  let totalScreenshots = 0;
-
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(year, month - 1, d);
     const dateKey = date.toISOString().split("T")[0];
-
     const act = dailyActivity.get(dateKey) || { activeMs: 0, inactiveMs: 0 };
-    const scCount = dailyScreenshots.get(dateKey) || 0;
-
-    // Clamp daily
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-    act.activeMs = Math.min(act.activeMs, ONE_DAY_MS);
-    act.inactiveMs = Math.min(act.inactiveMs, ONE_DAY_MS - act.activeMs);
-
-    totalActiveMs += act.activeMs;
-    totalInactiveMs += act.inactiveMs;
-    totalScreenshots += scCount;
-
     resultDays.push({
       date: dateKey,
       activeMs: act.activeMs,
       inactiveMs: act.inactiveMs,
-      screenshotsCount: scCount,
+      screenshotsCount: 0,
     });
   }
 
-  // 5. Fetch Top 5 Apps for the month
-  const allEvents = getClientEvents(id);
-  const appEvents = allEvents.filter((e) => {
-    const t = new Date(e.timestamp);
-    return e.eventType === "AppUsage" && t >= startOfMonth && t <= endOfMonth;
-  });
-
-  const appCounts: Record<string, number> = {};
-  appEvents.forEach((e) => {
-    const name = e.processName || "Unknown";
-    appCounts[name] = (appCounts[name] || 0) + 1;
-  });
-
-  const topApps = Object.entries(appCounts)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+  // 3. Top 5 Apps: stream, count only (no event array)
+  const topApps = await streamAppCounts(id, startOfMonth, endOfMonth);
 
   res.json({
     month: dateStr,
     totalActiveMs,
     totalInactiveMs,
-    totalScreenshots,
+    totalScreenshots: 0,
     days: resultDays,
     topApps,
   });

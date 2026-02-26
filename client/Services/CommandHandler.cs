@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using BelfProctor.Models;
 using System.IO.Compression;
 using System.IO;
@@ -25,7 +26,24 @@ public class CommandHandler
             var password = GetString(cmd.Payload, "password", "");
             var providedHash = HashPassword(password);
             var currentHashB64 = _settings.AdminPasswordHash ?? string.Empty;
-            if (string.IsNullOrEmpty(currentHashB64) || !TimingSafeEquals(Convert.FromBase64String(currentHashB64), providedHash))
+            if (string.IsNullOrEmpty(currentHashB64))
+            {
+                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "admin_password_not_set" }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                return;
+            }
+            byte[]? currentBytes = null;
+            try
+            {
+                currentBytes = Convert.FromBase64String(currentHashB64);
+            }
+            catch (FormatException)
+            {
+                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                return;
+            }
+            if (currentBytes == null || currentBytes.Length == 0 || !TimingSafeEquals(currentBytes, providedHash))
             {
                 var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
                 await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
@@ -40,13 +58,14 @@ public class CommandHandler
             ApplyIfPresent(cmd.Payload, "PolicyUpdateIntervalMs", v => _settings.PolicyUpdateIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "DirectoryListingInterval", v => _settings.DirectoryListingIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "DirectoryListingIntervalMs", v => _settings.DirectoryListingIntervalMs = v);
+            try { SaveSettingsToAppData(); } catch { }
             var ok = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true }));
             await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);
             return;
         }
         if (cmd.Type == "list")
         {
-            var basePath = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "basePath", "%LOCALAPPDATA%\\BelfProctor"));
+            var basePath = ResolveAndValidatePath(GetString(cmd.Payload, "basePath", "%LOCALAPPDATA%\\BelfProctor")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
             var pattern = GetString(cmd.Payload, "pattern", "*");
             var recursive = GetBool(cmd.Payload, "recursive", false);
             var maxEntries = GetInt(cmd.Payload, "maxEntries", 1000);
@@ -106,7 +125,7 @@ public class CommandHandler
 
         if (cmd.Type == "file")
         {
-            var path = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "path", string.Empty));
+            var path = ResolveAndValidatePath(GetString(cmd.Payload, "path", string.Empty));
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
             await _transmission.SendCommandResultFileAsync(cmd.Id, path);
             return;
@@ -114,7 +133,7 @@ public class CommandHandler
 
         if (cmd.Type == "folder")
         {
-            var path = Environment.ExpandEnvironmentVariables(GetString(cmd.Payload, "path", string.Empty));
+            var path = ResolveAndValidatePath(GetString(cmd.Payload, "path", string.Empty));
             if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
             
             var tempFile = Path.GetTempFileName() + ".zip";
@@ -163,9 +182,9 @@ public class CommandHandler
         return System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, 20000, System.Security.Cryptography.HashAlgorithmName.SHA256, 32);
     }
 
-    private static bool TimingSafeEquals(byte[] a, byte[] b)
+    private static bool TimingSafeEquals(byte[]? a, byte[]? b)
     {
-        if (a.Length != b.Length) return false;
+        if (a == null || b == null || a.Length != b.Length) return false;
         int diff = 0;
         for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
         return diff == 0;
@@ -178,5 +197,53 @@ public class CommandHandler
             if (v is int i) setter(i);
             else if (int.TryParse(Convert.ToString(v), out var iv)) setter(iv);
         }
+    }
+
+    private string? ResolveAndValidatePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var resolved = Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
+        var allowedBases = new List<string>
+        {
+            Environment.ExpandEnvironmentVariables(_settings.ScreenshotPath ?? ""),
+            Environment.ExpandEnvironmentVariables(_settings.LogPath ?? ""),
+            Environment.ExpandEnvironmentVariables(_settings.ReportsPath ?? ""),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor"),
+        };
+        foreach (var allowed in _settings.DirectoryRoots ?? new List<string>())
+        {
+            var a = Path.GetFullPath(Environment.ExpandEnvironmentVariables(allowed));
+            if (!string.IsNullOrEmpty(a)) allowedBases.Add(a);
+        }
+        foreach (var basePath in allowedBases)
+        {
+            if (string.IsNullOrEmpty(basePath)) continue;
+            var canon = Path.GetFullPath(basePath);
+            if (resolved.Equals(canon, StringComparison.OrdinalIgnoreCase) || resolved.StartsWith(canon + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return resolved;
+        }
+        return null;
+    }
+
+    private void SaveSettingsToAppData()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
+        var path = Path.Combine(dir, "appsettings.json");
+        Directory.CreateDirectory(dir);
+        JObject root;
+        if (File.Exists(path))
+        {
+            var json = File.ReadAllText(path);
+            root = string.IsNullOrWhiteSpace(json) ? new JObject() : JObject.Parse(json);
+        }
+        else
+            root = new JObject();
+        var section = root["ProctorSettings"] as JObject ?? new JObject();
+        section["ScreenshotIntervalMs"] = _settings.ScreenshotIntervalMs;
+        section["HeartbeatIntervalMs"] = _settings.HeartbeatIntervalMs;
+        section["PolicyUpdateIntervalMs"] = _settings.PolicyUpdateIntervalMs;
+        section["DirectoryListingIntervalMs"] = _settings.DirectoryListingIntervalMs;
+        root["ProctorSettings"] = section;
+        File.WriteAllText(path, root.ToString(Formatting.Indented));
     }
 }

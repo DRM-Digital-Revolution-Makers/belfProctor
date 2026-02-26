@@ -207,15 +207,17 @@ public class PolicyService : IPolicyService
         var processName = systemEvent.ProcessName?.ToLowerInvariant() ?? "";
         var target = rule.Target.ToLowerInvariant();
 
+        // BlockedProcesses from appsettings take precedence
+        if (_settings.BlockedProcesses?.Any(p => processName.Contains((p ?? "").ToLowerInvariant())) == true)
+            return true;
+
         switch (rule.Action)
         {
             case PolicyAction.Block:
                 return processName.Contains(target);
             
             case PolicyAction.Allow:
-                // Если процесс не в списке разрешенных
-                return !_settings.AllowedProcesses.Any(p => 
-                    processName.Contains(p.ToLowerInvariant()));
+                return !(_settings.AllowedProcesses?.Any(p => processName.Contains((p ?? "").ToLowerInvariant())) ?? false);
             
             default:
                 return false;

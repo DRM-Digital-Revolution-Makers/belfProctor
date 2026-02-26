@@ -4,6 +4,7 @@ import routerProvider from "@refinedev/react-router";
 //
 import { RefineThemes } from "@refinedev/antd";
 import { ConfigProvider, Layout } from "antd";
+import ruRU from "antd/locale/ru_RU";
 import { Routes, Route } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 
@@ -14,6 +15,7 @@ import ScreenshotsList from "./pages/ScreenshotsList.jsx";
 import ActivitiesList from "./pages/ActivitiesList.jsx";
 import ActivityDetail from "./pages/ActivityDetail.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
+import Timesheet from "./pages/Timesheet.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
 const API_URL =
@@ -21,7 +23,7 @@ const API_URL =
 
 export default function App() {
   const [authed, setAuthed] = React.useState(
-    Boolean(localStorage.getItem("token"))
+    Boolean(localStorage.getItem("token")),
   );
   React.useEffect(() => {
     const handler = () => setAuthed(Boolean(localStorage.getItem("token")));
@@ -34,7 +36,7 @@ export default function App() {
   }, []);
   if (!authed) {
     return (
-      <ConfigProvider theme={RefineThemes.Blue}>
+      <ConfigProvider theme={RefineThemes.Blue} locale={ruRU}>
         <Layout style={{ minHeight: "100vh" }}>
           <Layout.Content style={{ padding: 24 }}>
             <LoginPage onSuccess={() => setAuthed(true)} />
@@ -44,7 +46,7 @@ export default function App() {
     );
   }
   return (
-    <ConfigProvider theme={RefineThemes.Blue}>
+    <ConfigProvider theme={RefineThemes.Blue} locale={ruRU}>
       <Refine
         routerProvider={routerProvider}
         dataProvider={customDataProvider(API_URL)}
@@ -61,6 +63,7 @@ export default function App() {
           { name: "events", list: "/events" },
           { name: "activity", list: "/activity" },
           { name: "screenshots", list: "/screenshots" },
+          { name: "timesheet", list: "/timesheet" },
         ]}
       >
         <Layout style={{ minHeight: "100vh" }}>
@@ -74,6 +77,7 @@ export default function App() {
               <Route path="activity" element={<ActivitiesList />} />
               <Route path="activity/:clientId" element={<ActivityDetail />} />
               <Route path="screenshots" element={<ScreenshotsList />} />
+              <Route path="timesheet" element={<Timesheet />} />
             </Routes>
           </Layout.Content>
         </Layout>

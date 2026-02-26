@@ -5,6 +5,10 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import App from "./App.jsx";
 import "./index.css";
 import "./i18n";
+import dayjs from "dayjs";
+import "dayjs/locale/ru";
+
+dayjs.locale("ru");
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

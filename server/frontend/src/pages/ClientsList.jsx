@@ -4,6 +4,7 @@ import { Table, Modal, Form, Input, Button, message, Alert } from "antd";
 import { authFetch } from "../dataProvider.js";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import dayjs from "dayjs";
 
 export default function ClientsList() {
   const { t } = useTranslation();
@@ -13,6 +14,7 @@ export default function ClientsList() {
     `http://${window.location.hostname}:8080/api`;
   const [data, setData] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
+  const [serverTime, setServerTime] = React.useState(null);
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [lastCreated, setLastCreated] = React.useState(null);
@@ -49,6 +51,7 @@ export default function ClientsList() {
       .then((r) => r.json())
       .then((json) => {
         setLatestHeartbeats(json.data || []);
+        setServerTime(json.serverTime ? new Date(json.serverTime) : new Date());
       })
       .catch(() => {
         setLatestHeartbeats([]);
@@ -119,8 +122,8 @@ export default function ClientsList() {
     if (!selected.length) return;
     await Promise.allSettled(
       selected.map((id) =>
-        authFetch(`${API_URL}/clients/${id}`, { method: "DELETE" })
-      )
+        authFetch(`${API_URL}/clients/${id}`, { method: "DELETE" }),
+      ),
     );
     message.success(t("clients.deleteComplete"));
     setSelected([]);
@@ -141,8 +144,8 @@ export default function ClientsList() {
               type: "setIntervals",
               payload: vals,
             }),
-          })
-        )
+          }),
+        ),
       );
       message.success(t("clients.intervalsSent"));
       setBulkOpen(false);
@@ -199,15 +202,33 @@ export default function ClientsList() {
         rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
         columns={[
           { title: "ClientId", dataIndex: "id" },
-          { title: t("common.created"), dataIndex: "createdAt" },
-          { title: t("common.updated"), dataIndex: "updatedAt" },
+          {
+            title: t("common.created"),
+            dataIndex: "createdAt",
+            render: (val) =>
+              val ? dayjs(val).format("DD.MM.YYYY HH:mm") : "-",
+          },
+          {
+            title: t("common.updated"),
+            dataIndex: "updatedAt",
+            render: (val) =>
+              val ? dayjs(val).format("DD.MM.YYYY HH:mm") : "-",
+          },
           {
             title: t("common.status"),
             render: (_, r) => {
               const hb = latestHeartbeats.find((h) => h.clientId === r.id);
+              // Check lastHeartbeat first, then lastActivity
+              // Increase timeout to 10 minutes to avoid flickering
+              const lastSeen =
+                hb?.lastHeartbeat ||
+                hb?.lastActivity ||
+                hb?.lastSeen ||
+                hb?.timestamp;
+              // Use serverTime for comparison to avoid clock skew
+              const now = serverTime ? serverTime.getTime() : Date.now();
               const online =
-                hb &&
-                Date.now() - new Date(hb.timestamp).getTime() < 3 * 60 * 1000;
+                lastSeen && now - new Date(lastSeen).getTime() < 3 * 60 * 1000;
               return online ? (
                 <span style={{ color: "#52c41a" }}>{t("common.online")}</span>
               ) : (

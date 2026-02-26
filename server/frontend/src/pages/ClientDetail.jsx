@@ -30,6 +30,16 @@ import {
   StarFilled,
   DownloadOutlined,
 } from "@ant-design/icons";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
 
@@ -51,11 +61,15 @@ const ClientDetail = () => {
   const [dailyData, setDailyData] = useState({
     activeMs: 0,
     inactiveMs: 0,
+    presenceMs: 0,
+    startTime: null,
+    endTime: null,
     screenshots: [],
   });
 
   // Monthly Data
   const [monthlyData, setMonthlyData] = useState(null);
+  const [globalMonthlyData, setGlobalMonthlyData] = useState([]);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
 
   const fetchDailyData = useCallback(
@@ -65,7 +79,7 @@ const ClientDetail = () => {
         const dateStr = date.format("YYYY-MM-DD");
         // We use dateStr as is, backend should interpret it correctly
         const res = await authFetch(
-          `${API_URL}/clients/${id}/daily-summary?date=${dateStr}`
+          `${API_URL}/clients/${id}/daily-summary?date=${dateStr}`,
         );
         if (!res.ok) {
           throw new Error("Failed to fetch data");
@@ -79,7 +93,7 @@ const ClientDetail = () => {
         setLoading(false);
       }
     },
-    [id, t, API_URL]
+    [id, t, API_URL],
   );
 
   const fetchMonthlyData = useCallback(
@@ -87,14 +101,25 @@ const ClientDetail = () => {
       setMonthlyLoading(true);
       try {
         const dateStr = month.format("YYYY-MM");
+
+        // Fetch Client Data
         const res = await authFetch(
-          `${API_URL}/clients/${id}/monthly-summary?date=${dateStr}`
+          `${API_URL}/clients/${id}/monthly-summary?date=${dateStr}`,
         );
         if (!res.ok) {
           throw new Error("Failed to fetch monthly data");
         }
         const json = await res.json();
         setMonthlyData(json);
+
+        // Fetch Global Data
+        const resGlobal = await authFetch(
+          `${API_URL}/clients/reports/global-monthly-stats?month=${dateStr}`,
+        );
+        if (resGlobal.ok) {
+          const jsonGlobal = await resGlobal.json();
+          setGlobalMonthlyData(jsonGlobal);
+        }
       } catch (error) {
         console.error(error);
         message.error(t("common.requestError"));
@@ -102,7 +127,7 @@ const ClientDetail = () => {
         setMonthlyLoading(false);
       }
     },
-    [id, t, API_URL]
+    [id, t, API_URL],
   );
 
   useEffect(() => {
@@ -114,6 +139,7 @@ const ClientDetail = () => {
   }, [fetchMonthlyData, selectedMonth]);
 
   const formatDuration = (ms) => {
+    if (!ms || isNaN(ms)) return `0 ${t("common.h")} 0 ${t("common.m")}`;
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -135,13 +161,13 @@ const ClientDetail = () => {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ isFavorite: newStatus }),
-        }
+        },
       );
       if (res.ok) {
         setDailyData((prev) => ({
           ...prev,
           screenshots: prev.screenshots.map((s) =>
-            s.id === screenshotId ? { ...s, isFavorite: newStatus } : s
+            s.id === screenshotId ? { ...s, isFavorite: newStatus } : s,
           ),
         }));
       }
@@ -251,7 +277,7 @@ const ClientDetail = () => {
       if (minutes > 0) parts.push(`${minutes} мин`);
       if (seconds > 0)
         parts.push(
-          `${seconds} ${getNoun(seconds, "секунда", "секунды", "секунд")}`
+          `${seconds} ${getNoun(seconds, "секунда", "секунды", "секунд")}`,
         );
       return parts.length > 0 ? parts.join(" ") : "0 секунд";
     } else {
@@ -306,7 +332,7 @@ const ClientDetail = () => {
         .map((app) => [app.name, app.count].map(escapeCSV).join(";"))
         .join("\n");
       topAppsSection = `\n\n"${t(
-        "csv.top5Apps"
+        "csv.top5Apps",
       )}"\n${topAppsHeader}\n${topAppsRows}`;
     }
 
@@ -325,18 +351,18 @@ const ClientDetail = () => {
         .map((h) =>
           [
             `${String(h.hour).padStart(2, "0")}:00 - ${String(
-              h.hour + 1
+              h.hour + 1,
             ).padStart(2, "0")}:00`,
             formatDurationVerbose(h.activeMs),
             formatDurationVerbose(h.inactiveMs),
             h.screenshotsCount,
           ]
             .map(escapeCSV)
-            .join(";")
+            .join(";"),
         )
         .join("\n");
       hourlySection = `\n\n"${t(
-        "csv.hourlyActivity"
+        "csv.hourlyActivity",
       )}"\n${hourlyHeader}\n${hourlyRows}`;
     }
 
@@ -356,16 +382,16 @@ const ClientDetail = () => {
           s.isFavorite ? t("common.yes") : t("common.no"),
         ]
           .map(escapeCSV)
-          .join(";")
+          .join(";"),
       )
       .join("\n");
     const screenshotsSection = `\n\n"${t(
-      "csv.screenshots"
+      "csv.screenshots",
     )}"\n${screenshotsHeader}\n${screenshotsRows}`;
 
     downloadCSV(
       summaryRows + topAppsSection + hourlySection + screenshotsSection,
-      `report_daily_${id}_${selectedDate.format("YYYY-MM-DD")}.csv`
+      `report_daily_${id}_${selectedDate.format("YYYY-MM-DD")}.csv`,
     );
   };
 
@@ -412,15 +438,44 @@ const ClientDetail = () => {
           d.screenshotsCount,
         ]
           .map(escapeCSV)
-          .join(";")
+          .join(";"),
       )
       .join("\n");
 
     downloadCSV(
       summaryRows + topAppsSection + "\n" + header + "\n" + rows,
-      `report_monthly_${id}_${monthlyData.month}.csv`
+      `report_monthly_${id}_${monthlyData.month}.csv`,
     );
   };
+
+  const formatTime = (isoString) => {
+    if (!isoString) return "-";
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return "-";
+    return dayjs(d).format("HH:mm");
+  };
+
+  const combinedChartData = React.useMemo(() => {
+    if (!monthlyData || !monthlyData.days) return [];
+
+    const globalMap = new Map();
+    if (globalMonthlyData) {
+      globalMonthlyData.forEach((d) => {
+        globalMap.set(d.date, d.totalActiveMs);
+      });
+    }
+
+    return monthlyData.days.map((d) => {
+      const globalTotal = globalMap.get(d.date) || 0;
+      return {
+        day: d.date.split("-")[2],
+        date: d.date,
+        activeHours: Number((d.activeMs / 3600000).toFixed(2)),
+        inactiveHours: Number((d.inactiveMs / 3600000).toFixed(2)),
+        globalTotalHours: Number((globalTotal / 3600000).toFixed(2)),
+      };
+    });
+  }, [monthlyData, globalMonthlyData]);
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto" }}>
@@ -486,17 +541,48 @@ const ClientDetail = () => {
                 ) : (
                   <>
                     <Row gutter={[16, 16]}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Card>
                           <Statistic
-                            title={t("common.dayActivity")}
+                            title={t("common.workStart")}
+                            value={formatTime(dailyData.startTime)}
+                            prefix={<ClockCircleOutlined />}
+                          />
+                        </Card>
+                      </Col>
+                      <Col span={6}>
+                        <Card>
+                          <Statistic
+                            title={t("common.workEnd")}
+                            value={formatTime(dailyData.endTime)}
+                            prefix={<ClockCircleOutlined />}
+                          />
+                        </Card>
+                      </Col>
+                      <Col span={6}>
+                        <Card>
+                          <Statistic
+                            title={t("activity.activeTime")}
                             value={formatDuration(dailyData.activeMs)}
                             prefix={<ClockCircleOutlined />}
                             valueStyle={{ color: "#3f8600" }}
                           />
                         </Card>
                       </Col>
-                      <Col span={8}>
+                      <Col span={6}>
+                        <Card>
+                          <Statistic
+                            title={t("common.presence")}
+                            value={formatDuration(dailyData.presenceMs)}
+                            prefix={<UserOutlined />}
+                            valueStyle={{ color: "#1890ff" }}
+                          />
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                      <Col span={12}>
                         <Card>
                           <Statistic
                             title={t("common.dayInactivity")}
@@ -506,7 +592,7 @@ const ClientDetail = () => {
                           />
                         </Card>
                       </Col>
-                      <Col span={8}>
+                      <Col span={12}>
                         <Card>
                           <Statistic
                             title={t("common.screenshots")}
@@ -595,7 +681,7 @@ const ClientDetail = () => {
                                     hour: "2-digit",
                                     minute: "2-digit",
                                     second: "2-digit",
-                                  }
+                                  },
                                 )}
                                 description={s.filename}
                               />
@@ -702,6 +788,119 @@ const ClientDetail = () => {
                       />
                     </Card>
                   )}
+
+                  {/* Charts */}
+                  <div style={{ marginTop: 24 }}>
+                    <Title level={4}>{t("common.clientPerformance")}</Title>
+                    <div style={{ height: 350, marginBottom: 40 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={combinedChartData}>
+                          <defs>
+                            <linearGradient
+                              id="colorActive"
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="5%"
+                                stopColor="#8884d8"
+                                stopOpacity={0.8}
+                              />
+                              <stop
+                                offset="95%"
+                                stopColor="#8884d8"
+                                stopOpacity={0}
+                              />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis
+                            dataKey="day"
+                            label={{
+                              value: t("common.day"),
+                              position: "insideBottomRight",
+                              offset: -5,
+                            }}
+                          />
+                          <YAxis
+                            label={{
+                              value: t("common.hoursLabel"),
+                              position: "insideLeft",
+                              angle: -90,
+                            }}
+                          />
+                          <RechartsTooltip />
+                          <Legend />
+                          <Area
+                            type="monotone"
+                            dataKey="activeHours"
+                            name={t("common.activeHoursTitle")}
+                            stroke="#8884d8"
+                            fillOpacity={1}
+                            fill="url(#colorActive)"
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <Title level={4}>
+                      {t("common.globalPerformanceTotal")}
+                    </Title>
+                    <div style={{ height: 350 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={combinedChartData}>
+                          <defs>
+                            <linearGradient
+                              id="colorGlobal"
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="5%"
+                                stopColor="#82ca9d"
+                                stopOpacity={0.8}
+                              />
+                              <stop
+                                offset="95%"
+                                stopColor="#82ca9d"
+                                stopOpacity={0}
+                              />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis
+                            dataKey="day"
+                            label={{
+                              value: t("common.day"),
+                              position: "insideBottomRight",
+                              offset: -5,
+                            }}
+                          />
+                          <YAxis
+                            label={{
+                              value: t("common.hoursLabel"),
+                              position: "insideLeft",
+                              angle: -90,
+                            }}
+                          />
+                          <RechartsTooltip />
+                          <Legend />
+                          <Area
+                            type="monotone"
+                            dataKey="globalTotalHours"
+                            name={t("common.globalActiveHours")}
+                            stroke="#82ca9d"
+                            fillOpacity={1}
+                            fill="url(#colorGlobal)"
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 </Space>
               ) : (
                 <Empty description={t("common.noData")} />

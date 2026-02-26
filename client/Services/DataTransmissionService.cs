@@ -12,7 +12,7 @@ using System.IO;
 
 namespace BelfProctor.Services;
 
-public class DataTransmissionService : IDataTransmissionService
+public class DataTransmissionService : IDataTransmissionService, IDisposable
 {
     private readonly ILogger<DataTransmissionService> _logger;
     private readonly ProctorSettings _settings;
@@ -582,8 +582,6 @@ public class DataTransmissionService : IDataTransmissionService
                 if (response.IsSuccessStatusCode)
                 {
                     _logger.LogDebug("Report sent successfully: {ReportPath}", reportPath);
-                    streamContent.Dispose();
-                    fileStream.Dispose();
                     try { if (File.Exists(reportPath)) File.Delete(reportPath); } catch { }
                 }
                 else
@@ -606,7 +604,7 @@ public class DataTransmissionService : IDataTransmissionService
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
-            _logger.LogWarning("Encryption key not configured, sending data unencrypted");
+            _logger.LogWarning("Encryption key not configured. Data will be sent unencrypted.");
             return data;
         }
 
@@ -713,7 +711,7 @@ public class DataTransmissionService : IDataTransmissionService
 
         try 
         {
-            var aes = Aes.Create();
+            using var aes = Aes.Create();
             aes.Key = DeriveKeyFromPassword(_settings.EncryptionKey);
             aes.GenerateIV();
             
@@ -826,9 +824,13 @@ public class DataTransmissionService : IDataTransmissionService
 
     public void Dispose()
     {
-        _httpClient?.Dispose();
+        try { NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged; } catch { }
+        try { NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged; } catch { }
         _retryTimer?.Dispose();
+        _retryTimer = null;
         _eventBatchTimer?.Dispose();
+        _eventBatchTimer = null;
+        _httpClient?.Dispose();
     }
 
     private async Task FlushPendingAsync()
@@ -860,8 +862,6 @@ public class DataTransmissionService : IDataTransmissionService
                         if (resp.IsSuccessStatusCode) 
                         {
                             _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
-                            streamContent.Dispose();
-                            fileStream.Dispose();
                             File.Delete(file);
                         }
                         else
@@ -891,8 +891,6 @@ public class DataTransmissionService : IDataTransmissionService
                         
                         if (resp.IsSuccessStatusCode) 
                         {
-                            streamContent.Dispose();
-                            fileStream.Dispose();
                             File.Delete(file);
                         }
                     }
@@ -958,8 +956,6 @@ public class DataTransmissionService : IDataTransmissionService
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/json", streamContent);
                             if (resp.IsSuccessStatusCode) 
                             {
-                                streamContent.Dispose();
-                                fileStream.Dispose();
                                 File.Delete(file);
                             }
                         }
@@ -987,8 +983,6 @@ public class DataTransmissionService : IDataTransmissionService
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {
-                                streamContent.Dispose();
-                                fileStream.Dispose();
                                 File.Delete(file);
                             }
                         }
