@@ -71,7 +71,7 @@ call pm2 start ecosystem.config.cjs
 call pm2 save
 
 echo Adding watchdog scheduled task (checks health every minute)...
-schtasks /Create /SC MINUTE /MO 1 /TN "BelfProctorServerWatchdog" /TR "powershell -NoProfile -WindowStyle Hidden -Command \"try{Invoke-WebRequest -Uri http://localhost:8080/api/health -UseBasicParsing -TimeoutSec 5 | Out-Null}catch{pm2 restart belfproctor-server}\"" /F >nul 2>&1
+schtasks /Create /SC MINUTE /MO 1 /TN "BelfProctorServerWatchdog" /TR "powershell -NoProfile -WindowStyle Hidden -Command \"try{Invoke-WebRequest -Uri http://localhost:8080/api/health -UseBasicParsing -TimeoutSec 15 | Out-Null}catch{pm2 restart belfproctor-server}\"" /F >nul 2>&1
 
 echo.
 echo ===================================================

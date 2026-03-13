@@ -4,7 +4,7 @@ module.exports = {
     {
       name: "belfproctor-server",
       script: "dist/index.js",
-      node_args: "--max-old-space-size=72 --expose-gc",
+      node_args: "--max-old-space-size=256 --expose-gc",
       instances: 1,
       autorestart: true,
       restart_delay: 5000,
@@ -17,6 +17,8 @@ module.exports = {
         STORE_TAIL_BYTES: "4096",
         HEARTBEAT_TAIL_BYTES: "32768",
         RATE_LIMIT_MAX: "600",
+        DISABLE_BOOT_BACKFILL: "1",
+        BOOT_BACKFILL_DELAY_MS: "50",
       },
     },
   ],
