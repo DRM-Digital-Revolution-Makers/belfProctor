@@ -31,7 +31,16 @@ public class CommandHandlerTests
         await File.WriteAllTextAsync(f2, "y");
 
         var tx = new TestTransmission();
-        var handler = new CommandHandler(Settings(), tx);
+        var settings = Options.Create(new ProctorSettings
+        {
+            ClientId = "test-client",
+            ServerUrl = "http://localhost:4000/api",
+            ScreenshotPath = "%LOCALAPPDATA%\\BelfProctor\\Screenshots",
+            LogPath = "%LOCALAPPDATA%\\BelfProctor\\Logs",
+            ReportsPath = "%LOCALAPPDATA%\\BelfProctor\\Reports",
+            DirectoryRoots = new List<string> { tmp }
+        });
+        var handler = new CommandHandler(settings, tx);
         var cmd = new Command
         {
             Id = "cmd-1",
@@ -63,7 +72,16 @@ public class CommandHandlerTests
         await File.WriteAllBytesAsync(f, Encoding.UTF8.GetBytes("data"));
 
         var tx = new TestTransmission();
-        var handler = new CommandHandler(Settings(), tx);
+        var settings = Options.Create(new ProctorSettings
+        {
+            ClientId = "test-client",
+            ServerUrl = "http://localhost:4000/api",
+            ScreenshotPath = "%LOCALAPPDATA%\\BelfProctor\\Screenshots",
+            LogPath = "%LOCALAPPDATA%\\BelfProctor\\Logs",
+            ReportsPath = "%LOCALAPPDATA%\\BelfProctor\\Reports",
+            DirectoryRoots = new List<string> { tmp }
+        });
+        var handler = new CommandHandler(settings, tx);
         var cmd = new Command
         {
             Id = "cmd-2",
@@ -94,5 +112,6 @@ public class CommandHandlerTests
         public Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes) { JsonCalls++; return Task.CompletedTask; }
         public Task SendCommandResultFileAsync(string commandId, string filePath) { FileCalls.Add((commandId, filePath)); return Task.CompletedTask; }
         public Task SendActivityAsync(bool isActive, long cpuUsage, long memoryUsage) => Task.CompletedTask;
+        public Task SendClientLogChunkAsync(string fileName, string text) => Task.CompletedTask;
     }
 }

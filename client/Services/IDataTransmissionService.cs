@@ -12,4 +12,5 @@ public interface IDataTransmissionService
     Task SendCommandResultJsonAsync(string commandId, byte[] jsonBytes);
     Task SendCommandResultFileAsync(string commandId, string filePath);
     Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds);
+    Task SendClientLogChunkAsync(string fileName, string text);
 }

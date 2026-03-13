@@ -16,6 +16,7 @@ export default function ScreenshotsList() {
   const [clients, setClients] = React.useState([]);
   const [filters, setFilters] = React.useState({
     clientId: null,
+    category: null,
     isFavorite: false,
   });
   const pageSize = 50;
@@ -31,6 +32,7 @@ export default function ScreenshotsList() {
 
     setFilters({
       clientId: newClientId,
+      category: filters.category,
       isFavorite: newIsFavorite,
     });
   };
@@ -42,13 +44,14 @@ export default function ScreenshotsList() {
       .catch(() => setClients([]));
   }, [API_URL]);
 
-  const load = () => {
+  const load = React.useCallback(() => {
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
       ts: String(Date.now()),
     });
     if (filters.clientId) params.append("clientId", filters.clientId);
+    if (filters.category) params.append("category", filters.category);
     if (filters.isFavorite) params.append("isFavorite", "true");
 
     authFetch(`${API_URL}/screenshots?${params.toString()}`, {
@@ -64,52 +67,79 @@ export default function ScreenshotsList() {
       .catch(() => {
         /* keep previous */
       });
-  };
-  React.useEffect(load, [page, filters]);
+  }, [API_URL, filters, page, pageSize]);
+  React.useEffect(() => {
+    load();
+  }, [load]);
 
-  const toggleFavorite = async (id, currentStatus) => {
-    const newStatus = !currentStatus;
-    try {
-      const res = await authFetch(`${API_URL}/screenshots/${id}/favorite`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isFavorite: newStatus }),
-      });
-      if (res.ok) {
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === id ? { ...item, isFavorite: newStatus } : item,
-          ),
-        );
+  const toggleFavorite = React.useCallback(
+    async (id, currentStatus) => {
+      const newStatus = !currentStatus;
+      try {
+        const res = await authFetch(`${API_URL}/screenshots/${id}/favorite`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isFavorite: newStatus }),
+        });
+        if (res.ok) {
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === id ? { ...item, isFavorite: newStatus } : item,
+            ),
+          );
+        }
+      } catch (e) {
+        console.error(e);
       }
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    },
+    [API_URL],
+  );
 
-  const openFile = async (id) => {
-    const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
-    const res = await authFetch(url, { cache: "no-store" });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const objUrl = URL.createObjectURL(blob);
-    window.open(objUrl, "_blank");
-  };
+  const openFile = React.useCallback(
+    async (id) => {
+      const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
+      const res = await authFetch(url, { cache: "no-store" });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      window.open(objUrl, "_blank");
+    },
+    [API_URL],
+  );
 
-  const downloadFile = async (id, filename) => {
-    const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
-    const res = await authFetch(url, { cache: "no-store" });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objUrl;
-    a.download = filename || `screenshot_${id}.jpg`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objUrl);
-  };
+  const downloadFile = React.useCallback(
+    async (id, filename) => {
+      const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
+      const res = await authFetch(url, { cache: "no-store" });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename || `screenshot_${id}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    },
+    [API_URL],
+  );
+
+  const categoryOptions = React.useMemo(() => {
+    const set = new Set();
+    clients.forEach((c) => {
+      const v = String(c?.category || "").trim();
+      if (v) set.add(v);
+    });
+    return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [clients]);
+
+  const visibleClients = React.useMemo(() => {
+    if (!filters.category) return clients;
+    return clients.filter(
+      (c) => String(c?.category || "") === String(filters.category),
+    );
+  }, [clients, filters.category]);
 
   const columns = React.useMemo(
     () => [
@@ -154,7 +184,7 @@ export default function ScreenshotsList() {
         title: t("common.client"),
         dataIndex: "clientId",
         key: "clientId",
-        filters: clients.map((c) => ({
+        filters: visibleClients.map((c) => ({
           text: c.id,
           value: c.id,
         })),
@@ -174,11 +204,36 @@ export default function ScreenshotsList() {
         ),
       },
     ],
-    [t, i18n.language, filters, clients, items],
+    [
+      t,
+      i18n.language,
+      filters,
+      visibleClients,
+      downloadFile,
+      openFile,
+      toggleFavorite,
+    ],
   );
 
   return (
     <List title={t("screenshots.title")}>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select
+          allowClear
+          style={{ minWidth: 240 }}
+          placeholder={t("common.category")}
+          value={filters.category}
+          options={categoryOptions.map((c) => ({ label: c, value: c }))}
+          onChange={(v) => {
+            setPage(1);
+            setFilters((prev) => ({
+              ...prev,
+              category: v || null,
+              clientId: null,
+            }));
+          }}
+        />
+      </Space>
       <Table
         rowKey="id"
         dataSource={Array.isArray(items) ? items : []}

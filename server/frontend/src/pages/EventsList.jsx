@@ -66,7 +66,7 @@ export default function EventsList() {
         }
       })
       .catch((err) => console.error("Failed to load stats", err));
-  }, []); // Reload on mount
+  }, [API_URL]); // Reload on mount
 
   const loadBrowserHistory = React.useCallback(async () => {
     if (!clientFilter) return;
@@ -110,7 +110,7 @@ export default function EventsList() {
     }
   }, [browserHistoryOpen, loadBrowserHistory]);
 
-  const load = () => {
+  const load = React.useCallback(() => {
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
@@ -135,8 +135,10 @@ export default function EventsList() {
         setItems([]);
         setTotal(0);
       });
-  };
-  React.useEffect(load, [page, clientFilter]);
+  }, [API_URL, clientFilter, page]);
+  React.useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <List title={t("events.title")}>
@@ -340,7 +342,7 @@ export default function EventsList() {
                 if (key === "removable") return t("common.removable");
                 if (key === "fixed") return t("common.fixed");
                 if (key === "cdrom") return t("common.cdrom");
-                if (key === "network") return t("common.network");
+                if (key === "network") return t("common.networkDrive");
                 if (key === "ram") return t("common.ram");
                 return type;
               };

@@ -144,25 +144,6 @@ export default function ActivityDetail() {
     setCurrentPath(newRoot);
   };
 
-  React.useEffect(() => {
-    if (!authToken) return;
-    try {
-      const parts = authToken.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(atob(parts[1]));
-        const exp = typeof payload.exp === "number" ? payload.exp : 0;
-        const nowSec = Math.floor(Date.now() / 1000);
-        if (exp && exp <= nowSec) {
-          localStorage.removeItem("token");
-          setAuthToken("");
-          window.dispatchEvent(new Event("auth:changed"));
-        }
-      }
-    } catch (e) {
-      void e;
-    }
-  }, [authToken]);
-
   const loadData = React.useCallback(async () => {
     // Load events for USB section
     const eParams = new URLSearchParams({
@@ -362,7 +343,7 @@ export default function ActivityDetail() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath, API_URL, clientId, headersAuth, retryTrigger]);
+  }, [currentPath, API_URL, clientId, headersAuth, retryTrigger, t]);
 
   // Helper to parse path into breadcrumbs
   const breadcrumbs = React.useMemo(() => {
@@ -506,7 +487,7 @@ export default function ActivityDetail() {
           const d = new Date(text);
           if (isNaN(d.getTime())) return "-";
           return d.toLocaleString(i18n.language === "uz" ? "uz-UZ" : "ru-RU");
-        } catch (e) {
+        } catch {
           return "-";
         }
       },
@@ -598,7 +579,7 @@ export default function ActivityDetail() {
                     minute: "2-digit",
                   },
                 );
-              } catch (e) {
+              } catch {
                 return "-";
               }
             },
@@ -615,7 +596,7 @@ export default function ActivityDetail() {
                 if (key === "removable") return t("common.removable");
                 if (key === "fixed") return t("common.fixed");
                 if (key === "cdrom") return t("common.cdrom");
-                if (key === "network") return t("common.network");
+                if (key === "network") return t("common.networkDrive");
                 if (key === "ram") return t("common.ram");
                 return type;
               };
@@ -731,7 +712,7 @@ export default function ActivityDetail() {
                       minute: "2-digit",
                     },
                   );
-                } catch (e) {
+                } catch {
                   return "-";
                 }
               })()}

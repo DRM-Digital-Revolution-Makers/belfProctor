@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using BelfProctor.Models;
 using System.Net.NetworkInformation;
 using System.Net.Http;
@@ -496,6 +497,12 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 Machine = Environment.MachineName,
                 OS = Environment.OSVersion.ToString(),
                 UptimeSeconds = (int)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
+                CommandChannel = new
+                {
+                    Connected = ConnectivityState.WsConnected,
+                    LastChangeUtc = ConnectivityState.WsLastChangeUtc,
+                    LastError = ConnectivityState.WsLastError,
+                },
                 Memory = new
                 {
                     WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
@@ -514,6 +521,22 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Heartbeat sent successfully");
+                try
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (!string.IsNullOrWhiteSpace(body))
+                    {
+                        var obj = JObject.Parse(body);
+                        var uninstall = obj["uninstall"] as JObject;
+                        if (uninstall != null)
+                        {
+                            var payload = uninstall["payload"] as JObject;
+                            var serviceName = payload?["serviceName"]?.ToString() ?? "BelfProctor";
+                            UninstallHelper.StartUninstall(_settings, _logger, serviceName);
+                        }
+                    }
+                }
+                catch { }
                 _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
                 return true;
             }
@@ -702,6 +725,37 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         }
     }
 
+    public async Task SendClientLogChunkAsync(string fileName, string text)
+    {
+        try
+        {
+            var payload = new
+            {
+                timestamp = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+                source = "client",
+                fileName = fileName ?? "client.log",
+                level = "INFO",
+                text = text ?? string.Empty
+            };
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+            var jsonBytes = Encoding.UTF8.GetBytes(json);
+
+            var encryptedData = EncryptData(jsonBytes);
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var response = await PostWithAutoDiscoverAsync("logs", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to send client logs. Status: {StatusCode}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending client logs");
+        }
+    }
+
     private StreamContent GetEncryptedStreamContent(Stream inputStream)
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
@@ -818,7 +872,34 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
         raw = raw.Trim();
+        if (!raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            raw = "http://" + raw;
+        }
+
         if (!raw.EndsWith("/")) raw += "/";
+
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+        {
+            var builder = new UriBuilder(uri);
+            var p = (builder.Path ?? "/").Trim();
+            if (string.IsNullOrWhiteSpace(p) || p == "/")
+            {
+                builder.Path = "/api/";
+                return builder.Uri.ToString();
+            }
+
+            var trimmed = p.TrimEnd('/');
+            if (trimmed.Equals("/api", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Path = "/api/";
+                return builder.Uri.ToString();
+            }
+
+            return builder.Uri.ToString().TrimEnd('/') + "/";
+        }
+
         return raw;
     }
 

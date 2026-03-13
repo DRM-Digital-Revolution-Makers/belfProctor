@@ -1,6 +1,6 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Table, DatePicker, Button } from "antd";
+import { Table, DatePicker, Button, Select, Space } from "antd";
 import { authFetch } from "../dataProvider.js";
 import dayjs from "dayjs";
 import "dayjs/locale/ru";
@@ -21,6 +21,7 @@ export default function Timesheet() {
   const [data, setData] = React.useState([]);
   const [clientsList, setClientsList] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
+  const [categoryFilter, setCategoryFilter] = React.useState(null);
 
   const [combinedData, setCombinedData] = React.useState([]);
 
@@ -73,6 +74,34 @@ export default function Timesheet() {
     fetchData();
   }, [fetchData]);
 
+  const categories = React.useMemo(() => {
+    const set = new Set();
+    (clientsList || []).forEach((c) => {
+      const v = String(c?.category || "").trim();
+      if (v) set.add(v);
+    });
+    return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [clientsList]);
+
+  const allowedClientIds = React.useMemo(() => {
+    if (!categoryFilter) return null;
+    const set = new Set();
+    (clientsList || []).forEach((c) => {
+      if (String(c?.category || "") === String(categoryFilter)) set.add(c.id);
+    });
+    return set;
+  }, [clientsList, categoryFilter]);
+
+  const filteredClientsList = React.useMemo(() => {
+    if (!allowedClientIds) return clientsList;
+    return (clientsList || []).filter((c) => allowedClientIds.has(c.id));
+  }, [clientsList, allowedClientIds]);
+
+  const filteredCombinedData = React.useMemo(() => {
+    if (!allowedClientIds) return combinedData;
+    return (combinedData || []).filter((r) => allowedClientIds.has(r.clientId));
+  }, [combinedData, allowedClientIds]);
+
   const formatTime = (isoString) => {
     if (!isoString) return "-";
     const d = new Date(isoString);
@@ -92,11 +121,17 @@ export default function Timesheet() {
   };
 
   const downloadXlsx = () => {
-    if (!clientsList || clientsList.length === 0) return;
+    const exportClientsList = allowedClientIds
+      ? filteredClientsList
+      : clientsList;
+    if (!exportClientsList || exportClientsList.length === 0) return;
 
     // Group by Client (use data = activity rows from API)
     const clientsMap = {};
-    (data || []).forEach((item) => {
+    const rowsForExport = allowedClientIds
+      ? (data || []).filter((r) => allowedClientIds.has(r.clientId))
+      : data || [];
+    rowsForExport.forEach((item) => {
       if (!item.date) return;
       if (!clientsMap[item.clientId]) {
         clientsMap[item.clientId] = {
@@ -117,7 +152,7 @@ export default function Timesheet() {
 
     // Merge with full clients list to include users without activity
     const detailsById = {};
-    clientsList.forEach((c) => {
+    exportClientsList.forEach((c) => {
       detailsById[c.id] = {
         name: c.id,
         department: c.department || "",
@@ -129,7 +164,7 @@ export default function Timesheet() {
       ...detailsById[c.clientId],
     }));
     // Add missing clients with empty stats
-    clientsList.forEach((c) => {
+    exportClientsList.forEach((c) => {
       if (!clientsMap[c.id]) {
         clients.push({
           clientId: c.id,
@@ -220,7 +255,9 @@ export default function Timesheet() {
 
     // Row 4: Users count
     const rowCount = Array(50).fill("");
-    rowCount[0] = t("timesheet.totalUsers", { count: clientsList.length });
+    rowCount[0] = t("timesheet.totalUsers", {
+      count: exportClientsList.length,
+    });
     sheetData.push(rowCount.map((v) => ({ v, s: { font: { sz: 10 } } })));
 
     sheetData.push([]); // Empty row
@@ -437,6 +474,14 @@ export default function Timesheet() {
   return (
     <List title={t("timesheet.title")}>
       <div style={{ marginBottom: 16 }}>
+        <Select
+          allowClear
+          style={{ minWidth: 240, marginRight: 8 }}
+          placeholder={t("common.category")}
+          value={categoryFilter}
+          options={categories.map((c) => ({ label: c, value: c }))}
+          onChange={(v) => setCategoryFilter(v || null)}
+        />
         <DatePicker
           value={date}
           onChange={(val) => setDate(val)}
@@ -450,7 +495,7 @@ export default function Timesheet() {
         <Button
           icon={<DownloadOutlined />}
           onClick={downloadXlsx}
-          disabled={!combinedData || combinedData.length === 0}
+          disabled={!filteredCombinedData || filteredCombinedData.length === 0}
           style={{ marginLeft: 8 }}
         >
           {t("common.download")} Excel
@@ -458,7 +503,7 @@ export default function Timesheet() {
       </div>
       <Table
         columns={columns}
-        dataSource={combinedData}
+        dataSource={filteredCombinedData}
         rowKey={(record) => `${record.clientId}_${record.date || "empty"}`}
         loading={loading}
         pagination={false}

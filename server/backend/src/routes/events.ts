@@ -7,8 +7,12 @@ import {
   upsertAppStat,
   getAppStats,
   getClient,
+  saveClient,
   getClientEvents,
 } from "../store";
+import { getSenderClientId } from "../clientId";
+import { getKeysToTry } from "../keyring";
+import { resolveUploadDir } from "../runtimePaths";
 
 const router = Router();
 
@@ -28,24 +32,11 @@ const EVENT_TYPE_MAP = [
 
 router.post("/", async (req, res) => {
   try {
-    const clientId = (req.headers["x-client-id"] as string) || "";
-    if (!clientId)
-      return res.status(400).json({ message: "X-Client-Id header required" });
+    const clientId = getSenderClientId(req);
 
     let encryptionKey = "";
     const client = await getClient(clientId);
-    let keysToTry: string[] = [];
-
-    if (client && client.encryptionKey) {
-      keysToTry.push(client.encryptionKey);
-    }
-
-    const globalKey =
-      process.env.ENCRYPTION_KEY ||
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!keysToTry.includes(globalKey)) {
-      keysToTry.push(globalKey);
-    }
+    const keysToTry = getKeysToTry(client?.encryptionKey);
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
       ? (req.body as Buffer)
@@ -68,6 +59,12 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
+      const now = new Date();
+      if (!client) {
+        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
+      } else {
+        await saveClient({ id: clientId, lastSeen: now });
+      }
       console.error(
         `[Events] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -75,6 +72,19 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(decryptedJson);
+    const now = new Date();
+    if (!client) {
+      await saveClient({
+        id: clientId,
+        encryptionKey: usedKey,
+        createdAt: now,
+        lastSeen: now,
+      });
+    } else if (client.encryptionKey !== usedKey) {
+      await saveClient({ id: clientId, encryptionKey: usedKey, lastSeen: now });
+    } else {
+      await saveClient({ id: clientId, lastSeen: now });
+    }
 
     const processPayload = async (p: any) => {
       const rawType = p.EventType ?? p.eventType;
@@ -140,7 +150,7 @@ router.get("/", async (req, res) => {
   const p = parseInt(page, 10);
   const ps = Math.min(parseInt(pageSize, 10) || 20, 50);
 
-  const eventsDir = path.join(process.cwd(), "storage", "events");
+  const eventsDir = path.join(resolveUploadDir(), "events");
   if (!fs.existsSync(eventsDir)) {
     return res.json({ data: [], total: 0 });
   }
@@ -148,14 +158,15 @@ router.get("/", async (req, res) => {
   let allEvents: any[] = [];
   try {
     if (clientId) {
-      allEvents = getClientEvents(clientId, 20, 4096);
+      allEvents = await getClientEvents(clientId, 20, 4096);
     } else {
       const files = fs
         .readdirSync(eventsDir)
         .filter((f) => f.endsWith(".jsonl"));
       for (const f of files) {
         const id = f.replace(/\.jsonl$/, "");
-        allEvents.push(...getClientEvents(id, 8, 2048));
+        const clientEvents = await getClientEvents(id, 8, 2048);
+        allEvents.push(...clientEvents);
       }
     }
   } catch (e) {

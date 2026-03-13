@@ -5,21 +5,42 @@ const ITERATIONS = 10000;
 const KEYLEN = 32; // 256-bit
 const DIGEST = "sha256";
 
+const MAX_KEY_CACHE = 200;
+const derivedKeyCache = new Map<string, Buffer>();
+
 export function deriveKeyFromPassword(password: string) {
+  const p = String(password || "");
+  const cached = derivedKeyCache.get(p);
+  if (cached) {
+    derivedKeyCache.delete(p);
+    derivedKeyCache.set(p, cached);
+    return cached;
+  }
   return crypto.pbkdf2Sync(
-    password,
+    p,
     Buffer.from(SALT, "utf-8"),
     ITERATIONS,
     KEYLEN,
-    DIGEST
+    DIGEST,
   );
+}
+
+function cacheDerivedKey(password: string, key: Buffer): Buffer {
+  const p = String(password || "");
+  if (!p) return key;
+  derivedKeyCache.set(p, key);
+  if (derivedKeyCache.size > MAX_KEY_CACHE) {
+    const first = derivedKeyCache.keys().next().value;
+    if (first) derivedKeyCache.delete(first);
+  }
+  return key;
 }
 
 export function decryptAes256CbcPrefixedIv(
   encrypted: Buffer,
-  password: string
+  password: string,
 ): Buffer {
-  const key = deriveKeyFromPassword(password);
+  const key = cacheDerivedKey(password, deriveKeyFromPassword(password));
   // First 16 bytes are IV (AES block size 128-bit)
   const iv = encrypted.subarray(0, 16);
   const data = encrypted.subarray(16);
@@ -30,9 +51,9 @@ export function decryptAes256CbcPrefixedIv(
 
 export function encryptAes256CbcPrefixedIv(
   plain: Buffer,
-  password: string
+  password: string,
 ): Buffer {
-  const key = deriveKeyFromPassword(password);
+  const key = cacheDerivedKey(password, deriveKeyFromPassword(password));
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
   const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
@@ -48,9 +69,9 @@ const pipeline = util.promisify(stream.pipeline);
 export async function decryptFileStream(
   inputPath: string,
   outputPath: string,
-  password: string
+  password: string,
 ) {
-  const key = deriveKeyFromPassword(password);
+  const key = cacheDerivedKey(password, deriveKeyFromPassword(password));
   const iv = Buffer.alloc(16);
   const fd = await fs.promises.open(inputPath, "r");
   try {

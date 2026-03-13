@@ -32,7 +32,7 @@ REM Start Server
 echo Starting Node.js server... >> %LOG_FILE%
 set NO_DB=1
 set PORT=8080
-node --max-old-space-size=64 --expose-gc dist/index.js >> %LOG_FILE% 2>&1
+node dist/index.js >> %LOG_FILE% 2>&1
 
 if %errorLevel% neq 0 (
     echo Server crashed with code %errorLevel% >> %LOG_FILE%

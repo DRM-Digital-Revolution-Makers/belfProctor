@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using BelfProctor.Models;
 using BelfProctor.Services;
+using System.IO;
 
 namespace BelfProctor;
 
@@ -27,25 +28,48 @@ public class CommandChannelWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var backoffSeconds = 2;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                using var ws = new ClientWebSocket();
-                var wsUrl = BuildWsUrl(_settings.ServerUrl, _settings.ClientId);
-                _logger.LogInformation("Connecting to command channel: {Url}", wsUrl);
-                await ws.ConnectAsync(new Uri(wsUrl), stoppingToken);
-                _logger.LogInformation("Command channel connected");
-                var buf = new byte[64 * 1024];
-                while (ws.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
+                var (ws, connectedUri) = await ConnectAsync(stoppingToken);
+                using (ws)
                 {
-                    var result = await ws.ReceiveAsync(buf, stoppingToken);
-                    if (result.MessageType == WebSocketMessageType.Close) break;
-                    var msg = Encoding.UTF8.GetString(buf, 0, result.Count);
-                    var cmd = JsonConvert.DeserializeObject<Command>(msg);
-                    if (cmd != null)
+                    _logger.LogInformation("Command channel connected");
+                    ConnectivityState.SetWsConnected(true);
+                    backoffSeconds = 2;
+                    var buf = new byte[16 * 1024];
+                    while (ws.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
                     {
-                        _ = Task.Run(async () => 
+                        using var ms = new MemoryStream();
+                        WebSocketReceiveResult? result = null;
+                        do
+                        {
+                            result = await ws.ReceiveAsync(buf, stoppingToken);
+                            if (result.MessageType == WebSocketMessageType.Close) break;
+                            if (result.Count > 0) ms.Write(buf, 0, result.Count);
+                            if (ms.Length > 64 * 1024) break;
+                        } while (!result.EndOfMessage);
+
+                        if (result == null || result.MessageType == WebSocketMessageType.Close) break;
+                        if (result.MessageType != WebSocketMessageType.Text) continue;
+                        if (ms.Length > 64 * 1024) break;
+
+                        var msg = Encoding.UTF8.GetString(ms.ToArray());
+                        Command? cmd = null;
+                        try
+                        {
+                            cmd = JsonConvert.DeserializeObject<Command>(msg);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to parse WS command JSON (len={Len})", msg.Length);
+                        }
+
+                        if (cmd == null) continue;
+
+                        _ = Task.Run(async () =>
                         {
                             try
                             {
@@ -57,14 +81,19 @@ public class CommandChannelWorker : BackgroundService
                             }
                         });
                     }
+                    _logger.LogInformation("Command channel disconnected");
+                    ConnectivityState.SetWsConnected(false);
                 }
-                _logger.LogInformation("Command channel disconnected");
+
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Command channel error, will retry");
+                ConnectivityState.SetWsConnected(false);
+                ConnectivityState.SetWsError(ex.Message);
             }
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), stoppingToken);
+            backoffSeconds = Math.Min(backoffSeconds * 2, 30);
         }
     }
 
@@ -75,5 +104,58 @@ public class CommandChannelWorker : BackgroundService
         var host = uri.Host;
         var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
         return $"{scheme}://{host}:{port}/ws?clientId={Uri.EscapeDataString(clientId)}";
+    }
+
+    private async Task<(ClientWebSocket ws, Uri connectedUri)> ConnectAsync(CancellationToken ct)
+    {
+        foreach (var candidate in BuildWsCandidates(_settings.ServerUrl, _settings.ClientId))
+        {
+            var ws = new ClientWebSocket();
+            ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+            try
+            {
+                _logger.LogInformation("Connecting to command channel: {Url}", candidate);
+                await ws.ConnectAsync(candidate, ct);
+                if (ws.State == WebSocketState.Open)
+                {
+                    return (ws, candidate);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "WS connect failed: {Url}", candidate);
+            }
+            try { ws.Dispose(); } catch { }
+        }
+        throw new Exception("Command channel connection failed (no candidates succeeded)");
+    }
+
+    private static IEnumerable<Uri> BuildWsCandidates(string serverUrl, string clientId)
+    {
+        var escapedId = Uri.EscapeDataString(clientId ?? string.Empty);
+
+        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
+        {
+            var scheme = uri.Scheme == "https" ? "wss" : "ws";
+            var host = uri.Host;
+            var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
+            yield return new Uri($"{scheme}://{host}:{port}/ws?clientId={escapedId}");
+
+            if (uri.IsDefaultPort)
+            {
+                yield return new Uri($"{scheme}://{host}:8080/ws?clientId={escapedId}");
+            }
+        }
+        else
+        {
+            var raw = serverUrl?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                yield return new Uri($"ws://{raw}:8080/ws?clientId={escapedId}");
+            }
+        }
+
+        yield return new Uri($"ws://localhost:8080/ws?clientId={escapedId}");
+        yield return new Uri($"ws://127.0.0.1:8080/ws?clientId={escapedId}");
     }
 }

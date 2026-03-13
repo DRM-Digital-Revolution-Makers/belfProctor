@@ -21,6 +21,22 @@ public class CommandHandler
 
     public async Task HandleAsync(Command cmd)
     {
+        if (cmd.Type == "uninstall" || cmd.Type == "deleteClient")
+        {
+            var serviceName = GetString(cmd.Payload, "serviceName", "BelfProctor");
+
+            try
+            {
+                var ack = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true, started = true }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, ack);
+            }
+            catch { }
+
+            UninstallHelper.StartUninstall(_settings, null, serviceName);
+
+            return;
+        }
+
         if (cmd.Type == "setConfig")
         {
             var password = GetString(cmd.Payload, "password", "");

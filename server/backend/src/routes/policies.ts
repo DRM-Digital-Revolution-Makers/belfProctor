@@ -2,6 +2,7 @@ import { Router } from "express";
 import { encryptAes256CbcPrefixedIv } from "../encryption";
 import { requireAuth } from "../middleware/auth";
 import { getClient, getPolicies } from "../store";
+import { getPrimaryEncryptionKey } from "../keyring";
 
 const router = Router();
 
@@ -25,9 +26,7 @@ router.get("/:id", async (req, res) => {
   if (client && client.encryptionKey) {
     encryptionKey = client.encryptionKey;
   } else {
-    encryptionKey =
-      process.env.ENCRYPTION_KEY ||
-      "0000000000000000000000000000000000000000000000000000000000000000";
+    encryptionKey = getPrimaryEncryptionKey();
   }
 
   const policies = await getPolicies();

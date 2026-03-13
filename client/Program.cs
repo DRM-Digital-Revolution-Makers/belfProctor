@@ -204,11 +204,14 @@ public class Program
             
             builder.Services.AddHostedService<ProctorWorker>();
             builder.Services.AddHostedService<CommandChannelWorker>();
+            builder.Services.AddHostedService<ClientLogUploadWorker>();
 
+            var fileLoggerProvider = new RollingFileLoggerProvider(Options.Create(settings));
             builder.Services.AddLogging(logging =>
             {
                 logging.AddConsole();
                 logging.AddEventLog();
+                logging.AddProvider(fileLoggerProvider);
             });
 
             var host = builder.Build();

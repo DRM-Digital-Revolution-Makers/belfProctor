@@ -2,39 +2,155 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import readline from "readline";
+import { withLock } from "./locks";
+import { resolveUploadDir } from "./runtimePaths";
 
-const DATA_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+const DATA_DIR = resolveUploadDir();
+const ACTIVITY_DIR = path.join(DATA_DIR, "activity");
+const EVENTS_DIR = path.join(DATA_DIR, "events");
+const CLIENTS_DIR = path.join(DATA_DIR, "clients");
+const TIMESHEET_DIR = path.join(DATA_DIR, "timesheet");
 
-// Ultra low memory: 4KB default. Env STORE_TAIL_BYTES. Target ~30MB for 20 clients.
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(ACTIVITY_DIR))
+  fs.mkdirSync(ACTIVITY_DIR, { recursive: true });
+if (!fs.existsSync(EVENTS_DIR)) fs.mkdirSync(EVENTS_DIR, { recursive: true });
+if (!fs.existsSync(CLIENTS_DIR)) fs.mkdirSync(CLIENTS_DIR, { recursive: true });
+if (!fs.existsSync(TIMESHEET_DIR))
+  fs.mkdirSync(TIMESHEET_DIR, { recursive: true });
+
+const OLD_CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
+if (fs.existsSync(OLD_CLIENTS_FILE)) {
+  try {
+    const content = fs.readFileSync(OLD_CLIENTS_FILE, "utf-8");
+    const oldClients = JSON.parse(content);
+    if (Array.isArray(oldClients)) {
+      for (const c of oldClients) {
+        if (c && c.id) {
+          fs.writeFileSync(
+            path.join(CLIENTS_DIR, `${c.id}.json`),
+            JSON.stringify(c, null, 2),
+            "utf-8",
+          );
+        }
+      }
+    }
+    fs.renameSync(OLD_CLIENTS_FILE, path.join(DATA_DIR, "clients.json.bak"));
+  } catch {}
+}
+
 const TAIL_CHUNK = parseInt(process.env.STORE_TAIL_BYTES || "4096", 10);
 
-function readLastLinesSync(
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: limit }, async () => {
+      while (true) {
+        const idx = next++;
+        if (idx >= items.length) return;
+        results[idx] = await fn(items[idx]);
+      }
+    }),
+  );
+  return results;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJsonFileWithRetry(
+  filePath: string,
+  retries: number = 1,
+): Promise<any | null> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const content = await fsPromises.readFile(filePath, "utf-8");
+      return JSON.parse(content);
+    } catch {
+      if (attempt >= retries) return null;
+      await delay(25);
+    }
+  }
+  return null;
+}
+
+async function writeJsonFileAtomic(
+  filePath: string,
+  json: string,
+): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fsPromises.mkdir(dir, { recursive: true });
+  const tmp = path.join(
+    dir,
+    `${path.basename(filePath)}.tmp_${process.pid}_${Date.now()}_${Math.random()
+      .toString(16)
+      .slice(2)}`,
+  );
+  await fsPromises.writeFile(tmp, json, "utf-8");
+  try {
+    await fsPromises.rename(tmp, filePath);
+  } catch (e: any) {
+    try {
+      await fsPromises.unlink(filePath);
+    } catch {}
+    await fsPromises.rename(tmp, filePath);
+  } finally {
+    try {
+      await fsPromises.unlink(tmp);
+    } catch {}
+  }
+}
+
+async function withClientWriteLock(
+  clientId: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  await withLock(`client:${clientId}`, fn);
+}
+
+async function withFileWriteLock(
+  filePath: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  await withLock(`file:${filePath}`, fn);
+}
+
+async function readLastLines(
   filePath: string,
   maxLines: number,
   maxBytesToRead: number = TAIL_CHUNK,
-): string[] {
+): Promise<string[]> {
+  let fd: fsPromises.FileHandle | null = null;
   try {
-    const stat = fs.statSync(filePath);
+    const stat = await fsPromises.stat(filePath);
     if (stat.size === 0) return [];
+
     const bytesToRead = Math.min(stat.size, maxBytesToRead);
     const startOffset = stat.size - bytesToRead;
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const buf = Buffer.alloc(bytesToRead);
-      fs.readSync(fd, buf, 0, bytesToRead, startOffset);
-      const text = buf.toString("utf-8");
-      const lines = text.split("\n").filter((l) => l.trim());
-      return lines.slice(-maxLines);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
+
+    fd = await fsPromises.open(filePath, "r");
+    const buf = Buffer.alloc(bytesToRead);
+    await fd.read(buf, 0, bytesToRead, startOffset);
+
+    const text = buf.toString("utf-8");
+    const lines = text.split("\n").filter((l) => l.trim());
+    return lines.slice(-maxLines);
+  } catch (e) {
     return [];
+  } finally {
+    if (fd) await fd.close();
   }
 }
 
 // Stream + compute daily activity aggregates. Never stores records—only prev+curr + small aggregates (CPU-heavy, ~0 heap).
-export function streamDailyActivitySummary(
+export async function streamDailyActivitySummary(
   clientId: string,
   startOfDay: Date,
   endOfDay: Date,
@@ -49,31 +165,29 @@ export function streamDailyActivitySummary(
   }[];
 }> {
   const filePath = path.join(ACTIVITY_DIR, `${clientId}.jsonl`);
-  if (!fs.existsSync(filePath)) {
-    const hourly = Array.from({ length: 24 }, (_, i) => ({
-      hour: i,
-      activeMs: 0,
-      inactiveMs: 0,
-      screenshotsCount: 0,
-    }));
-    return Promise.resolve({ activeMs: 0, inactiveMs: 0, hourly });
-  }
-  const start = startOfDay.getTime();
-  const end = endOfDay.getTime();
-  let prev: any = null;
-  let activeMs = 0;
-  let inactiveMs = 0;
   const hourly = Array.from({ length: 24 }, (_, i) => ({
     hour: i,
     activeMs: 0,
     inactiveMs: 0,
     screenshotsCount: 0,
   }));
+
+  if (!fs.existsSync(filePath)) {
+    return { activeMs: 0, inactiveMs: 0, hourly };
+  }
+
+  const start = startOfDay.getTime();
+  const end = endOfDay.getTime();
+  let prev: any = null;
+  let activeMs = 0;
+  let inactiveMs = 0;
+
   const stream = fs.createReadStream(filePath, {
     encoding: "utf8",
     highWaterMark: 1024,
   });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
   return new Promise((resolve, reject) => {
     rl.on("line", (line) => {
       const trimmed = line.trim();
@@ -121,7 +235,7 @@ export function streamDailyActivitySummary(
 }
 
 // Stream + compute monthly aggregates. Only Map<dateKey, {activeMs,inactiveMs}> + prev+curr.
-export function streamMonthlyActivitySummary(
+export async function streamMonthlyActivitySummary(
   clientId: string,
   startOfMonth: Date,
   endOfMonth: Date,
@@ -132,11 +246,11 @@ export function streamMonthlyActivitySummary(
 }> {
   const filePath = path.join(ACTIVITY_DIR, `${clientId}.jsonl`);
   if (!fs.existsSync(filePath)) {
-    return Promise.resolve({
+    return {
       dailyActivity: new Map(),
       totalActiveMs: 0,
       totalInactiveMs: 0,
-    });
+    };
   }
   const start = startOfMonth.getTime();
   const end = endOfMonth.getTime();
@@ -211,7 +325,7 @@ export function streamMonthlyActivitySummary(
 }
 
 /** Timesheet: per-day active/presence + first/last timestamp. */
-export function streamTimesheetForClient(
+export async function streamTimesheetForClient(
   clientId: string,
   startOfMonth: Date,
   endOfMonth: Date,
@@ -225,7 +339,7 @@ export function streamTimesheetForClient(
   }[]
 > {
   const filePath = path.join(ACTIVITY_DIR, `${clientId}.jsonl`);
-  if (!fs.existsSync(filePath)) return Promise.resolve([]);
+  if (!fs.existsSync(filePath)) return [];
   const start = startOfMonth.getTime();
   const end = endOfMonth.getTime();
   let prev: any = null;
@@ -271,8 +385,14 @@ export function streamTimesheetForClient(
             const dInactive =
               (curr.inactiveMilliseconds ?? curr.InactiveMilliseconds ?? 0) -
               (prev.inactiveMilliseconds ?? prev.InactiveMilliseconds ?? 0);
-            st.activeMs += dActive >= 0 ? dActive : (curr.activeMilliseconds ?? curr.ActiveMilliseconds ?? 0);
-            st.inactiveMs += dInactive >= 0 ? dInactive : (curr.inactiveMilliseconds ?? curr.InactiveMilliseconds ?? 0);
+            st.activeMs +=
+              dActive >= 0
+                ? dActive
+                : (curr.activeMilliseconds ?? curr.ActiveMilliseconds ?? 0);
+            st.inactiveMs +=
+              dInactive >= 0
+                ? dInactive
+                : (curr.inactiveMilliseconds ?? curr.InactiveMilliseconds ?? 0);
           }
         }
         prev = curr;
@@ -308,6 +428,184 @@ export function streamTimesheetForClient(
   });
 }
 
+function getMonthKey(d: Date): string {
+  return d.toISOString().slice(0, 7);
+}
+
+function getDayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+type TimesheetDay = {
+  date: string;
+  startTime: string;
+  endTime: string;
+  activeMs: number;
+  presenceMs: number;
+};
+
+type TimesheetFile = {
+  clientId: string;
+  month: string;
+  days: Record<string, TimesheetDay>;
+};
+
+export async function ingestActivityToTimesheetAndClient(
+  clientId: string,
+  usedKey: string,
+  now: Date,
+  sampleTimestamp: Date,
+  activeMilliseconds: number,
+  inactiveMilliseconds: number,
+  clientMeta: { hostname?: string; os?: string; version?: string } = {},
+): Promise<void> {
+  const id = String(clientId || "").trim();
+  if (!id) return;
+  const clientFilePath = path.join(CLIENTS_DIR, `${id}.json`);
+  const monthKey = getMonthKey(sampleTimestamp);
+  const dayKey = getDayKey(sampleTimestamp);
+  const tsFilePath = path.join(TIMESHEET_DIR, id, `${monthKey}.json`);
+
+  await withClientWriteLock(id, async () => {
+    const existingClient =
+      (await readJsonFileWithRetry(clientFilePath, 1)) || {};
+    const prevSample = existingClient?.lastActivitySample || null;
+
+    let addActive = 0;
+    let addInactive = 0;
+    try {
+      if (prevSample) {
+        const prevTs = new Date(
+          prevSample.timestamp || prevSample.Timestamp || 0,
+        );
+        if (!isNaN(prevTs.getTime()) && getDayKey(prevTs) === dayKey) {
+          const prevA = parseInt(
+            String(
+              prevSample.activeMilliseconds ??
+                prevSample.ActiveMilliseconds ??
+                0,
+            ),
+            10,
+          );
+          const prevI = parseInt(
+            String(
+              prevSample.inactiveMilliseconds ??
+                prevSample.InactiveMilliseconds ??
+                0,
+            ),
+            10,
+          );
+          const dA = activeMilliseconds - (Number.isFinite(prevA) ? prevA : 0);
+          const dI =
+            inactiveMilliseconds - (Number.isFinite(prevI) ? prevI : 0);
+          addActive = dA >= 0 ? dA : activeMilliseconds;
+          addInactive = dI >= 0 ? dI : inactiveMilliseconds;
+        }
+      }
+    } catch {
+      addActive = 0;
+      addInactive = 0;
+    }
+
+    const existingTs = (await readJsonFileWithRetry(
+      tsFilePath,
+      1,
+    )) as TimesheetFile | null;
+    const ts: TimesheetFile =
+      existingTs && existingTs.month === monthKey
+        ? existingTs
+        : { clientId: id, month: monthKey, days: {} };
+
+    const iso = sampleTimestamp.toISOString();
+    const existingDay = ts.days[dayKey];
+    const day: TimesheetDay = existingDay
+      ? { ...existingDay }
+      : {
+          date: dayKey,
+          startTime: iso,
+          endTime: iso,
+          activeMs: 0,
+          presenceMs: 0,
+        };
+
+    if (
+      !day.startTime ||
+      new Date(day.startTime).getTime() > sampleTimestamp.getTime()
+    ) {
+      day.startTime = iso;
+    }
+    if (
+      !day.endTime ||
+      new Date(day.endTime).getTime() < sampleTimestamp.getTime()
+    ) {
+      day.endTime = iso;
+    }
+
+    if (addActive > 0 || addInactive > 0) {
+      day.activeMs =
+        (Number.isFinite(day.activeMs) ? day.activeMs : 0) + addActive;
+      day.presenceMs =
+        (Number.isFinite(day.presenceMs) ? day.presenceMs : 0) +
+        addActive +
+        addInactive;
+    }
+
+    ts.days[dayKey] = day;
+    await writeJsonFileAtomic(tsFilePath, JSON.stringify(ts, null, 2));
+
+    const mergedClient: any = { ...existingClient, id };
+    if (!mergedClient.createdAt) mergedClient.createdAt = now.toISOString();
+    mergedClient.lastSeen = now.toISOString();
+    mergedClient.lastActivity = iso;
+    if (usedKey && mergedClient.encryptionKey !== usedKey)
+      mergedClient.encryptionKey = usedKey;
+    if (clientMeta.hostname) mergedClient.hostname = clientMeta.hostname;
+    if (clientMeta.os) mergedClient.os = clientMeta.os;
+    if (clientMeta.version) mergedClient.version = clientMeta.version;
+    mergedClient.lastActivitySample = {
+      timestamp: iso,
+      activeMilliseconds,
+      inactiveMilliseconds,
+    };
+    await writeJsonFileAtomic(
+      clientFilePath,
+      JSON.stringify(mergedClient, null, 2),
+    );
+  });
+}
+
+export async function backfillTimesheetFromActivity(
+  clientId: string,
+  monthStr: string,
+): Promise<void> {
+  const id = String(clientId || "").trim();
+  if (!id) return;
+  const match = String(monthStr || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return;
+
+  const [year, month] = monthStr.split("-").map(Number);
+  const startOfMonth = new Date(year, month - 1, 1);
+  const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+
+  const rows = await streamTimesheetForClient(id, startOfMonth, endOfMonth);
+  const days: Record<string, TimesheetDay> = {};
+  for (const r of rows) {
+    days[r.date] = {
+      date: r.date,
+      startTime: r.startTime,
+      endTime: r.endTime,
+      activeMs: r.activeMs,
+      presenceMs: r.presenceMs,
+    };
+  }
+
+  const fp = path.join(TIMESHEET_DIR, id, `${monthStr}.json`);
+  await withClientWriteLock(id, async () => {
+    const payload: TimesheetFile = { clientId: id, month: monthStr, days };
+    await writeJsonFileAtomic(fp, JSON.stringify(payload, null, 2));
+  });
+}
+
 export async function getTimesheetDataForMonth(monthStr: string): Promise<
   {
     clientId: string;
@@ -318,38 +616,46 @@ export async function getTimesheetDataForMonth(monthStr: string): Promise<
     presenceMs: number;
   }[]
 > {
-  const [year, month] = monthStr.split("-").map(Number);
-  const startOfMonth = new Date(year, month - 1, 1);
-  const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
-  const clients = getClients();
-  const results = await Promise.all(
-    clients.map(async (c) => {
-      const rows = await streamTimesheetForClient(
-        c.id,
-        startOfMonth,
-        endOfMonth,
-      );
-      return rows.map((r) => ({
-        clientId: c.id,
-        date: r.date,
-        startTime: r.startTime,
-        endTime: r.endTime,
-        activeMs: r.activeMs,
-        presenceMs: r.presenceMs,
-      }));
-    }),
+  const clients = await getClients();
+  const perClientRows = await mapWithConcurrency(
+    clients,
+    10,
+    async (c: any) => {
+      const id = String(c?.id || "").trim();
+      if (!id) return [];
+      const fp = path.join(TIMESHEET_DIR, id, `${monthStr}.json`);
+      const parsed = (await readJsonFileWithRetry(
+        fp,
+        1,
+      )) as TimesheetFile | null;
+      if (!parsed || parsed.month !== monthStr || !parsed.days) return [];
+      const rows: any[] = [];
+      for (const day of Object.values(parsed.days)) {
+        if (!day || !day.date) continue;
+        rows.push({
+          clientId: id,
+          date: day.date,
+          startTime: day.startTime || null,
+          endTime: day.endTime || null,
+          activeMs: Number.isFinite(day.activeMs) ? day.activeMs : 0,
+          presenceMs: Number.isFinite(day.presenceMs) ? day.presenceMs : 0,
+        });
+      }
+      rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      return rows;
+    },
   );
-  return results.flat();
+  return perClientRows.flat();
 }
 
 // Stream events, count AppUsage only. Returns { name, count }[] top 5. No event array stored.
-export function streamAppCounts(
+export async function streamAppCounts(
   clientId: string,
   startDate: Date,
   endDate: Date,
 ): Promise<{ name: string; count: number }[]> {
   const filePath = path.join(EVENTS_DIR, `${clientId}.jsonl`);
-  if (!fs.existsSync(filePath)) return Promise.resolve([]);
+  if (!fs.existsSync(filePath)) return [];
   const start = startDate.getTime();
   const end = endDate.getTime();
   const counts = new Map<string, number>();
@@ -384,23 +690,14 @@ export function streamAppCounts(
   });
 }
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 async function appendToFile(filename: string, data: any): Promise<void> {
+  await fsPromises.mkdir(DATA_DIR, { recursive: true });
   const filePath = path.join(DATA_DIR, filename);
   const line = JSON.stringify(data) + "\n";
-  await fsPromises.appendFile(filePath, line, "utf8");
+  await withFileWriteLock(filePath, async () => {
+    await fsPromises.appendFile(filePath, line, "utf8");
+  });
 }
-
-const ACTIVITY_DIR = path.join(DATA_DIR, "activity");
-if (!fs.existsSync(ACTIVITY_DIR))
-  fs.mkdirSync(ACTIVITY_DIR, { recursive: true });
-
-const EVENTS_DIR = path.join(DATA_DIR, "events");
-if (!fs.existsSync(EVENTS_DIR)) fs.mkdirSync(EVENTS_DIR, { recursive: true });
 
 async function appendToClientFile(
   dir: string,
@@ -408,9 +705,12 @@ async function appendToClientFile(
   data: any,
 ): Promise<void> {
   if (!clientId) return;
+  await fsPromises.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, `${clientId}.jsonl`);
   const line = JSON.stringify(data) + "\n";
-  await fsPromises.appendFile(filePath, line, "utf8");
+  await withFileWriteLock(filePath, async () => {
+    await fsPromises.appendFile(filePath, line, "utf8");
+  });
 }
 
 export async function appendActivity(data: any): Promise<void> {
@@ -428,14 +728,14 @@ export async function appendEvent(data: any): Promise<void> {
 }
 
 /** Returns last `limit` activity records; max 4KB read. */
-export function getClientActivity(
+export async function getClientActivity(
   clientId: string,
   limit: number = 30,
   maxBytesToRead: number = TAIL_CHUNK,
-): any[] {
+): Promise<any[]> {
   const filePath = path.join(ACTIVITY_DIR, `${clientId}.jsonl`);
   if (!fs.existsSync(filePath)) return [];
-  const lines = readLastLinesSync(filePath, limit, maxBytesToRead);
+  const lines = await readLastLines(filePath, limit, maxBytesToRead);
   const out: any[] = [];
   for (const l of lines) {
     try {
@@ -448,14 +748,14 @@ export function getClientActivity(
 }
 
 /** Returns last `limit` events; max 4KB read. */
-export function getClientEvents(
+export async function getClientEvents(
   clientId: string,
   limit: number = 30,
   maxBytesToRead: number = TAIL_CHUNK,
-): any[] {
+): Promise<any[]> {
   const filePath = path.join(EVENTS_DIR, `${clientId}.jsonl`);
   if (!fs.existsSync(filePath)) return [];
-  const lines = readLastLinesSync(filePath, limit, maxBytesToRead);
+  const lines = await readLastLines(filePath, limit, maxBytesToRead);
   const out: any[] = [];
   for (const l of lines) {
     try {
@@ -468,8 +768,7 @@ export function getClientEvents(
 }
 
 export function clearEvents() {
-  // Not supported easily with split files, or just rm -rf storage/events/*
-  // Keeping empty implementation for now or removing usage
+  // Not supported easily with split files
 }
 
 export async function appendHeartbeat(data: any): Promise<void> {
@@ -486,10 +785,10 @@ interface AppStat {
   lastSeen: string; // ISO date
 }
 
-export function getAppStats(): AppStat[] {
+export async function getAppStats(): Promise<AppStat[]> {
   if (!fs.existsSync(APPS_FILE)) return [];
   try {
-    const content = fs.readFileSync(APPS_FILE, "utf-8");
+    const content = await fsPromises.readFile(APPS_FILE, "utf-8");
     const data = JSON.parse(content);
     return Object.values(data);
   } catch (e) {
@@ -502,145 +801,103 @@ export async function upsertAppStat(
   processName: string,
   timestamp: Date,
 ): Promise<void> {
-  let stats: Record<string, AppStat> = {};
-  try {
-    const content = await fsPromises.readFile(APPS_FILE, "utf-8");
-    stats = JSON.parse(content);
-  } catch {
-    stats = {};
-  }
-
-  const key = `${clientId}_${processName}`;
-  if (!stats[key]) {
-    stats[key] = {
-      clientId,
-      processName,
-      count: 0,
-      lastSeen: timestamp.toISOString(),
-    };
-  }
-
-  stats[key].count++;
-  if (new Date(timestamp) > new Date(stats[key].lastSeen)) {
-    stats[key].lastSeen = timestamp.toISOString();
-  }
-
-  await fsPromises.writeFile(
-    APPS_FILE,
-    JSON.stringify(stats, null, 2),
-    "utf-8",
-  );
-}
-
-// Client Storage (File-based, scalable)
-const CLIENTS_DIR = path.join(DATA_DIR, "clients");
-
-// Ensure clients directory exists
-if (!fs.existsSync(CLIENTS_DIR)) {
-  fs.mkdirSync(CLIENTS_DIR, { recursive: true });
-}
-
-// Migrate existing clients.json if it exists
-const OLD_CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
-if (fs.existsSync(OLD_CLIENTS_FILE)) {
-  try {
-    const content = fs.readFileSync(OLD_CLIENTS_FILE, "utf-8");
-    const oldClients = JSON.parse(content);
-    if (Array.isArray(oldClients)) {
-      oldClients.forEach((c) => {
-        if (c.id) {
-          fs.writeFileSync(
-            path.join(CLIENTS_DIR, `${c.id}.json`),
-            JSON.stringify(c, null, 2),
-            "utf-8",
-          );
-        }
-      });
+  await withFileWriteLock(APPS_FILE, async () => {
+    let stats: Record<string, AppStat> = {};
+    try {
+      const content = await fsPromises.readFile(APPS_FILE, "utf-8");
+      stats = JSON.parse(content);
+    } catch {
+      stats = {};
     }
-    // Rename old file to avoid confusion/double migration
-    fs.renameSync(OLD_CLIENTS_FILE, path.join(DATA_DIR, "clients.json.bak"));
-  } catch (e) {
-    console.error("Failed to migrate old clients.json", e);
-  }
+
+    const key = `${clientId}_${processName}`;
+    if (!stats[key]) {
+      stats[key] = {
+        clientId,
+        processName,
+        count: 0,
+        lastSeen: timestamp.toISOString(),
+      };
+    }
+
+    stats[key].count++;
+    if (new Date(timestamp) > new Date(stats[key].lastSeen)) {
+      stats[key].lastSeen = timestamp.toISOString();
+    }
+
+    await fsPromises.writeFile(
+      APPS_FILE,
+      JSON.stringify(stats, null, 2),
+      "utf-8",
+    );
+  });
 }
 
-export function getClients(): any[] {
+export async function getClients(): Promise<any[]> {
   if (!fs.existsSync(CLIENTS_DIR)) return [];
   try {
-    const files = fs
-      .readdirSync(CLIENTS_DIR)
-      .filter((f) => f.endsWith(".json"));
-    return files
-      .map((f) => {
-        try {
-          return JSON.parse(
-            fs.readFileSync(path.join(CLIENTS_DIR, f), "utf-8"),
-          );
-        } catch {
-          return null;
-        }
-      })
-      .filter((c) => c !== null);
+    const files = await fsPromises.readdir(CLIENTS_DIR);
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
+
+    const clients = await mapWithConcurrency(jsonFiles, 20, async (f) => {
+      const fp = path.join(CLIENTS_DIR, f);
+      return await readJsonFileWithRetry(fp, 1);
+    });
+
+    return clients.filter((c) => c !== null);
   } catch (e) {
     return [];
   }
 }
 
-export function getClient(id: string): any | undefined {
+export async function getClient(id: string): Promise<any | undefined> {
   const filePath = path.join(CLIENTS_DIR, `${id}.json`);
   if (!fs.existsSync(filePath)) return undefined;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  } catch {
-    return undefined;
-  }
+  const parsed = await readJsonFileWithRetry(filePath, 1);
+  return parsed ?? undefined;
 }
 
 export async function saveClient(data: any): Promise<void> {
-  const filePath = path.join(CLIENTS_DIR, `${data.id}.json`);
-  let existing: any = {};
-  try {
-    const content = await fsPromises.readFile(filePath, "utf-8");
-    existing = JSON.parse(content);
-  } catch {
-    /* file may not exist */
-  }
-  const merged = { ...existing, ...data };
-  await fsPromises.writeFile(
-    filePath,
-    JSON.stringify(merged, null, 2),
-    "utf-8",
-  );
+  const id = String(data?.id || "").trim();
+  if (!id) return;
+  const filePath = path.join(CLIENTS_DIR, `${id}.json`);
+  await withClientWriteLock(id, async () => {
+    const existing = (await readJsonFileWithRetry(filePath, 1)) || {};
+    const merged = { ...existing, ...data, id };
+    await writeJsonFileAtomic(filePath, JSON.stringify(merged, null, 2));
+  });
 }
 
-export function deleteClient(id: string) {
+export async function deleteClient(id: string): Promise<void> {
   const filePath = path.join(CLIENTS_DIR, `${id}.json`);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  if (fs.existsSync(filePath)) await fsPromises.unlink(filePath);
 }
 
 // Global Activity — 4KB per file, 5 lines each
-export function getLatestActivity(limit: number = 30): any[] {
+export async function getLatestActivity(limit: number = 30): Promise<any[]> {
   if (!fs.existsSync(ACTIVITY_DIR)) return [];
-  const files = fs
-    .readdirSync(ACTIVITY_DIR)
-    .filter((f) => f.endsWith(".jsonl"));
+  const files = await fsPromises.readdir(ACTIVITY_DIR);
+  const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
   const all: any[] = [];
   const perFile = 5;
   const bytesPerFile = TAIL_CHUNK;
-  for (const f of files) {
-    const lines = readLastLinesSync(
+
+  const perFileRecords = await mapWithConcurrency(jsonlFiles, 20, async (f) => {
+    const lines = await readLastLines(
       path.join(ACTIVITY_DIR, f),
       perFile,
       bytesPerFile,
     );
+    const out: any[] = [];
     for (const l of lines) {
       try {
-        all.push(JSON.parse(l));
-      } catch {
-        /* skip */
-      }
+        out.push(JSON.parse(l));
+      } catch {}
     }
-  }
+    return out;
+  });
+  for (const arr of perFileRecords) all.push(...arr);
+
   all.sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
   );
@@ -648,29 +905,32 @@ export function getLatestActivity(limit: number = 30): any[] {
 }
 
 /** One latest activity record per client (for /activity/latest, needed for 20+ clients) */
-export function getLatestActivityPerClient(maxClients: number = 100): any[] {
+export async function getLatestActivityPerClient(
+  maxClients: number = 100,
+): Promise<any[]> {
   if (!fs.existsSync(ACTIVITY_DIR)) return [];
-  const files = fs
-    .readdirSync(ACTIVITY_DIR)
+  const files = await fsPromises.readdir(ACTIVITY_DIR);
+  const jsonlFiles = files
     .filter((f) => f.endsWith(".jsonl"))
     .slice(0, maxClients);
-  const results: any[] = [];
-  for (const f of files) {
+
+  const results = await mapWithConcurrency(jsonlFiles, 50, async (f) => {
     const filePath = path.join(ACTIVITY_DIR, f);
-    const lines = readLastLinesSync(filePath, 1, TAIL_CHUNK);
-    if (lines.length === 0) continue;
+    const lines = await readLastLines(filePath, 1, TAIL_CHUNK);
+    if (lines.length === 0) return null;
     try {
       const rec = JSON.parse(lines[lines.length - 1]);
       const clientId = path.basename(f, ".jsonl");
-      results.push({
+      return {
         ...rec,
         clientId: rec.clientId || clientId,
-      });
+      };
     } catch {
-      /* skip */
+      return null;
     }
-  }
-  return results;
+  });
+
+  return results.filter((r) => r !== null);
 }
 
 // Heartbeats — 32KB tail for 20+ clients (~200 lines), env HEARTBEAT_TAIL_BYTES overrides
@@ -678,11 +938,13 @@ const HEARTBEAT_TAIL_BYTES = parseInt(
   process.env.HEARTBEAT_TAIL_BYTES || "32768",
   10,
 );
-export function getLatestHeartbeats(): any[] {
+
+export async function getLatestHeartbeats(): Promise<any[]> {
   const filePath = path.join(DATA_DIR, "heartbeats.jsonl");
   const fromJsonl: any[] = [];
+
   if (fs.existsSync(filePath)) {
-    const lines = readLastLinesSync(filePath, 200, HEARTBEAT_TAIL_BYTES);
+    const lines = await readLastLines(filePath, 200, HEARTBEAT_TAIL_BYTES);
     const latestMap = new Map<string, any>();
     for (const line of lines) {
       try {
@@ -694,13 +956,13 @@ export function getLatestHeartbeats(): any[] {
     }
     fromJsonl.push(...latestMap.values());
   }
-  // Merge with client lastHeartbeat — source of truth (updated on every heartbeat).
-  // heartbeats.jsonl tail can scroll out; clients/X.json never does.
-  const clients = getClients();
+
+  const clients = await getClients();
   const byClient = new Map<string, any>();
   for (const hb of fromJsonl) {
     byClient.set(hb.clientId, { ...hb });
   }
+
   for (const c of clients) {
     if (!c.id) continue;
     const lastHb = c.lastHeartbeat || c.lastSeen;
@@ -722,70 +984,96 @@ export function getLatestHeartbeats(): any[] {
 // Favorites Storage
 const FAVORITES_FILE = path.join(DATA_DIR, "favorites.json");
 
-export function getFavorites(): string[] {
+export async function getFavorites(): Promise<string[]> {
   if (!fs.existsSync(FAVORITES_FILE)) return [];
   try {
-    const content = fs.readFileSync(FAVORITES_FILE, "utf-8");
+    const content = await fsPromises.readFile(FAVORITES_FILE, "utf-8");
     return JSON.parse(content);
   } catch {
     return [];
   }
 }
 
-export function setFavorite(filename: string, isFavorite: boolean) {
-  let favs = new Set(getFavorites());
-  if (isFavorite) {
-    favs.add(filename);
-  } else {
-    favs.delete(filename);
-  }
-  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(Array.from(favs)), "utf-8");
+export async function setFavorite(
+  filename: string,
+  isFavorite: boolean,
+): Promise<void> {
+  await withFileWriteLock(FAVORITES_FILE, async () => {
+    let list: string[] = [];
+    try {
+      const content = await fsPromises.readFile(FAVORITES_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      list = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      list = [];
+    }
+    const favs = new Set(list);
+    if (isFavorite) favs.add(filename);
+    else favs.delete(filename);
+    await writeJsonFileAtomic(
+      FAVORITES_FILE,
+      JSON.stringify(Array.from(favs), null, 2),
+    );
+  });
 }
 
 // Policies Storage for NO_DB
 const POLICIES_FILE = path.join(DATA_DIR, "policies.json");
 
-export function getPolicies(): any[] {
+export async function getPolicies(): Promise<any[]> {
   if (!fs.existsSync(POLICIES_FILE)) return [];
   try {
-    return JSON.parse(fs.readFileSync(POLICIES_FILE, "utf-8"));
+    const content = await fsPromises.readFile(POLICIES_FILE, "utf-8");
+    return JSON.parse(content);
   } catch (e) {
     return [];
   }
 }
 
-export function getPolicy(id: string): any | undefined {
-  return getPolicies().find((p: any) => p.id === id);
+export async function getPolicy(id: string): Promise<any | undefined> {
+  const policies = await getPolicies();
+  return policies.find((p: any) => p.id === id);
 }
 
 // Users Storage (File-based)
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 
-export function getUsers(): any[] {
+export async function getUsers(): Promise<any[]> {
   if (!fs.existsSync(USERS_FILE)) return [];
   try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, "utf-8"));
+    const content = await fsPromises.readFile(USERS_FILE, "utf-8");
+    return JSON.parse(content);
   } catch (e) {
     return [];
   }
 }
 
-export function getUser(email: string): any | undefined {
-  return getUsers().find((u: any) => u.email === email);
+export async function getUser(email: string): Promise<any | undefined> {
+  const users = await getUsers();
+  return users.find((u: any) => u.email === email);
 }
 
-export function saveUser(user: any) {
-  const users = getUsers();
-  const index = users.findIndex((u: any) => u.email === user.email);
-  if (index >= 0) {
-    users[index] = { ...users[index], ...user, updatedAt: new Date() };
-  } else {
-    users.push({
-      ...user,
-      id: user.id || `${Date.now()}_${Math.random()}`,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-  }
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+export async function saveUser(user: any): Promise<void> {
+  await withFileWriteLock(USERS_FILE, async () => {
+    let users: any[] = [];
+    try {
+      const content = await fsPromises.readFile(USERS_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      users = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      users = [];
+    }
+    const index = users.findIndex((u: any) => u.email === user.email);
+    if (index >= 0) {
+      users[index] = { ...users[index], ...user, updatedAt: new Date() };
+    } else {
+      users.push({
+        ...user,
+        id: user.id || `${Date.now()}_${Math.random()}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+    await writeJsonFileAtomic(USERS_FILE, JSON.stringify(users, null, 2));
+  });
 }

@@ -3,33 +3,24 @@ import { decryptAes256CbcPrefixedIv } from "../encryption";
 import {
   appendActivity,
   getClient,
+  saveClient,
   getLatestActivity,
   getLatestActivityPerClient,
+  ingestActivityToTimesheetAndClient,
 } from "../store";
+import { getSenderClientId } from "../clientId";
+import { getKeysToTry } from "../keyring";
 
 const router = Router();
 
 router.post("/", async (req, res) => {
   const t0 = Date.now();
   try {
-    const clientId = (req.headers["x-client-id"] as string) || "";
-    if (!clientId)
-      return res.status(400).json({ message: "X-Client-Id header required" });
+    const clientId = getSenderClientId(req);
 
     let encryptionKey = "";
     const client = await getClient(clientId);
-    let keysToTry: string[] = [];
-
-    if (client && client.encryptionKey) {
-      keysToTry.push(client.encryptionKey);
-    }
-
-    const globalKey =
-      process.env.ENCRYPTION_KEY ||
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!keysToTry.includes(globalKey)) {
-      keysToTry.push(globalKey);
-    }
+    const keysToTry = getKeysToTry(client?.encryptionKey);
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
       ? (req.body as Buffer)
@@ -50,6 +41,12 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
+      const now = new Date();
+      if (!client) {
+        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
+      } else {
+        await saveClient({ id: clientId, lastSeen: now });
+      }
       console.error(
         `[Activity] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -57,21 +54,34 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(json);
+    const now = new Date();
+    const sampleTs = new Date(
+      payload.Timestamp || payload.timestamp || Date.now(),
+    );
+    const activeMs = parseInt(
+      String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0),
+      10,
+    );
+    const inactiveMs = parseInt(
+      String(payload.InactiveMilliseconds ?? payload.inactiveMilliseconds ?? 0),
+      10,
+    );
+
+    await ingestActivityToTimesheetAndClient(
+      clientId,
+      usedKey,
+      now,
+      isNaN(sampleTs.getTime()) ? now : sampleTs,
+      Number.isFinite(activeMs) ? activeMs : 0,
+      Number.isFinite(inactiveMs) ? inactiveMs : 0,
+    );
 
     await appendActivity({
       clientId,
-      timestamp: new Date(payload.Timestamp || payload.timestamp || Date.now()),
+      timestamp: isNaN(sampleTs.getTime()) ? now : sampleTs,
       isActive: Boolean(payload.IsActive ?? payload.isActive ?? false),
-      activeMilliseconds: parseInt(
-        String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0),
-        10,
-      ),
-      inactiveMilliseconds: parseInt(
-        String(
-          payload.InactiveMilliseconds ?? payload.inactiveMilliseconds ?? 0,
-        ),
-        10,
-      ),
+      activeMilliseconds: Number.isFinite(activeMs) ? activeMs : 0,
+      inactiveMilliseconds: Number.isFinite(inactiveMs) ? inactiveMs : 0,
     });
     const ms = Date.now() - t0;
     if (ms > 100 && process.env.NODE_ENV === "production") {

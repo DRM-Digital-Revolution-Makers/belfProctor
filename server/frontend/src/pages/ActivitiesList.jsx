@@ -1,6 +1,6 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Table, Tag, Button } from "antd";
+import { Table, Tag, Button, Select, Space } from "antd";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
@@ -11,6 +11,7 @@ export default function ActivitiesList() {
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
   const [items, setItems] = React.useState([]);
+  const [categoryFilter, setCategoryFilter] = React.useState(null);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
   const [serverTime, setServerTime] = React.useState(null);
   const isDebug =
@@ -55,6 +56,7 @@ export default function ActivitiesList() {
               : null;
         return {
           clientId: c.id,
+          category: c.category || "",
           timestamp: ts,
           isActive,
           activeMilliseconds:
@@ -145,15 +147,41 @@ export default function ActivitiesList() {
     );
   };
 
+  const categories = React.useMemo(() => {
+    const set = new Set();
+    (Array.isArray(items) ? items : []).forEach((it) => {
+      const v = String(it?.category || "").trim();
+      if (v) set.add(v);
+    });
+    return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [items]);
+
+  const filteredItems = React.useMemo(() => {
+    const arr = Array.isArray(items) ? items : [];
+    if (!categoryFilter) return arr;
+    return arr.filter((it) => String(it?.category || "") === String(categoryFilter));
+  }, [items, categoryFilter]);
+
   return (
     <List title={t("activity.title")}>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select
+          allowClear
+          style={{ minWidth: 240 }}
+          placeholder={t("common.category")}
+          value={categoryFilter}
+          options={categories.map((c) => ({ label: c, value: c }))}
+          onChange={(v) => setCategoryFilter(v || null)}
+        />
+      </Space>
       <Table
         rowKey="clientId"
-        dataSource={Array.isArray(items) ? items : []}
+        dataSource={filteredItems}
         size="large"
         pagination={false}
         columns={[
           { title: "ClientId", dataIndex: "clientId" },
+          { title: t("common.category"), dataIndex: "category" },
           {
             title: t("common.status"),
             render: (_, r) => {

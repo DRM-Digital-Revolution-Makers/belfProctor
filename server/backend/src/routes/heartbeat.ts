@@ -6,32 +6,21 @@ import {
   saveClient,
   getLatestHeartbeats,
 } from "../store";
+import { getSenderClientId } from "../clientId";
+import { consumePendingUninstall } from "../wsHub";
+import { getKeysToTry } from "../keyring";
 
 const router = Router();
 
 router.post("/", async (req, res) => {
   const t0 = Date.now();
   try {
-    const clientId = (req.headers["x-client-id"] as string) || "";
-    if (!clientId)
-      return res.status(400).json({ message: "X-Client-Id header required" });
+    const clientId = getSenderClientId(req);
 
     let encryptionKey = "";
     const client = await getClient(clientId);
 
-    // Strategy: Try client-specific key first, then global key
-    let keysToTry: string[] = [];
-
-    if (client && client.encryptionKey) {
-      keysToTry.push(client.encryptionKey);
-    }
-
-    const globalKey =
-      process.env.ENCRYPTION_KEY ||
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!keysToTry.includes(globalKey)) {
-      keysToTry.push(globalKey);
-    }
+    const keysToTry = getKeysToTry(client?.encryptionKey);
 
     const encrypted: Buffer = Buffer.isBuffer(req.body)
       ? (req.body as Buffer)
@@ -55,6 +44,12 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
+      const now = new Date();
+      if (!client) {
+        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
+      } else {
+        await saveClient({ id: clientId, lastSeen: now });
+      }
       console.error(
         `[Heartbeat] Failed to decrypt heartbeat for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -62,9 +57,11 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(decryptedJson);
-    console.log(
-      `[Heartbeat] Successfully decrypted for ${clientId}. Payload size: ${decryptedJson.length}`,
-    );
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        `[Heartbeat] Successfully decrypted for ${clientId}. Payload size: ${decryptedJson.length}`,
+      );
+    }
 
     // Auto-register or Update
     const now = new Date();
@@ -79,7 +76,9 @@ router.post("/", async (req, res) => {
         lastHeartbeat: now, // Explicitly set lastHeartbeat
         createdAt: now,
       });
-      console.log(`Auto-registered new client: ${clientId}`);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`Auto-registered new client: ${clientId}`);
+      }
     } else {
       // Update last seen AND encryption key if it changed (e.g. we recovered using global key)
       const updateData: any = {
@@ -93,9 +92,11 @@ router.post("/", async (req, res) => {
 
       // If we used a key different from what was stored, update it!
       if (client.encryptionKey !== usedKey) {
-        console.log(
-          `Updating encryption key for client ${clientId} (Recovered via fallback)`,
-        );
+        if (process.env.NODE_ENV !== "production") {
+          console.log(
+            `Updating encryption key for client ${clientId} (Recovered via fallback)`,
+          );
+        }
         updateData.encryptionKey = usedKey;
       }
 
@@ -111,6 +112,10 @@ router.post("/", async (req, res) => {
     const ms = Date.now() - t0;
     if (ms > 100 && process.env.NODE_ENV === "production") {
       console.warn(`[Heartbeat] Slow request ${clientId}: ${ms}ms`);
+    }
+    const uninstall = await consumePendingUninstall(clientId);
+    if (uninstall && uninstall.id) {
+      return res.json({ ok: true, uninstall });
     }
     return res.json({ ok: true });
   } catch (e) {

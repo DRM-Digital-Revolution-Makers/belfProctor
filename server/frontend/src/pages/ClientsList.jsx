@@ -1,6 +1,16 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Table, Modal, Form, Input, Button, message, Alert } from "antd";
+import {
+  Table,
+  Modal,
+  Form,
+  Input,
+  Button,
+  message,
+  Alert,
+  Select,
+  Space,
+} from "antd";
 import { authFetch } from "../dataProvider.js";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -23,6 +33,13 @@ export default function ClientsList() {
   const [bulkOpen, setBulkOpen] = React.useState(false);
   const [bulkLoading, setBulkLoading] = React.useState(false);
   const [bulkForm] = Form.useForm();
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const [deleteLoading, setDeleteLoading] = React.useState(false);
+  const [deleteForm] = Form.useForm();
+  const [catOpen, setCatOpen] = React.useState(false);
+  const [catLoading, setCatLoading] = React.useState(false);
+  const [catForm] = Form.useForm();
+  const [categoryFilter, setCategoryFilter] = React.useState(null);
   const genId = React.useCallback(() => {
     const n = Math.floor(Math.random() * 1e6)
       .toString()
@@ -61,6 +78,23 @@ export default function ClientsList() {
   React.useEffect(() => {
     load();
   }, [load]);
+
+  const categories = React.useMemo(() => {
+    const set = new Set();
+    (Array.isArray(data) ? data : []).forEach((c) => {
+      const v = String(c?.category || "").trim();
+      if (v) set.add(v);
+    });
+    return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [data]);
+
+  const filteredData = React.useMemo(() => {
+    const arr = Array.isArray(data) ? data : [];
+    if (!categoryFilter) return arr;
+    return arr.filter(
+      (c) => String(c?.category || "") === String(categoryFilter),
+    );
+  }, [data, categoryFilter]);
 
   const onCreate = async () => {
     try {
@@ -120,14 +154,59 @@ export default function ClientsList() {
   };
   const bulkDelete = async () => {
     if (!selected.length) return;
-    await Promise.allSettled(
-      selected.map((id) =>
-        authFetch(`${API_URL}/clients/${id}`, { method: "DELETE" }),
-      ),
-    );
-    message.success(t("clients.deleteComplete"));
-    setSelected([]);
-    load();
+    setDeleteOpen(true);
+  };
+
+  const confirmBulkDelete = async () => {
+    if (!selected.length) return;
+    try {
+      const vals = await deleteForm.validateFields();
+      setDeleteLoading(true);
+      const password = String(vals.password || "").trim();
+      const headers = { "X-Admin-Password": password };
+
+      const results = await Promise.all(
+        selected.map(async (id) => {
+          try {
+            const resp = await authFetch(`${API_URL}/clients/${id}`, {
+              method: "DELETE",
+              headers,
+            });
+            let msg = "";
+            try {
+              const j = await resp.json();
+              msg = String(j?.message || "");
+            } catch {
+              msg = "";
+            }
+            return { id, ok: resp.ok, status: resp.status, message: msg };
+          } catch (e) {
+            return {
+              id,
+              ok: false,
+              status: 0,
+              message: String(e?.message || ""),
+            };
+          }
+        }),
+      );
+
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length) {
+        const first = failed[0];
+        const detail = first?.message ? ` (${first.message})` : "";
+        message.error(
+          `${t("clients.deleteError")}: ${failed.length}/${selected.length}${detail}`,
+        );
+      } else message.success(t("clients.deleteComplete"));
+
+      setSelected([]);
+      setDeleteOpen(false);
+      deleteForm.resetFields();
+      load();
+    } finally {
+      setDeleteLoading(false);
+    }
   };
   const bulkIntervals = async () => {
     try {
@@ -154,6 +233,31 @@ export default function ClientsList() {
       setBulkLoading(false);
     }
   };
+
+  const bulkCategory = async () => {
+    try {
+      const vals = await catForm.validateFields();
+      setCatLoading(true);
+      const headers = { "Content-Type": "application/json" };
+      await Promise.allSettled(
+        selected.map((id) =>
+          authFetch(`${API_URL}/clients/${id}/category`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              category: String(vals.category || "").trim(),
+            }),
+          }),
+        ),
+      );
+      message.success(t("clients.setCategorySelected"));
+      setCatOpen(false);
+      catForm.resetFields();
+      load();
+    } finally {
+      setCatLoading(false);
+    }
+  };
   return (
     <List title={t("clients.title")}>
       <div
@@ -169,6 +273,19 @@ export default function ClientsList() {
           {t("clients.addClient")}
         </Button>
       </div>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select
+          allowClear
+          style={{ minWidth: 240 }}
+          placeholder={t("common.category")}
+          value={categoryFilter}
+          options={categories.map((c) => ({ label: c, value: c }))}
+          onChange={(v) => {
+            setCategoryFilter(v || null);
+            setSelected([]);
+          }}
+        />
+      </Space>
       <div
         style={{
           marginBottom: 16,
@@ -179,6 +296,9 @@ export default function ClientsList() {
       >
         <Button disabled={!selected.length} onClick={() => setBulkOpen(true)}>
           {t("clients.setIntervalsSelected")}
+        </Button>
+        <Button disabled={!selected.length} onClick={() => setCatOpen(true)}>
+          {t("clients.setCategorySelected")}
         </Button>
         <Button danger disabled={!selected.length} onClick={bulkDelete}>
           {t("clients.deleteSelected")}
@@ -196,12 +316,13 @@ export default function ClientsList() {
       )}
       <Table
         rowKey="id"
-        dataSource={Array.isArray(data) ? data : []}
+        dataSource={filteredData}
         pagination={false}
         size="small"
         rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
         columns={[
           { title: "ClientId", dataIndex: "id" },
+          { title: t("common.category"), dataIndex: "category" },
           {
             title: t("common.created"),
             dataIndex: "createdAt",
@@ -218,14 +339,11 @@ export default function ClientsList() {
             title: t("common.status"),
             render: (_, r) => {
               const hb = latestHeartbeats.find((h) => h.clientId === r.id);
-              // Check lastHeartbeat first, then lastActivity
-              // Increase timeout to 10 minutes to avoid flickering
               const lastSeen =
                 hb?.lastHeartbeat ||
                 hb?.lastActivity ||
                 hb?.lastSeen ||
                 hb?.timestamp;
-              // Use serverTime for comparison to avoid clock skew
               const now = serverTime ? serverTime.getTime() : Date.now();
               const online =
                 lastSeen && now - new Date(lastSeen).getTime() < 3 * 60 * 1000;
@@ -268,6 +386,43 @@ export default function ClientsList() {
           </Form.Item>
           <Form.Item name="screenshotMs" label={t("common.screenshotMs")}>
             <Input placeholder={`${t("common.example")} 60000`} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        open={catOpen}
+        title={t("clients.setCategorySelected")}
+        onCancel={() => setCatOpen(false)}
+        onOk={bulkCategory}
+        confirmLoading={catLoading}
+        okText={t("common.save")}
+      >
+        <Form form={catForm} layout="vertical">
+          <Form.Item
+            name="category"
+            label={t("common.category")}
+            rules={[{ required: true }]}
+          >
+            <Input placeholder={t("common.example") + " Отдел продаж"} />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        open={deleteOpen}
+        title={t("clients.deleteSelected")}
+        onCancel={() => setDeleteOpen(false)}
+        onOk={confirmBulkDelete}
+        confirmLoading={deleteLoading}
+        okText={t("common.delete")}
+      >
+        <Form form={deleteForm} layout="vertical">
+          <Form.Item
+            name="password"
+            label={t("common.password")}
+            rules={[{ required: true, message: t("common.password") }]}
+          >
+            <Input.Password />
           </Form.Item>
         </Form>
       </Modal>

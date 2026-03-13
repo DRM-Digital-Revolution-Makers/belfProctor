@@ -2,14 +2,19 @@ import { Router } from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { decryptAes256CbcPrefixedIv, decryptFileStream } from "../encryption";
 import { requireAuth } from "../middleware/auth";
-import { getClient, getFavorites, setFavorite } from "../store";
+import { getClient, getClients, saveClient, getFavorites, setFavorite } from "../store";
+import { getSenderClientId, normalizeClientId } from "../clientId";
+import { withLock } from "../locks";
+import { getKeysToTry } from "../keyring";
+import { resolveUploadDir } from "../runtimePaths";
 
 const router = Router();
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const tempDir = path.join(process.cwd(), "temp_uploads");
+    const tempDir = path.join(os.tmpdir(), "belfproctor_uploads");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     cb(null, tempDir);
   },
@@ -17,51 +22,59 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}`);
   },
 });
-const upload = multer({
+const MAX_SCREENSHOT_BYTES = parseInt(
+  process.env.MAX_SCREENSHOT_BYTES || String(20 * 1024 * 1024),
+  10,
+);
+const MAX_REPORT_BYTES = parseInt(
+  process.env.MAX_REPORT_BYTES || String(200 * 1024 * 1024),
+  10,
+);
+const MAX_COMMAND_RESULT_BYTES = parseInt(
+  process.env.MAX_COMMAND_RESULT_BYTES || String(512 * 1024 * 1024),
+  10,
+);
+
+const uploadScreenshot = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 * 1024 },
+  limits: { fileSize: MAX_SCREENSHOT_BYTES },
+});
+const uploadReport = multer({
+  storage,
+  limits: { fileSize: MAX_REPORT_BYTES },
+});
+const uploadCommandResult = multer({
+  storage,
+  limits: { fileSize: MAX_COMMAND_RESULT_BYTES },
 });
 
-const UPLOAD_DIR =
-  process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+const UPLOAD_DIR = resolveUploadDir();
 
-router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
+router.post("/screenshots", uploadScreenshot.single("screenshot"), async (req, res) => {
   const tempPath = req.file?.path;
   try {
     const clientId =
-      (req.body.clientId as string) ||
-      (req.headers["x-client-id"] as string) ||
-      "";
+      normalizeClientId(String((req as any).body?.clientId || "")) ||
+      normalizeClientId(String(req.headers["x-client-id"] || "")) ||
+      getSenderClientId(req);
     const timestampStr =
       (req.body.timestamp as string) || new Date().toISOString();
-    if (!clientId || !req.file || !tempPath)
+    if (!req.file || !tempPath)
       return res
         .status(400)
         .json({ message: "clientId and screenshot required" });
 
-    let client: any = await getClient(clientId);
+    const safeClientId = clientId;
+    const now = new Date();
+    let client: any = await getClient(safeClientId);
     if (!client) {
-      // Fallback for new clients in file mode
-      client = {
-        id: clientId,
-        encryptionKey:
-          process.env.ENCRYPTION_KEY ||
-          "0000000000000000000000000000000000000000000000000000000000000000",
-      };
+      await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
+      client = await getClient(safeClientId);
     }
 
-    let keysToTry: string[] = [];
-    if (client && client.encryptionKey) {
-      keysToTry.push(client.encryptionKey);
-    }
-    const globalKey =
-      process.env.ENCRYPTION_KEY ||
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    if (!keysToTry.includes(globalKey)) {
-      keysToTry.push(globalKey);
-    }
+    const keysToTry = getKeysToTry(client?.encryptionKey);
 
-    const clientDir = path.join(UPLOAD_DIR, "screenshots", clientId);
+    const clientDir = path.join(UPLOAD_DIR, "screenshots", safeClientId);
     fs.mkdirSync(clientDir, { recursive: true });
 
     // Treat the incoming timestamp as absolute truth (Client's Local Time)
@@ -81,7 +94,7 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
 
     const adjTs = sendTs;
     const iso = adjTs.toISOString().replace(/[:]/g, "-");
-    const filename = `${clientId}_${iso}.jpg`;
+    const filename = `${safeClientId}_${iso}.jpg`;
     const filepath = path.join(clientDir, filename);
 
     let usedKey = "";
@@ -99,13 +112,19 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
 
     if (!usedKey) {
       console.error(
-        `[Screenshots] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
+        `[Screenshots] Failed to decrypt for client ${safeClientId}. Tried ${keysToTry.length} keys.`,
       );
       return res.status(400).json({ message: "Decryption failed" });
     }
+    const existing = await getClient(safeClientId);
+    if (!existing || existing.encryptionKey !== usedKey) {
+      await saveClient({ id: safeClientId, encryptionKey: usedKey, lastSeen: now });
+    } else {
+      await saveClient({ id: safeClientId, lastSeen: now });
+    }
 
     const rec = {
-      id: `${clientId}_${Date.now()}`,
+      id: `${safeClientId}_${Date.now()}`,
       filename,
       path: filepath,
       timestamp: adjTs,
@@ -131,25 +150,23 @@ router.post("/screenshots", upload.single("screenshot"), async (req, res) => {
   }
 });
 
-router.post("/reports", upload.single("report"), async (req, res) => {
+router.post("/reports", uploadReport.single("report"), async (req, res) => {
   const tempPath = req.file?.path;
   try {
     const clientId =
-      (req.body.clientId as string) ||
-      (req.headers["x-client-id"] as string) ||
-      "";
+      normalizeClientId(String((req as any).body?.clientId || "")) ||
+      normalizeClientId(String(req.headers["x-client-id"] || "")) ||
+      getSenderClientId(req);
     const timestampStr = new Date().toISOString();
-    if (!clientId || !req.file || !tempPath)
+    if (!req.file || !tempPath)
       return res.status(400).json({ message: "clientId and report required" });
 
-    let client: any = await getClient(clientId);
+    const safeClientId = clientId;
+    const now = new Date();
+    let client: any = await getClient(safeClientId);
     if (!client) {
-      client = {
-        id: clientId,
-        encryptionKey:
-          process.env.ENCRYPTION_KEY ||
-          "0000000000000000000000000000000000000000000000000000000000000000",
-      };
+      await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
+      client = await getClient(safeClientId);
     }
 
     if (!client || !client.encryptionKey) {
@@ -158,16 +175,22 @@ router.post("/reports", upload.single("report"), async (req, res) => {
         .json({ message: "Client not registered or missing key" });
     }
 
-    const clientDir = path.join(UPLOAD_DIR, "reports", clientId);
+    const clientDir = path.join(UPLOAD_DIR, "reports", safeClientId);
     fs.mkdirSync(clientDir, { recursive: true });
     const now2 = new Date();
     const filename = `${now2.toISOString().replace(/[:]/g, "-")}_${Date.now()}`;
     const filepath = path.join(clientDir, filename);
 
     await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    const existing = await getClient(safeClientId);
+    if (!existing || existing.encryptionKey !== client.encryptionKey) {
+      await saveClient({ id: safeClientId, encryptionKey: client.encryptionKey, lastSeen: now });
+    } else {
+      await saveClient({ id: safeClientId, lastSeen: now });
+    }
 
     const rec = {
-      id: `${clientId}_${Date.now()}`,
+      id: `${safeClientId}_${Date.now()}`,
       filename,
       path: filepath,
       timestamp: new Date(timestampStr),
@@ -210,7 +233,18 @@ router.get("/screenshots", requireAuth, async (req, res) => {
 
     const favorites = new Set(await getFavorites());
     let allFiles: any[] = [];
-    const clientDirs = fs.readdirSync(screenshotsDir);
+    let clientDirs = fs.readdirSync(screenshotsDir);
+
+    const filterCategory = String(req.query.category || "").trim();
+    if (filterCategory) {
+      const clients = await getClients();
+      const allowed = new Set(
+        clients
+          .filter((c) => String(c?.category || "") === filterCategory)
+          .map((c) => c.id),
+      );
+      clientDirs = clientDirs.filter((id) => allowed.has(id));
+    }
 
     const maxPerClient = 10; // Low memory: ~20 clients * 10 = 200 entries max
     for (const clientId of clientDirs) {
@@ -316,27 +350,24 @@ router.get("/reports/:id/csv", requireAuth, async (req, res) => {
 });
 
 // Command result file upload (encrypted)
-router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
+router.post("/commands/:id/result", uploadCommandResult.single("file"), async (req, res) => {
   const tempPath = req.file?.path;
   try {
     const id = req.params.id;
     const clientId =
-      (req.body.clientId as string) ||
-      (req.headers["x-client-id"] as string) ||
-      "";
+      normalizeClientId(String((req as any).body?.clientId || "")) ||
+      normalizeClientId(String(req.headers["x-client-id"] || "")) ||
+      getSenderClientId(req);
     const timestampStr =
       (req.body.timestamp as string) || new Date().toISOString();
-    if (!clientId || !req.file || !tempPath)
+    if (!req.file || !tempPath)
       return res.status(400).json({ message: "clientId and file required" });
 
+    const now = new Date();
     let client: any = await getClient(clientId);
     if (!client) {
-      client = {
-        id: clientId,
-        encryptionKey:
-          process.env.ENCRYPTION_KEY ||
-          "0000000000000000000000000000000000000000000000000000000000000000",
-      };
+      await saveClient({ id: clientId, createdAt: now, lastSeen: now });
+      client = await getClient(clientId);
     }
 
     if (!client || !client.encryptionKey) {
@@ -350,7 +381,10 @@ router.post("/commands/:id/result", upload.single("file"), async (req, res) => {
     const filename = `${id}_${timestampStr.replace(/[:]/g, "-")}_${Date.now()}`;
     const filepath = path.join(clientDir, filename);
 
-    await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    await withLock(`file:${filepath}`, async () => {
+      await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    });
+    await saveClient({ id: clientId, encryptionKey: client.encryptionKey, lastSeen: now });
 
     res.json({ ok: true, path: filepath });
   } catch (e) {

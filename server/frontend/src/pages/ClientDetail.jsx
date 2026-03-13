@@ -226,18 +226,45 @@ const ClientDetail = () => {
   };
 
   const handleDelete = () => {
+    let password = "";
     Modal.confirm({
       title: t("common.delete"),
-      content: t("clients.deleteConfirm"),
+      content: (
+        <div>
+          <div style={{ marginBottom: 12 }}>{t("clients.deleteConfirm")}</div>
+          <Input.Password
+            placeholder={t("common.password")}
+            onChange={(e) => {
+              password = e.target.value;
+            }}
+          />
+        </div>
+      ),
       onOk: async () => {
+        if (!String(password || "").trim()) {
+          message.error(t("common.password"));
+          throw new Error("password_required");
+        }
         const resp = await authFetch(`${API_URL}/clients/${id}`, {
           method: "DELETE",
+          headers: { "X-Admin-Password": String(password || "").trim() },
         });
         if (resp.ok) {
           message.success(t("clients.deleted"));
           navigate("/clients");
         } else {
-          message.error(t("clients.deleteError"));
+          let err = "";
+          try {
+            const j = await resp.json();
+            err = String(j?.message || "");
+          } catch {
+            err = "";
+          }
+          message.error(
+            err
+              ? `${t("clients.deleteError")}: ${err}`
+              : t("clients.deleteError"),
+          );
         }
       },
     });

@@ -6,6 +6,7 @@ import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
+import fsPromises from "fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 
@@ -16,21 +17,71 @@ import heartbeatRouter from "./routes/heartbeat";
 import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
+import logsRouter from "./routes/logs";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
-import { getUser, saveUser, getClient } from "./store";
+import {
+  getUser,
+  saveUser,
+  getClient,
+  saveClient,
+  getClients,
+  backfillTimesheetFromActivity,
+} from "./store";
+import { getSenderClientId, normalizeClientId } from "./clientId";
+import {
+  registerClientSocket,
+  unregisterClientSocket,
+  sendCommandToClient,
+} from "./wsHub";
+import { runRetentionOnce } from "./retention";
+import { withLock } from "./locks";
+import { initServerLogToStorage } from "./serverLog";
+import { getPrimaryEncryptionKey } from "./keyring";
+import { resolveUploadDir } from "./runtimePaths";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = process.env.HOST || "0.0.0.0";
-const UPLOAD_DIR =
-  process.env.UPLOAD_DIR || path.join(process.cwd(), "storage");
+const UPLOAD_DIR = resolveUploadDir();
+
+void getPrimaryEncryptionKey();
+
+if (!process.env.ENCRYPTION_KEY && !process.env.ENCRYPTION_KEYS) {
+  console.warn(
+    "[Config] ENCRYPTION_KEY is not set. Clients may fall back to the default key. Set ENCRYPTION_KEY for pilot/prod.",
+  );
+}
+if (!process.env.DEFAULT_ADMIN_EMAIL || !process.env.DEFAULT_ADMIN_PASSWORD) {
+  console.warn(
+    "[Config] DEFAULT_ADMIN_EMAIL/DEFAULT_ADMIN_PASSWORD are not set. No admin will be auto-created on boot.",
+  );
+}
 
 // Ensure upload directories
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(path.join(UPLOAD_DIR, "screenshots"), { recursive: true });
-fs.mkdirSync(path.join(UPLOAD_DIR, "reports"), { recursive: true });
+try {
+  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+} catch (e) {
+  console.error(
+    `[Boot] Failed to create UPLOAD_DIR: ${UPLOAD_DIR}. Check permissions or set absolute UPLOAD_DIR.`,
+  );
+  console.error(e);
+  process.exit(1);
+}
+try {
+  if (process.env.DISABLE_FILE_LOGS !== "1") {
+    initServerLogToStorage(UPLOAD_DIR);
+  }
+} catch (e) {
+  console.error("[Boot] Failed to init file logs, continuing with console logs.");
+  console.error(e);
+}
+const screenshotsDir = path.join(UPLOAD_DIR, "screenshots");
+if (!fs.existsSync(screenshotsDir))
+  fs.mkdirSync(screenshotsDir, { recursive: true });
+const reportsDir = path.join(UPLOAD_DIR, "reports");
+if (!fs.existsSync(reportsDir)) fs.mkdirSync(reportsDir, { recursive: true });
 
 app.use(
   helmet({
@@ -45,6 +96,7 @@ const corsOptions: cors.CorsOptions = {
     "Content-Type",
     "Authorization",
     "X-Client-Id",
+    "X-Admin-Password",
     "Cache-Control",
     "Pragma",
     "X-Requested-With",
@@ -56,29 +108,38 @@ app.options(/.*/, cors(corsOptions));
 if (process.env.NODE_ENV !== "production") {
   app.use(morgan("combined"));
 }
-app.use(express.json({ limit: "256kb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Rate limiter: 600 req/min (50+ clients). Env RATE_LIMIT_MAX overrides.
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "600", 10);
+// Rate limiter: 10000 req/min (virtually unlimited for your scale). Env RATE_LIMIT_MAX overrides.
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "10000", 10);
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: Number.isFinite(RATE_LIMIT_MAX) ? RATE_LIMIT_MAX : 600,
+  max: Number.isFinite(RATE_LIMIT_MAX) ? RATE_LIMIT_MAX : 10000,
+  keyGenerator: (req: any) => {
+    const cid = normalizeClientId(String(req?.headers?.["x-client-id"] || ""));
+    if (cid) return `client:${cid}`;
+    return `ip:${String(req.ip || "")}`;
+  },
 });
 app.use("/api/", limiter);
 
-// Raw parsers: minimal buffers for ingestion
+// Raw parsers: generous buffers for ingestion
 app.use(
   "/api/events",
-  express.raw({ type: "application/octet-stream", limit: "64kb" }),
+  express.raw({ type: "application/octet-stream", limit: "10mb" }),
 );
 app.use(
   "/api/heartbeat",
-  express.raw({ type: "application/octet-stream", limit: "16kb" }),
+  express.raw({ type: "application/octet-stream", limit: "1mb" }),
 );
 app.use(
   "/api/activity",
-  express.raw({ type: "application/octet-stream", limit: "32kb" }),
+  express.raw({ type: "application/octet-stream", limit: "10mb" }),
+);
+app.use(
+  "/api/logs",
+  express.raw({ type: "application/octet-stream", limit: "1mb" }),
 );
 // Use raw parser only for the specific octet-stream endpoint to avoid breaking JSON admin endpoints under /api/commands
 
@@ -90,6 +151,7 @@ app.use("/api/heartbeat", heartbeatRouter);
 app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
+app.use("/api/logs", logsRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -123,6 +185,90 @@ if (staticDir) {
   });
 }
 
+// Helper to find latest command result
+async function findLatestCommandResult(
+  commandId: string,
+): Promise<string | null> {
+  const baseDir = path.join(UPLOAD_DIR, "commands");
+  if (!fs.existsSync(baseDir)) return null;
+
+  const clientDirs = await fsPromises.readdir(baseDir);
+  let latestPath = "";
+  let latestMtime = 0;
+
+  for (const c of clientDirs) {
+    const dir = path.join(baseDir, c);
+    const statDir = await fsPromises.stat(dir);
+    if (!statDir.isDirectory()) continue;
+
+    const files = (await fsPromises.readdir(dir)).filter(
+      (f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"),
+    );
+
+    for (const f of files) {
+      const fp = path.join(dir, f);
+      const stat = await fsPromises.stat(fp);
+      if (stat.mtimeMs > latestMtime) {
+        latestMtime = stat.mtimeMs;
+        latestPath = fp;
+      }
+    }
+  }
+  return latestPath || null;
+}
+
+const COMMAND_INDEX_DIR = path.join(UPLOAD_DIR, "command_index");
+async function writeJsonFileAtomic(filePath: string, json: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fsPromises.mkdir(dir, { recursive: true });
+  const tmp = path.join(
+    dir,
+    `${path.basename(filePath)}.tmp_${process.pid}_${Date.now()}_${Math.random()
+      .toString(16)
+      .slice(2)}`,
+  );
+  await fsPromises.writeFile(tmp, json, "utf-8");
+  try {
+    await fsPromises.rename(tmp, filePath);
+  } catch {
+    try {
+      await fsPromises.unlink(filePath);
+    } catch {}
+    await fsPromises.rename(tmp, filePath);
+  } finally {
+    try {
+      await fsPromises.unlink(tmp);
+    } catch {}
+  }
+}
+
+async function readCommandIndex(commandId: string): Promise<string | null> {
+  const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
+  if (!fs.existsSync(fp)) return null;
+  try {
+    const content = await fsPromises.readFile(fp, "utf-8");
+    const obj = JSON.parse(content);
+    const p = String(obj?.latestPath || "").trim();
+    return p || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCommandIndex(commandId: string, latestPath: string): Promise<void> {
+  const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
+  await withLock(`file:${fp}`, async () => {
+    await writeJsonFileAtomic(
+      fp,
+      JSON.stringify(
+        { commandId, latestPath, updatedAt: new Date().toISOString() },
+        null,
+        2,
+      ),
+    );
+  });
+}
+
 // Command results (JSON, encrypted octet-stream)
 app.post(
   "/api/commands/:id/json",
@@ -130,12 +276,20 @@ app.post(
   async (req, res) => {
     try {
       const commandId = req.params.id;
-      const clientId = (req.headers["x-client-id"] as string) || "";
-      if (!clientId)
-        return res.status(400).json({ message: "X-Client-Id header required" });
+      const clientId = getSenderClientId(req);
 
       const client = await getClient(clientId);
-      if (!client || !client.encryptionKey) {
+      if (!client) {
+        await saveClient({
+          id: clientId,
+          createdAt: new Date(),
+          lastSeen: new Date(),
+        });
+        return res
+          .status(400)
+          .json({ message: "Client not registered or missing key" });
+      }
+      if (!client.encryptionKey) {
         return res
           .status(400)
           .json({ message: "Client not registered or missing key" });
@@ -144,16 +298,28 @@ app.post(
       const encrypted: Buffer = Buffer.isBuffer(req.body)
         ? (req.body as Buffer)
         : Buffer.from([]);
-      const decryptedJson = decryptAes256CbcPrefixedIv(
-        encrypted,
-        client.encryptionKey,
-      ).toString("utf-8");
+      if (encrypted.length < 17) {
+        return res.status(400).json({ message: "Empty payload" });
+      }
+      let decryptedJson = "";
+      try {
+        decryptedJson = decryptAes256CbcPrefixedIv(
+          encrypted,
+          client.encryptionKey,
+        ).toString("utf-8");
+      } catch {
+        return res.status(400).json({ message: "Decryption failed" });
+      }
 
       const dir = path.join(UPLOAD_DIR, "commands", clientId);
-      fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(dir)) await fsPromises.mkdir(dir, { recursive: true });
+
       const filename = `${commandId}_${Date.now()}.json`;
       const filepath = path.join(dir, filename);
-      fs.writeFileSync(filepath, decryptedJson);
+      await withLock(`file:${filepath}`, async () => {
+        await fsPromises.writeFile(filepath, decryptedJson);
+      });
+      await writeCommandIndex(commandId, filepath);
 
       res.json({ ok: true, path: filepath });
     } catch (e) {
@@ -163,71 +329,39 @@ app.post(
   },
 );
 
-// Admin: read latest command result by id (JSON)
-app.get("/api/commands/:id/json", async (req, res) => {
+// Unified endpoint for command results
+const commandResultHandler = async (
+  req: express.Request,
+  res: express.Response,
+) => {
   try {
     const commandId = req.params.id;
-    const baseDir = path.join(UPLOAD_DIR, "commands");
-    const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
-    let latestPath = "";
-    let latestMtime = 0;
-    for (const c of clientDirs) {
-      const dir = path.join(baseDir, c);
-      const files = fs
-        .readdirSync(dir)
-        .filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
-      for (const f of files) {
-        const fp = path.join(dir, f);
-        const stat = fs.statSync(fp);
-        if (stat.mtimeMs > latestMtime) {
-          latestMtime = stat.mtimeMs;
-          latestPath = fp;
-        }
+    const indexed = await readCommandIndex(commandId);
+    let latestPath = indexed && fs.existsSync(indexed) ? indexed : null;
+    if (!latestPath) {
+      latestPath = await findLatestCommandResult(commandId);
+      if (latestPath) {
+        await writeCommandIndex(commandId, latestPath);
       }
     }
-    if (!latestPath)
-      return res.status(404).json({ message: "Result not found" });
-    const content = fs.readFileSync(latestPath, "utf-8");
-    res.setHeader("Content-Type", "application/json");
-    res.send(content);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to read command result" });
-  }
-});
 
-// Back-compat: read latest command result by id (JSON) on legacy path
-app.get("/api/commands/:id/result", async (req, res) => {
-  try {
-    const commandId = req.params.id;
-    const baseDir = path.join(UPLOAD_DIR, "commands");
-    const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
-    let latestPath = "";
-    let latestMtime = 0;
-    for (const c of clientDirs) {
-      const dir = path.join(baseDir, c);
-      const files = fs
-        .readdirSync(dir)
-        .filter((f) => f.startsWith(`${commandId}_`) && f.endsWith(".json"));
-      for (const f of files) {
-        const fp = path.join(dir, f);
-        const stat = fs.statSync(fp);
-        if (stat.mtimeMs > latestMtime) {
-          latestMtime = stat.mtimeMs;
-          latestPath = fp;
-        }
-      }
-    }
     if (!latestPath)
       return res.status(404).json({ message: "Result not found" });
-    const content = fs.readFileSync(latestPath, "utf-8");
+
+    let content = "";
+    await withLock(`file:${latestPath}`, async () => {
+      content = await fsPromises.readFile(latestPath, "utf-8");
+    });
     res.setHeader("Content-Type", "application/json");
     res.send(content);
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to read command result" });
   }
-});
+};
+
+app.get("/api/commands/:id/json", commandResultHandler);
+app.get("/api/commands/:id/result", commandResultHandler);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
@@ -247,13 +381,52 @@ async function ensureAdmin() {
 
 ensureAdmin().catch(console.error);
 
+setTimeout(() => {
+  (async () => {
+    try {
+      const now = new Date();
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+      const currMonth = `${y}-${m}`;
+      const prev = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
+      );
+      const py = prev.getUTCFullYear();
+      const pm = String(prev.getUTCMonth() + 1).padStart(2, "0");
+      const prevMonth = `${py}-${pm}`;
+
+      const clients = await getClients();
+      for (const c of clients) {
+        const id = String(c?.id || "").trim();
+        if (!id) continue;
+        try {
+          await backfillTimesheetFromActivity(id, prevMonth);
+        } catch {}
+        try {
+          await backfillTimesheetFromActivity(id, currMonth);
+        } catch {}
+      }
+    } catch {}
+
+    try {
+      await runRetentionOnce();
+    } catch {}
+
+    setInterval(
+      () => {
+        runRetentionOnce().catch(() => {});
+      },
+      6 * 60 * 60 * 1000,
+    );
+  })();
+}, 30_000);
+
 // Start HTTP server and attach WebSocket
 const server = app.listen(PORT, HOST as any, () => {
   console.log(`Backend listening on http://${HOST}:${PORT}`);
 });
 
 // WebSocket: no compression, 64KB max payload (flat memory for 20 clients)
-const clients = new Map<string, WebSocket>();
 const wss = new WebSocketServer({
   server,
   perMessageDeflate: false,
@@ -268,11 +441,9 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
       socket.close();
       return;
     }
-    clients.set(clientId, socket);
+    registerClientSocket(clientId, socket);
     socket.on("close", () => {
-      if (clients.get(clientId) === socket) {
-        clients.delete(clientId);
-      }
+      unregisterClientSocket(clientId, socket);
     });
   } catch {
     socket.close();
@@ -285,12 +456,8 @@ app.post("/api/commands/send", requireAuth, async (req, res) => {
     const { clientId, type, payload } = req.body as any;
     if (!clientId || !type)
       return res.status(400).json({ message: "clientId and type required" });
-    const socket = clients.get(String(clientId).trim());
-    if (!socket || socket.readyState !== 1)
-      return res.status(404).json({ message: "client not connected" });
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const cmd = { id, type, payload: payload ?? {} };
-    socket.send(JSON.stringify(cmd));
+    const id = sendCommandToClient(clientId, type, payload ?? {});
+    if (!id) return res.status(404).json({ message: "client not connected" });
     res.json({ ok: true, id });
   } catch (e) {
     console.error(e);
@@ -298,71 +465,54 @@ app.post("/api/commands/send", requireAuth, async (req, res) => {
   }
 });
 
-// Admin convenience: request directory listing from client
-app.post("/api/commands/list", requireAuth, async (req, res) => {
-  try {
+// Admin convenience endpoints
+const createCommandSender = (
+  type: string,
+  payloadFactory: (req: express.Request) => any,
+) => {
+  return async (req: express.Request, res: express.Response) => {
+    try {
+      const { clientId } = req.body as any;
+      if (!clientId)
+        return res.status(400).json({ message: "clientId required" });
+      const payload = payloadFactory(req);
+      const id = sendCommandToClient(clientId, type, payload);
+      if (!id) return res.status(404).json({ message: "client not connected" });
+      res.json({ ok: true, id });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ message: `Failed to request ${type}` });
+    }
+  };
+};
+
+app.post(
+  "/api/commands/list",
+  requireAuth,
+  createCommandSender("list", (req) => {
     const {
-      clientId,
       basePath,
       pattern = "*",
       recursive = false,
       maxEntries = 1000,
       includeDirs = true,
-    } = req.body as any;
-    if (!clientId || !basePath)
-      return res
-        .status(400)
-        .json({ message: "clientId and basePath required" });
-    const socket = clients.get(String(clientId).trim());
-    if (!socket || socket.readyState !== 1)
-      return res.status(404).json({ message: "client not connected" });
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const payload = { basePath, pattern, recursive, maxEntries, includeDirs };
-    const cmd = { id, type: "list", payload };
-    socket.send(JSON.stringify(cmd));
-    res.json({ ok: true, id });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to request directory listing" });
-  }
-});
+    } = req.body;
+    return { basePath, pattern, recursive, maxEntries, includeDirs };
+  }),
+);
 
-// Admin convenience: request a file from client
-app.post("/api/commands/file", requireAuth, async (req, res) => {
-  try {
-    const { clientId, path: filePath } = req.body as any;
-    if (!clientId || !filePath)
-      return res.status(400).json({ message: "clientId and path required" });
-    const socket = clients.get(String(clientId).trim());
-    if (!socket || socket.readyState !== 1)
-      return res.status(404).json({ message: "client not connected" });
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const payload = { path: filePath };
-    const cmd = { id, type: "file", payload };
-    socket.send(JSON.stringify(cmd));
-    res.json({ ok: true, id });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to request file from client" });
-  }
-});
+app.post(
+  "/api/commands/file",
+  requireAuth,
+  createCommandSender("file", (req) => {
+    return { path: req.body.path };
+  }),
+);
 
-// Admin convenience: request a folder zip from client
-app.post("/api/commands/folder", requireAuth, async (req, res) => {
-  try {
-    const { clientId, path: folderPath } = req.body as any;
-    if (!clientId || !folderPath)
-      return res.status(400).json({ message: "clientId and path required" });
-    const socket = clients.get(String(clientId).trim());
-    if (!socket || socket.readyState !== 1)
-      return res.status(404).json({ message: "client not connected" });
-    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const payload = { path: folderPath };
-    const cmd = { id, type: "folder", payload };
-    socket.send(JSON.stringify(cmd));
-    res.json({ ok: true, id });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to request folder from client" });
-  }
-});
+app.post(
+  "/api/commands/folder",
+  requireAuth,
+  createCommandSender("folder", (req) => {
+    return { path: req.body.path };
+  }),
+);
