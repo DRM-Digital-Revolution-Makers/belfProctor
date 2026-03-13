@@ -58,3 +58,10 @@ pnpm-debug.log*
 
 # Docker local artifacts (if any)
 *.tar
+
+# Build bundles / zips
+server_bundle/
+BelfProctorServer.zip
+client/BelfProctorClient_win-x64.zip
+client/publish_win-*/
+client/publish_win-x64/
