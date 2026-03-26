@@ -24,7 +24,6 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
     "multer": "^1.4.5-lts.1",
-    "pdf-lib": "^1.17.1",
     "ws": "^8.16.0",
     "xlsx": "^0.18.5",
     "zod": "^3.22.4"
@@ -44,7 +43,6 @@
     "typescript": "^5.3.3"
   },
   "optionalDependencies": {
-    "sharp": "^0.34.3",
     "@prisma/client": "^5.22.0",
     "prisma": "^5.22.0"
   }

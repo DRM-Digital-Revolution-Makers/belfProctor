@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
   Card,
   DatePicker,
+  TimePicker,
   Row,
   Col,
   Statistic,
@@ -56,6 +57,13 @@ const ClientDetail = () => {
   const [loading, setLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState(dayjs());
   const [selectedMonth, setSelectedMonth] = useState(dayjs());
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [pdfDateRange, setPdfDateRange] = useState([
+    dayjs().startOf("day"),
+    dayjs().startOf("day"),
+  ]);
+  const [pdfTimeRange, setPdfTimeRange] = useState(null);
 
   // Daily Data
   const [dailyData, setDailyData] = useState({
@@ -137,6 +145,10 @@ const ClientDetail = () => {
   useEffect(() => {
     fetchMonthlyData(selectedMonth);
   }, [fetchMonthlyData, selectedMonth]);
+
+  useEffect(() => {
+    setPdfDateRange([selectedDate.startOf("day"), selectedDate.startOf("day")]);
+  }, [selectedDate]);
 
   const formatDuration = (ms) => {
     if (!ms || isNaN(ms)) return `0 ${t("common.h")} 0 ${t("common.m")}`;
@@ -475,6 +487,65 @@ const ClientDetail = () => {
     );
   };
 
+  const extractFilename = (contentDisposition) => {
+    const raw = String(contentDisposition || "");
+    const match = raw.match(/filename="([^"]+)"/i);
+    return match ? match[1] : "";
+  };
+
+  const handleDownloadScreenshotsPdf = async () => {
+    const [fromD, toD] = pdfDateRange || [];
+    if (!fromD || !toD) return;
+
+    const from = fromD.format("YYYY-MM-DD");
+    const to = toD.format("YYYY-MM-DD");
+
+    const params = new URLSearchParams({ from, to });
+    if (pdfTimeRange && pdfTimeRange[0] && pdfTimeRange[1]) {
+      params.set("startTime", pdfTimeRange[0].format("HH:mm"));
+      params.set("endTime", pdfTimeRange[1].format("HH:mm"));
+    }
+
+    setPdfDownloading(true);
+    const msgKey = "screenshots_pdf";
+    message.loading({ content: t("reports.generatingPdf"), key: msgKey });
+    try {
+      const res = await authFetch(
+        `${API_URL}/clients/${id}/screenshots/pdf?${params.toString()}`,
+      );
+      if (!res.ok) {
+        if (res.status === 404) {
+          message.error({
+            content: t("reports.noScreenshotsForPeriod"),
+            key: msgKey,
+          });
+          return;
+        }
+        throw new Error("Failed to download PDF");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const filename =
+        extractFilename(res.headers.get("Content-Disposition")) ||
+        `screenshots_${id}_${from}_${to}.pdf`;
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success({ content: t("common.download"), key: msgKey });
+      setPdfModalOpen(false);
+    } catch (e) {
+      console.error(e);
+      message.error({ content: t("common.requestError"), key: msgKey });
+    } finally {
+      setPdfDownloading(false);
+    }
+  };
+
   const formatTime = (isoString) => {
     if (!isoString) return "-";
     const d = new Date(isoString);
@@ -558,6 +629,12 @@ const ClientDetail = () => {
                     onClick={handleDownloadDaily}
                   >
                     {t("reports.download")}
+                  </Button>
+                  <Button
+                    icon={<DownloadOutlined />}
+                    onClick={() => setPdfModalOpen(true)}
+                  >
+                    {t("reports.downloadScreenshotsPdf")}
                   </Button>
                 </div>
 
@@ -936,6 +1013,41 @@ const ClientDetail = () => {
           </Tabs.TabPane>
         </Tabs>
       </Space>
+
+      <Modal
+        title={t("reports.downloadScreenshotsPdf")}
+        open={pdfModalOpen}
+        onCancel={() => setPdfModalOpen(false)}
+        onOk={handleDownloadScreenshotsPdf}
+        okButtonProps={{ loading: pdfDownloading }}
+        okText={t("common.download")}
+        cancelText={t("common.cancel")}
+      >
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <div>
+            <div style={{ marginBottom: 8 }}>{t("reports.selectDays")}:</div>
+            <DatePicker.RangePicker
+              value={pdfDateRange}
+              onChange={(vals) => vals && setPdfDateRange(vals)}
+              allowClear={false}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              {t("reports.selectTimeRange")}:
+            </div>
+            <TimePicker.RangePicker
+              value={pdfTimeRange}
+              onChange={(vals) => setPdfTimeRange(vals)}
+              format="HH:mm"
+              minuteStep={1}
+              allowClear
+              style={{ width: "100%" }}
+            />
+          </div>
+        </Space>
+      </Modal>
     </div>
   );
 };

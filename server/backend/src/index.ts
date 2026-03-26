@@ -383,54 +383,30 @@ ensureAdmin().catch(console.error);
 
 setTimeout(() => {
   (async () => {
-    const sleep = (ms: number) =>
-      new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
+    try {
+      const now = new Date();
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+      const currMonth = `${y}-${m}`;
+      const prev = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
+      );
+      const py = prev.getUTCFullYear();
+      const pm = String(prev.getUTCMonth() + 1).padStart(2, "0");
+      const prevMonth = `${py}-${pm}`;
 
-    const disableBootBackfill = process.env.DISABLE_BOOT_BACKFILL === "1";
-    const bootBackfillDelayMs = parseInt(
-      process.env.BOOT_BACKFILL_DELAY_MS || "50",
-      10,
-    );
-    const bootBackfillMaxClientsRaw = parseInt(
-      process.env.BOOT_BACKFILL_MAX_CLIENTS || "0",
-      10,
-    );
-    const bootBackfillMaxClients = Number.isFinite(bootBackfillMaxClientsRaw)
-      ? Math.max(0, bootBackfillMaxClientsRaw)
-      : 0;
-
-    if (!disableBootBackfill) {
-      try {
-        const now = new Date();
-        const y = now.getUTCFullYear();
-        const m = String(now.getUTCMonth() + 1).padStart(2, "0");
-        const currMonth = `${y}-${m}`;
-        const prev = new Date(
-          Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
-        );
-        const py = prev.getUTCFullYear();
-        const pm = String(prev.getUTCMonth() + 1).padStart(2, "0");
-        const prevMonth = `${py}-${pm}`;
-
-        const clientsAll = await getClients();
-        const clients =
-          bootBackfillMaxClients > 0
-            ? clientsAll.slice(0, bootBackfillMaxClients)
-            : clientsAll;
-
-        for (const c of clients) {
-          const id = String(c?.id || "").trim();
-          if (!id) continue;
-          try {
-            await backfillTimesheetFromActivity(id, prevMonth);
-          } catch {}
-          try {
-            await backfillTimesheetFromActivity(id, currMonth);
-          } catch {}
-          await sleep(bootBackfillDelayMs);
-        }
-      } catch {}
-    }
+      const clients = await getClients();
+      for (const c of clients) {
+        const id = String(c?.id || "").trim();
+        if (!id) continue;
+        try {
+          await backfillTimesheetFromActivity(id, prevMonth);
+        } catch {}
+        try {
+          await backfillTimesheetFromActivity(id, currMonth);
+        } catch {}
+      }
+    } catch {}
 
     try {
       await runRetentionOnce();

@@ -16,13 +16,8 @@ if %errorLevel% neq 0 (
 
 REM Install dependencies if needed
 if not exist node_modules (
-    echo Installing dependencies (node_modules missing)... >> %LOG_FILE%
+    echo Installing dependencies... >> %LOG_FILE%
     call npm install --no-optional >> %LOG_FILE% 2>&1
-) else (
-    if not exist node_modules\pdf-lib (
-        echo Installing dependencies (new deps detected)... >> %LOG_FILE%
-        call npm install --no-optional >> %LOG_FILE% 2>&1
-    )
 )
 
 REM Build TypeScript

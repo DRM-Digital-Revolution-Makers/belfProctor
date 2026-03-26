@@ -1,6 +1,7 @@
 import { Router } from "express";
 import path from "path";
 import fs from "fs";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { AuthRequest, requireAuth } from "../middleware/auth";
 import bcrypt from "bcryptjs";
 import {
@@ -18,6 +19,50 @@ import { requestClientUninstall } from "../wsHub";
 import { resolveUploadDir } from "../runtimePaths";
 
 const router = Router();
+
+function parseScreenshotTimestamp(
+  filename: string,
+  filePath: string,
+): Date | null {
+  const match = filename.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+  if (match) {
+    const datePart = match[1].substring(0, 10);
+    const timePart = match[1].substring(11).replace(/-/g, ":");
+    const d = new Date(`${datePart}T${timePart}`);
+    if (!isNaN(d.getTime())) return d;
+  }
+  try {
+    const stats = fs.statSync(filePath);
+    return stats.mtime;
+  } catch {
+    return null;
+  }
+}
+
+async function tryCompressToJpeg(
+  bytes: Buffer,
+  maxSide: number,
+  quality: number,
+): Promise<Buffer> {
+  try {
+    const m: any = await import("sharp");
+    const sharpFn = m?.default || m;
+    if (typeof sharpFn !== "function") return bytes;
+
+    return await sharpFn(bytes)
+      .rotate()
+      .resize({
+        width: maxSide,
+        height: maxSide,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer();
+  } catch {
+    return bytes;
+  }
+}
 
 router.get("/", requireAuth, async (req, res) => {
   const clients = await getClients();
@@ -195,6 +240,152 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     topApps,
     screenshots,
   });
+});
+
+router.get("/:id/screenshots/pdf", requireAuth, async (req, res) => {
+  const id = String(req.params.id || "");
+  const fromStr = String(req.query.from || "").trim();
+  const toStr = String(req.query.to || "").trim() || fromStr;
+  const startTimeStr = String(req.query.startTime || "").trim();
+  const endTimeStr = String(req.query.endTime || "").trim();
+  const maxSideRaw = parseInt(String(req.query.maxSide || "1280"), 10);
+  const qualityRaw = parseInt(String(req.query.quality || "70"), 10);
+  const maxSide = Number.isFinite(maxSideRaw)
+    ? Math.max(320, Math.min(4096, maxSideRaw))
+    : 1280;
+  const quality = Number.isFinite(qualityRaw)
+    ? Math.max(30, Math.min(90, qualityRaw))
+    : 70;
+
+  const fromMatch = fromStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const toMatch = toStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!fromMatch || !toMatch) {
+    return res.status(400).json({ message: "from/to required (YYYY-MM-DD)" });
+  }
+
+  const startOfRange = new Date(fromStr);
+  startOfRange.setHours(0, 0, 0, 0);
+
+  const endOfRange = new Date(toStr);
+  endOfRange.setHours(23, 59, 59, 999);
+
+  let startMinutes: number | null = null;
+  let endMinutes: number | null = null;
+  if (startTimeStr || endTimeStr) {
+    const m1 = startTimeStr.match(/^(\d{2}):(\d{2})$/);
+    const m2 = endTimeStr.match(/^(\d{2}):(\d{2})$/);
+    if (!m1 || !m2) {
+      return res
+        .status(400)
+        .json({ message: "startTime/endTime must be HH:mm" });
+    }
+    const h1 = parseInt(m1[1], 10);
+    const min1 = parseInt(m1[2], 10);
+    const h2 = parseInt(m2[1], 10);
+    const min2 = parseInt(m2[2], 10);
+    if (
+      h1 < 0 ||
+      h1 > 23 ||
+      h2 < 0 ||
+      h2 > 23 ||
+      min1 < 0 ||
+      min1 > 59 ||
+      min2 < 0 ||
+      min2 > 59
+    ) {
+      return res.status(400).json({ message: "Invalid time range" });
+    }
+    startMinutes = h1 * 60 + min1;
+    endMinutes = h2 * 60 + min2;
+    if (endMinutes < startMinutes) {
+      return res.status(400).json({ message: "endTime must be >= startTime" });
+    }
+  }
+
+  try {
+    const screenshotsDir = path.join(resolveUploadDir(), "screenshots", id);
+    if (!fs.existsSync(screenshotsDir)) {
+      return res.status(404).json({ message: "No screenshots" });
+    }
+
+    const files = fs
+      .readdirSync(screenshotsDir)
+      .filter((f) => f.endsWith(".jpg") || f.endsWith(".png"));
+
+    const selected: { filename: string; filePath: string; timestamp: Date }[] =
+      [];
+
+    for (const filename of files) {
+      const filePath = path.join(screenshotsDir, filename);
+      const ts = parseScreenshotTimestamp(filename, filePath);
+      if (!ts) continue;
+      if (ts < startOfRange || ts > endOfRange) continue;
+
+      if (startMinutes !== null && endMinutes !== null) {
+        const mins = ts.getHours() * 60 + ts.getMinutes();
+        if (mins < startMinutes || mins > endMinutes) continue;
+      }
+
+      selected.push({ filename, filePath, timestamp: ts });
+    }
+
+    if (selected.length === 0) {
+      return res.status(404).json({ message: "No screenshots" });
+    }
+
+    selected.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    for (const item of selected) {
+      const bytes = fs.readFileSync(item.filePath);
+      const embedBytes = await tryCompressToJpeg(bytes, maxSide, quality);
+      const img = await pdfDoc.embedJpg(embedBytes);
+
+      const page = pdfDoc.addPage([842, 595]);
+      const pageWidth = page.getWidth();
+      const pageHeight = page.getHeight();
+      const margin = 24;
+      const captionH = 18;
+
+      const maxW = pageWidth - margin * 2;
+      const maxH = pageHeight - margin * 2 - captionH;
+      const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+
+      const drawW = img.width * scale;
+      const drawH = img.height * scale;
+      const x = (pageWidth - drawW) / 2;
+      const y = margin + captionH + (maxH - drawH) / 2;
+
+      page.drawImage(img, { x, y, width: drawW, height: drawH });
+
+      const tsText = item.timestamp
+        .toISOString()
+        .replace("T", " ")
+        .slice(0, 19);
+      const caption = `${tsText}  ${item.filename}`;
+      page.drawText(caption, {
+        x: margin,
+        y: margin,
+        size: 10,
+        font,
+        color: rgb(0.2, 0.2, 0.2),
+      });
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const safeFrom = fromStr.replace(/[^\d-]/g, "");
+    const safeTo = toStr.replace(/[^\d-]/g, "");
+    const filename = `screenshots_${id}_${safeFrom}_${safeTo}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(Buffer.from(pdfBytes));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to generate PDF" });
+  }
 });
 
 router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
