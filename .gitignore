@@ -41,6 +41,10 @@ dist/
 coverage/
 .nyc_output/
 
+# Zips and big publish files
+*.zip
+**/publish_win-x64/
+
 # Vite / Next / Nuxt (generic)
 .vite/
 .next/
