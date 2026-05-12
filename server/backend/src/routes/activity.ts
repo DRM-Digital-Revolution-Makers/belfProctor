@@ -13,6 +13,17 @@ import { getKeysToTry } from "../keyring";
 
 const router = Router();
 
+function parseClientActivityTimestamp(raw: unknown): Date | null {
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  const normalized =
+    !/[zZ]$/.test(value) && !/[+-]\d{2}:\d{2}$/.test(value)
+      ? `${value}Z`
+      : value;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 router.post("/", async (req, res) => {
   const t0 = Date.now();
   try {
@@ -55,9 +66,9 @@ router.post("/", async (req, res) => {
 
     const payload = JSON.parse(json);
     const now = new Date();
-    const sampleTs = new Date(
-      payload.Timestamp || payload.timestamp || Date.now(),
-    );
+    const sampleTs =
+      parseClientActivityTimestamp(payload.Timestamp || payload.timestamp) ||
+      now;
     const activeMs = parseInt(
       String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0),
       10,

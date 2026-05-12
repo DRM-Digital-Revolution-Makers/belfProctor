@@ -197,7 +197,13 @@ export default function ActivityDetail() {
   React.useEffect(() => {
     let cancelled = false;
     const probe = async () => {
-      const candidates = ["%SYSTEMDRIVE%\\", "C:\\", "D:\\", "E:\\"];
+      const driveLetters = Array.from({ length: 26 }, (_, i) =>
+        String.fromCharCode(65 + i),
+      );
+      const candidates = [
+        "%SYSTEMDRIVE%\\",
+        ...driveLetters.map((letter) => `${letter}:\\`),
+      ];
       const headers = { ...headersAuth, "Content-Type": "application/json" };
       const found = [];
       for (const basePath of candidates) {
@@ -231,7 +237,7 @@ export default function ActivityDetail() {
               break;
             }
           }
-          if (ok) found.push(basePath);
+          if (ok && !found.includes(basePath)) found.push(basePath);
         } catch (e) {
           void e;
         }

@@ -283,7 +283,7 @@ export async function runRetentionOnce(): Promise<{
 }> {
   const screenshotsDays = parseDays("RETENTION_SCREENSHOTS_DAYS", 30);
   const appHistoryDays = parseDays("RETENTION_APP_HISTORY_DAYS", 30);
-  const activityDays = parseDays("RETENTION_ACTIVITY_DAYS", 2);
+  const activityDays = parseDays("RETENTION_ACTIVITY_DAYS", 30);
   const heartbeatDays = parseDays("RETENTION_HEARTBEAT_DAYS", 2);
   const commandsDays = parseDays("RETENTION_COMMANDS_DAYS", 7);
 

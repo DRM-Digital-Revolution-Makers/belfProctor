@@ -226,6 +226,16 @@ public class CommandHandler
             Environment.ExpandEnvironmentVariables(_settings.ReportsPath ?? ""),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor"),
         };
+                foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (!drive.IsReady) continue;
+                var root = drive.RootDirectory?.FullName;
+                if (!string.IsNullOrWhiteSpace(root)) allowedBases.Add(root);
+            }
+            catch { }
+        }
         foreach (var allowed in _settings.DirectoryRoots ?? new List<string>())
         {
             var a = Path.GetFullPath(Environment.ExpandEnvironmentVariables(allowed));

@@ -203,7 +203,11 @@ const resources = {
         title: "Табель рабочего времени",
         period: "Фактический период формирования отчета: {{start}} - {{end}}",
         totalUsers: "Всего пользователей: {{count}}",
+        totalUsersWithData:
+          "Пользователей, по которым имеются данные: {{count}}",
         user: "Пользователь",
+        department: "Подразделение",
+        position: "Должность",
         totalActive: "Общее время активной работы пользователя за ПК",
         totalPresence: "Общее время присутствия на рабочем месте",
         daysWorked: "Отработано дней",
@@ -215,6 +219,10 @@ const resources = {
         legendPresence: "- Время присутствия на рабочем месте",
         legendCompliance: "Соблюдение рабочего графика -",
         legendViolation: "Нарушение рабочего графика -",
+        noteMultipleStations:
+          "Статистика построена по нескольким рабочим станциям.",
+        noteNoDoubleCount:
+          "Пересекающаяся статистика активности пользователя на разных станциях не суммируется.",
       },
     },
   },
@@ -413,7 +421,10 @@ const resources = {
         title: "Ish vaqti tabeli",
         period: "Hisobot shakllantirish davri: {{start}} - {{end}}",
         totalUsers: "Jami foydalanuvchilar: {{count}}",
+        totalUsersWithData: "Ma'lumot mavjud foydalanuvchilar: {{count}}",
         user: "Foydalanuvchi",
+        department: "Bo'lim",
+        position: "Lavozim",
         totalActive: "Foydalanuvchining kompyuterdagi umumiy faol vaqti",
         totalPresence: "Ish joyida bo'lishning umumiy vaqti",
         daysWorked: "Ishlangan kunlar",
@@ -425,6 +436,10 @@ const resources = {
         legendPresence: "- Ish joyida bo'lish vaqti",
         legendCompliance: "Ish jadvaliga rioya qilish -",
         legendViolation: "Ish jadvalini buzish -",
+        noteMultipleStations:
+          "Statistika bir nechta ish stansiyalari bo'yicha tuzilgan.",
+        noteNoDoubleCount:
+          "Turli stansiyalardagi foydalanuvchi faolligining kesishuvchi statistikasi qo'shib hisoblanmaydi.",
       },
     },
   },

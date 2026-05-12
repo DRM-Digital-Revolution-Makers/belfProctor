@@ -41,6 +41,57 @@ if (fs.existsSync(OLD_CLIENTS_FILE)) {
 
 const TAIL_CHUNK = parseInt(process.env.STORE_TAIL_BYTES || "4096", 10);
 
+function pad3(input: string | number | undefined): string {
+  return String(input ?? "0")
+    .padEnd(3, "0")
+    .slice(0, 3);
+}
+
+function parseTimestampParts(value: unknown): {
+  timeMs: number;
+  dayKey: string;
+  monthKey: string;
+  hour: number;
+  iso: string;
+} | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const match = trimmed.match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/,
+    );
+    if (match) {
+      const [, year, month, day, hour, minute, second, ms] = match;
+      const timeMs = Date.UTC(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second),
+        Number(pad3(ms)),
+      );
+      return {
+        timeMs,
+        dayKey: `${year}-${month}-${day}`,
+        monthKey: `${year}-${month}`,
+        hour: Number(hour),
+        iso: `${year}-${month}-${day}T${hour}:${minute}:${second}.${pad3(ms)}Z`,
+      };
+    }
+  }
+
+  const parsed = value instanceof Date ? value : new Date(String(value || ""));
+  if (Number.isNaN(parsed.getTime())) return null;
+  const iso = parsed.toISOString();
+  return {
+    timeMs: parsed.getTime(),
+    dayKey: iso.slice(0, 10),
+    monthKey: iso.slice(0, 7),
+    hour: Number(iso.slice(11, 13)),
+    iso,
+  };
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -194,7 +245,9 @@ export async function streamDailyActivitySummary(
       if (!trimmed) return;
       try {
         const curr = JSON.parse(trimmed);
-        const t = new Date(curr.timestamp || curr.Timestamp).getTime();
+        const currTs = parseTimestampParts(curr.timestamp || curr.Timestamp);
+        if (!currTs) return;
+        const t = currTs.timeMs;
         if (t < start || t > end) return;
         if (prev !== null) {
           const dActive =
@@ -213,7 +266,7 @@ export async function streamDailyActivitySummary(
               : (curr.inactiveMilliseconds ?? curr.InactiveMilliseconds ?? 0);
           activeMs += addActive;
           inactiveMs += addInactive;
-          const h = new Date(curr.timestamp || curr.Timestamp).getHours();
+          const h = currTs.hour;
           if (h >= 0 && h < 24) {
             hourly[h].activeMs += addActive;
             hourly[h].inactiveMs += addInactive;
@@ -270,15 +323,14 @@ export async function streamMonthlyActivitySummary(
       if (!trimmed) return;
       try {
         const curr = JSON.parse(trimmed);
-        const t = new Date(curr.timestamp || curr.Timestamp).getTime();
+        const currTs = parseTimestampParts(curr.timestamp || curr.Timestamp);
+        if (!currTs) return;
+        const t = currTs.timeMs;
         if (t < start || t > end) return;
-        const currDay = new Date(curr.timestamp || curr.Timestamp)
-          .toISOString()
-          .split("T")[0];
+        const currDay = currTs.dayKey;
         if (prev !== null) {
-          const prevDay = new Date(prev.timestamp || prev.Timestamp)
-            .toISOString()
-            .split("T")[0];
+          const prevTs = parseTimestampParts(prev.timestamp || prev.Timestamp);
+          const prevDay = prevTs?.dayKey || "";
           if (prevDay === currDay) {
             const dActive =
               (curr.activeMilliseconds ?? curr.ActiveMilliseconds ?? 0) -
@@ -363,11 +415,11 @@ export async function streamTimesheetForClient(
       if (!trimmed) return;
       try {
         const curr = JSON.parse(trimmed);
-        const t = new Date(curr.timestamp || curr.Timestamp).getTime();
+        const currTs = parseTimestampParts(curr.timestamp || curr.Timestamp);
+        if (!currTs) return;
+        const t = currTs.timeMs;
         if (t < start || t > end) return;
-        const currDay = new Date(curr.timestamp || curr.Timestamp)
-          .toISOString()
-          .split("T")[0];
+        const currDay = currTs.dayKey;
         let st = dailyMap.get(currDay);
         if (!st) {
           st = { firstTs: t, lastTs: t, activeMs: 0, inactiveMs: 0 };
@@ -375,9 +427,8 @@ export async function streamTimesheetForClient(
         }
         st.lastTs = t;
         if (prev !== null) {
-          const prevDay = new Date(prev.timestamp || prev.Timestamp)
-            .toISOString()
-            .split("T")[0];
+          const prevTs = parseTimestampParts(prev.timestamp || prev.Timestamp);
+          const prevDay = prevTs?.dayKey || "";
           if (prevDay === currDay) {
             const dActive =
               (curr.activeMilliseconds ?? curr.ActiveMilliseconds ?? 0) -
@@ -429,11 +480,11 @@ export async function streamTimesheetForClient(
 }
 
 function getMonthKey(d: Date): string {
-  return d.toISOString().slice(0, 7);
+  return parseTimestampParts(d)?.monthKey || d.toISOString().slice(0, 7);
 }
 
 function getDayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return parseTimestampParts(d)?.dayKey || d.toISOString().slice(0, 10);
 }
 
 type TimesheetDay = {
@@ -628,21 +679,56 @@ export async function getTimesheetDataForMonth(monthStr: string): Promise<
         fp,
         1,
       )) as TimesheetFile | null;
-      if (!parsed || parsed.month !== monthStr || !parsed.days) return [];
-      const rows: any[] = [];
-      for (const day of Object.values(parsed.days)) {
-        if (!day || !day.date) continue;
-        rows.push({
-          clientId: id,
-          date: day.date,
-          startTime: day.startTime || null,
-          endTime: day.endTime || null,
-          activeMs: Number.isFinite(day.activeMs) ? day.activeMs : 0,
-          presenceMs: Number.isFinite(day.presenceMs) ? day.presenceMs : 0,
-        });
+      const rowsByDate = new Map<
+        string,
+        {
+          clientId: string;
+          date: string;
+          startTime: string | null;
+          endTime: string | null;
+          activeMs: number;
+          presenceMs: number;
+        }
+      >();
+
+      if (parsed && parsed.month === monthStr && parsed.days) {
+        for (const day of Object.values(parsed.days)) {
+          if (!day || !day.date) continue;
+          rowsByDate.set(day.date, {
+            clientId: id,
+            date: day.date,
+            startTime: day.startTime || null,
+            endTime: day.endTime || null,
+            activeMs: Number.isFinite(day.activeMs) ? day.activeMs : 0,
+            presenceMs: Number.isFinite(day.presenceMs) ? day.presenceMs : 0,
+          });
+        }
       }
-      rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-      return rows;
+
+      const match = String(monthStr || "").match(/^(\d{4})-(\d{2})$/);
+      if (match) {
+        const [year, month] = monthStr.split("-").map(Number);
+        const liveRows = await streamTimesheetForClient(
+          id,
+          new Date(year, month - 1, 1),
+          new Date(year, month, 0, 23, 59, 59, 999),
+        );
+
+        for (const row of liveRows) {
+          rowsByDate.set(row.date, {
+            clientId: id,
+            date: row.date,
+            startTime: row.startTime || null,
+            endTime: row.endTime || null,
+            activeMs: Number.isFinite(row.activeMs) ? row.activeMs : 0,
+            presenceMs: Number.isFinite(row.presenceMs) ? row.presenceMs : 0,
+          });
+        }
+      }
+
+      return Array.from(rowsByDate.values()).sort((a, b) =>
+        String(a.date).localeCompare(String(b.date)),
+      );
     },
   );
   return perClientRows.flat();

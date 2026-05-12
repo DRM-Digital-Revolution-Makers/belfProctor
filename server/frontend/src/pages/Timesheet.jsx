@@ -1,6 +1,6 @@
 import React from "react";
 import { List } from "@refinedev/antd";
-import { Table, DatePicker, Button, Select, Space } from "antd";
+import { Table, DatePicker, Button, Select } from "antd";
 import { authFetch } from "../dataProvider.js";
 import dayjs from "dayjs";
 import "dayjs/locale/ru";
@@ -22,14 +22,12 @@ export default function Timesheet() {
   const [clientsList, setClientsList] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
   const [categoryFilter, setCategoryFilter] = React.useState(null);
-
   const [combinedData, setCombinedData] = React.useState([]);
 
   const fetchData = React.useCallback(async () => {
     if (!date) return;
     setLoading(true);
     try {
-      // Use YYYY-MM for month picker
       const monthStr = date.format("YYYY-MM");
       const [timesheetRes, clientsRes] = await Promise.all([
         authFetch(`${API_URL}/clients/reports/timesheet?month=${monthStr}`),
@@ -41,21 +39,19 @@ export default function Timesheet() {
       setData(Array.isArray(json) ? json : []);
       setClientsList(Array.isArray(clientsJson) ? clientsJson : []);
 
-      // Merge logic to ensure all clients are shown
       const activityData = Array.isArray(json) ? json : [];
       const allClients = Array.isArray(clientsJson) ? clientsJson : [];
-
       const clientIdsWithActivity = new Set(
-        activityData.map((d) => d.clientId),
+        activityData.map((item) => item.clientId),
       );
       const missingClients = allClients.filter(
-        (c) => !clientIdsWithActivity.has(c.id),
+        (client) => !clientIdsWithActivity.has(client.id),
       );
 
-      const missingRows = missingClients.map((c) => ({
-        clientId: c.id,
-        name: c.id,
-        date: "", // No specific date
+      const missingRows = missingClients.map((client) => ({
+        clientId: client.id,
+        name: client.id,
+        date: "",
         startTime: null,
         endTime: null,
         activeMs: 0,
@@ -63,8 +59,8 @@ export default function Timesheet() {
       }));
 
       setCombinedData([...activityData, ...missingRows]);
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error(error);
     } finally {
       setLoading(false);
     }
@@ -76,9 +72,9 @@ export default function Timesheet() {
 
   const categories = React.useMemo(() => {
     const set = new Set();
-    (clientsList || []).forEach((c) => {
-      const v = String(c?.category || "").trim();
-      if (v) set.add(v);
+    (clientsList || []).forEach((client) => {
+      const value = String(client?.category || "").trim();
+      if (value) set.add(value);
     });
     return Array.from(set).sort((a, b) => String(a).localeCompare(String(b)));
   }, [clientsList]);
@@ -86,27 +82,36 @@ export default function Timesheet() {
   const allowedClientIds = React.useMemo(() => {
     if (!categoryFilter) return null;
     const set = new Set();
-    (clientsList || []).forEach((c) => {
-      if (String(c?.category || "") === String(categoryFilter)) set.add(c.id);
+    (clientsList || []).forEach((client) => {
+      if (String(client?.category || "") === String(categoryFilter)) {
+        set.add(client.id);
+      }
     });
     return set;
   }, [clientsList, categoryFilter]);
 
   const filteredClientsList = React.useMemo(() => {
     if (!allowedClientIds) return clientsList;
-    return (clientsList || []).filter((c) => allowedClientIds.has(c.id));
+    return (clientsList || []).filter((client) =>
+      allowedClientIds.has(client.id),
+    );
   }, [clientsList, allowedClientIds]);
 
   const filteredCombinedData = React.useMemo(() => {
     if (!allowedClientIds) return combinedData;
-    return (combinedData || []).filter((r) => allowedClientIds.has(r.clientId));
+    return (combinedData || []).filter((row) =>
+      allowedClientIds.has(row.clientId),
+    );
   }, [combinedData, allowedClientIds]);
 
   const formatTime = (isoString) => {
     if (!isoString) return "-";
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return "-";
-    return dayjs(d).format("HH:mm");
+    const stringValue = String(isoString).trim();
+    const match = stringValue.match(/T(\d{2}):(\d{2})/);
+    if (match) return `${match[1]}:${match[2]}`;
+    const parsedDate = new Date(isoString);
+    if (Number.isNaN(parsedDate.getTime())) return "-";
+    return dayjs(parsedDate).format("HH:mm");
   };
 
   const formatDuration = (ms) => {
@@ -124,312 +129,465 @@ export default function Timesheet() {
     const exportClientsList = allowedClientIds
       ? filteredClientsList
       : clientsList;
-    if (!exportClientsList || exportClientsList.length === 0) return;
+    if (!Array.isArray(exportClientsList) || exportClientsList.length === 0)
+      return;
 
-    // Group by Client (use data = activity rows from API)
-    const clientsMap = {};
+    const now = dayjs();
+    const reportEnd = date.endOf("month");
+    const reportDayCount = date.daysInMonth();
+    const totalColumns = 7 + reportDayCount * 3;
     const rowsForExport = allowedClientIds
-      ? (data || []).filter((r) => allowedClientIds.has(r.clientId))
+      ? (data || []).filter((row) => allowedClientIds.has(row.clientId))
       : data || [];
+
+    const borderColor = "D0CECE";
+    const headerFill = "F5FBFF";
+    const zebraFill = "F5F5F5";
+    const whiteFill = "FFFFFF";
+    const greenText = "70AD47";
+    const redText = "E77373";
+    const startTimeThresholdMinutes = 8 * 60 + 40;
+    const activeTimeThresholdMinutes = 6 * 60;
+    const endTimeThresholdMinutes = 17 * 60 + 25;
+
+    const fullBorder = {
+      top: { style: "thin", color: { rgb: borderColor } },
+      bottom: { style: "thin", color: { rgb: borderColor } },
+      left: { style: "thin", color: { rgb: borderColor } },
+      right: { style: "thin", color: { rgb: borderColor } },
+    };
+
+    const createCell = (value = "", style) => ({ v: value, s: style });
+    const createBlankRow = () =>
+      Array.from({ length: totalColumns }, () => createCell(""));
+    const capitalizeDay = (value) =>
+      value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : value;
+    const toMinutes = (value) => {
+      if (!value || value === "-") return null;
+      const [hours, minutes] = String(value).split(":").map(Number);
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+      return hours * 60 + minutes;
+    };
+
+    const baseCellStyle = (fillColor, horizontal = "center", fontColor) => {
+      const style = {
+        font: { sz: 10 },
+        alignment: { horizontal, vertical: "center", wrapText: true },
+        border: fullBorder,
+        fill: { patternType: "solid", fgColor: { rgb: fillColor } },
+      };
+      if (fontColor) {
+        style.font = { ...style.font, color: { rgb: fontColor } };
+      }
+      return style;
+    };
+
+    const dayCellStyle = (fillColor, edge, rowType, fontColor) => {
+      const border = {};
+      if (rowType === "top") {
+        border.top = { style: "thin", color: { rgb: borderColor } };
+      } else {
+        border.bottom = { style: "thin", color: { rgb: borderColor } };
+      }
+      if (edge === "start") {
+        border.left = { style: "thin", color: { rgb: borderColor } };
+      }
+      if (edge === "end") {
+        border.right = { style: "thin", color: { rgb: borderColor } };
+      }
+
+      const style = {
+        font: { sz: 10 },
+        alignment: { horizontal: "center", vertical: "center" },
+        border,
+        fill: { patternType: "solid", fgColor: { rgb: fillColor } },
+      };
+      if (fontColor) {
+        style.font = { ...style.font, color: { rgb: fontColor } };
+      }
+      return style;
+    };
+
+    const metaStyle = {
+      font: { sz: 10 },
+      alignment: { horizontal: "left", vertical: "center" },
+    };
+    const titleStyle = {
+      font: { bold: true, sz: 16 },
+      alignment: { horizontal: "left", vertical: "center" },
+    };
+    const headerStyle = {
+      font: { sz: 10 },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: fullBorder,
+      fill: { patternType: "solid", fgColor: { rgb: headerFill } },
+    };
+    const legendTitleStyle = {
+      font: { bold: true, sz: 12 },
+      alignment: { horizontal: "left", vertical: "center" },
+    };
+    const legendTextStyle = {
+      font: { sz: 10 },
+      alignment: { horizontal: "left", vertical: "center" },
+    };
+
+    const startTimeStyle = (fillColor, value) => {
+      const minutes = toMinutes(value);
+      const fontColor =
+        minutes !== null && minutes <= startTimeThresholdMinutes
+          ? greenText
+          : redText;
+      return dayCellStyle(fillColor, "start", "top", fontColor);
+    };
+
+    const activeTimeStyle = (fillColor, value) => {
+      const minutes = toMinutes(value);
+      const fontColor =
+        minutes !== null && minutes > activeTimeThresholdMinutes
+          ? greenText
+          : redText;
+      return dayCellStyle(fillColor, "start", "bottom", fontColor);
+    };
+
+    const endTimeStyle = (fillColor, value) => {
+      const minutes = toMinutes(value);
+      const fontColor =
+        minutes !== null && minutes >= endTimeThresholdMinutes
+          ? greenText
+          : redText;
+      return dayCellStyle(fillColor, "end", "top", fontColor);
+    };
+
+    const clientStatsById = new Map();
     rowsForExport.forEach((item) => {
-      if (!item.date) return;
-      if (!clientsMap[item.clientId]) {
-        clientsMap[item.clientId] = {
-          clientId: item.clientId,
+      if (!item?.date || !item?.clientId) return;
+      const dayValue = dayjs(item.date);
+      if (!dayValue.isValid() || !dayValue.isSame(date, "month")) return;
+      const dayNumber = dayValue.date();
+      if (dayNumber > reportDayCount) return;
+
+      if (!clientStatsById.has(item.clientId)) {
+        clientStatsById.set(item.clientId, {
           days: {},
           activeTotal: 0,
           presenceTotal: 0,
           daysWorked: 0,
-        };
+        });
       }
-      const day = parseInt(item.date.split("-")[2], 10);
-      if (isNaN(day)) return;
-      clientsMap[item.clientId].days[day] = item;
-      clientsMap[item.clientId].activeTotal += item.activeMs;
-      clientsMap[item.clientId].presenceTotal += item.presenceMs;
-      clientsMap[item.clientId].daysWorked += 1;
+
+      const clientStats = clientStatsById.get(item.clientId);
+      clientStats.days[dayNumber] = item;
+      clientStats.activeTotal += Number(item.activeMs) || 0;
+      clientStats.presenceTotal += Number(item.presenceMs) || 0;
+      clientStats.daysWorked += 1;
     });
 
-    // Merge with full clients list to include users without activity
-    const detailsById = {};
-    exportClientsList.forEach((c) => {
-      detailsById[c.id] = {
-        name: c.id,
-        department: c.department || "",
-        position: c.position || "",
+    const clients = exportClientsList.map((client) => {
+      const stats = clientStatsById.get(client.id);
+      return {
+        clientId: client.id,
+        department: client.department || "",
+        position: client.position || "",
+        activeTotal: stats?.activeTotal || 0,
+        presenceTotal: stats?.presenceTotal || 0,
+        daysWorked: stats?.daysWorked || 0,
+        days: stats?.days || {},
       };
     });
-    const clients = Object.values(clientsMap).map((c) => ({
-      ...c,
-      ...detailsById[c.clientId],
-    }));
-    // Add missing clients with empty stats
-    exportClientsList.forEach((c) => {
-      if (!clientsMap[c.id]) {
-        clients.push({
-          clientId: c.id,
-          days: {},
-          activeTotal: 0,
-          presenceTotal: 0,
-          daysWorked: 0,
-          name: c.id,
+
+    const usersWithDataCount = clients.filter(
+      (client) => client.daysWorked > 0,
+    ).length;
+    const sheetData = [];
+
+    sheetData.push(createBlankRow());
+    sheetData.push(createBlankRow());
+
+    const titleRow = createBlankRow();
+    titleRow[0] = createCell(t("timesheet.title"), titleStyle);
+    sheetData.push(titleRow);
+    sheetData.push(createBlankRow());
+
+    const periodRow = createBlankRow();
+    periodRow[0] = createCell(
+      t("timesheet.period", {
+        start: date.startOf("month").format("DD.MM.YYYY"),
+        end: reportEnd.format("DD.MM.YYYY"),
+      }),
+      metaStyle,
+    );
+    sheetData.push(periodRow);
+
+    const countRow = createBlankRow();
+    countRow[0] = createCell(
+      t("timesheet.totalUsersWithData", { count: usersWithDataCount }),
+      metaStyle,
+    );
+    sheetData.push(countRow);
+    sheetData.push(createBlankRow());
+
+    const mainHeaderRow = createBlankRow();
+    mainHeaderRow[0] = createCell(t("timesheet.user"), headerStyle);
+    mainHeaderRow[1] = createCell("", headerStyle);
+    mainHeaderRow[2] = createCell(t("timesheet.department"), headerStyle);
+    mainHeaderRow[3] = createCell(t("timesheet.position"), headerStyle);
+    mainHeaderRow[4] = createCell(t("timesheet.totalActive"), headerStyle);
+    mainHeaderRow[5] = createCell(t("timesheet.totalPresence"), headerStyle);
+    mainHeaderRow[6] = createCell(t("timesheet.daysWorked"), headerStyle);
+    mainHeaderRow[7] = createCell(
+      t("timesheet.sheetFor", { date: date.format("MMMM YYYY") }),
+      headerStyle,
+    );
+    for (let dayNumber = 1; dayNumber <= reportDayCount; dayNumber += 1) {
+      const startColumn = 7 + (dayNumber - 1) * 3;
+      if (startColumn > 7) {
+        mainHeaderRow[startColumn] = createCell("", headerStyle);
+      }
+      mainHeaderRow[startColumn + 1] = createCell("", headerStyle);
+      mainHeaderRow[startColumn + 2] = createCell("", headerStyle);
+    }
+    sheetData.push(mainHeaderRow);
+
+    const dayHeaderRow = createBlankRow();
+    for (let dayNumber = 1; dayNumber <= reportDayCount; dayNumber += 1) {
+      const startColumn = 7 + (dayNumber - 1) * 3;
+      const dayValue = date.date(dayNumber);
+      const isWeekend = dayValue.day() === 0 || dayValue.day() === 6;
+      const dayHeaderCellStyle = isWeekend
+        ? {
+            ...headerStyle,
+            font: { ...headerStyle.font, color: { rgb: redText } },
+          }
+        : headerStyle;
+      dayHeaderRow[startColumn] = createCell(
+        `${dayNumber} ${capitalizeDay(dayValue.format("dd"))}`,
+        dayHeaderCellStyle,
+      );
+      dayHeaderRow[startColumn + 1] = createCell("", dayHeaderCellStyle);
+      dayHeaderRow[startColumn + 2] = createCell("", dayHeaderCellStyle);
+    }
+    sheetData.push(dayHeaderRow);
+
+    clients.forEach((client, clientIndex) => {
+      const fillColor = clientIndex % 2 === 0 ? whiteFill : zebraFill;
+      const mainRow = createBlankRow();
+      const statsRow = createBlankRow();
+
+      mainRow[0] = createCell("", baseCellStyle(fillColor));
+      mainRow[1] = createCell(
+        client.clientId,
+        baseCellStyle(fillColor, "left"),
+      );
+      mainRow[2] = createCell(
+        client.department,
+        baseCellStyle(fillColor, "left"),
+      );
+      mainRow[3] = createCell(
+        client.position,
+        baseCellStyle(fillColor, "left"),
+      );
+      mainRow[4] = createCell(
+        formatDuration(client.activeTotal),
+        baseCellStyle(fillColor),
+      );
+      mainRow[5] = createCell(
+        formatDuration(client.presenceTotal),
+        baseCellStyle(fillColor),
+      );
+      mainRow[6] = createCell(client.daysWorked, baseCellStyle(fillColor));
+
+      statsRow[0] = createCell("", baseCellStyle(fillColor));
+      statsRow[1] = createCell("", baseCellStyle(fillColor, "left"));
+      statsRow[2] = createCell("", baseCellStyle(fillColor, "left"));
+      statsRow[3] = createCell("", baseCellStyle(fillColor, "left"));
+      statsRow[4] = createCell("", baseCellStyle(fillColor));
+      statsRow[5] = createCell("", baseCellStyle(fillColor));
+      statsRow[6] = createCell("", baseCellStyle(fillColor));
+
+      for (let dayNumber = 1; dayNumber <= reportDayCount; dayNumber += 1) {
+        const dayData = client.days[dayNumber];
+        const startColumn = 7 + (dayNumber - 1) * 3;
+        const startValue = dayData ? formatTime(dayData.startTime) : "";
+        const endValue = dayData ? formatTime(dayData.endTime) : "";
+        const activeValue = dayData ? formatDuration(dayData.activeMs) : "";
+        const presenceValue = dayData ? formatDuration(dayData.presenceMs) : "";
+
+        mainRow[startColumn] = createCell(
+          startValue === "-" ? "" : startValue,
+          dayData
+            ? startTimeStyle(fillColor, startValue)
+            : dayCellStyle(fillColor, "start", "top"),
+        );
+        mainRow[startColumn + 1] = createCell(
+          dayData ? "-" : "",
+          dayCellStyle(fillColor, "middle", "top"),
+        );
+        mainRow[startColumn + 2] = createCell(
+          endValue === "-" ? "" : endValue,
+          dayData
+            ? endTimeStyle(fillColor, endValue)
+            : dayCellStyle(fillColor, "end", "top"),
+        );
+
+        statsRow[startColumn] = createCell(
+          activeValue,
+          dayData
+            ? activeTimeStyle(fillColor, activeValue)
+            : dayCellStyle(fillColor, "start", "bottom"),
+        );
+        statsRow[startColumn + 1] = createCell(
+          "",
+          dayCellStyle(fillColor, "middle", "bottom"),
+        );
+        statsRow[startColumn + 2] = createCell(
+          presenceValue,
+          dayCellStyle(fillColor, "end", "bottom"),
+        );
+      }
+
+      sheetData.push(mainRow);
+      sheetData.push(statsRow);
+    });
+
+    sheetData.push(createBlankRow());
+
+    const legendTitleRow = createBlankRow();
+    legendTitleRow[0] = createCell(
+      t("timesheet.legendTitle"),
+      legendTitleStyle,
+    );
+    sheetData.push(legendTitleRow);
+
+    const legendStartRow = createBlankRow();
+    legendStartRow[0] = createCell(t("timesheet.legendStart"), legendTextStyle);
+    legendStartRow[7] = createCell(
+      "09:25",
+      dayCellStyle(whiteFill, "start", "top", redText),
+    );
+    legendStartRow[8] = createCell(
+      "-",
+      dayCellStyle(whiteFill, "middle", "top"),
+    );
+    legendStartRow[9] = createCell(
+      "16:30",
+      dayCellStyle(whiteFill, "end", "top", redText),
+    );
+    legendStartRow[10] = createCell(t("timesheet.legendEnd"), legendTextStyle);
+    sheetData.push(legendStartRow);
+
+    const legendActiveRow = createBlankRow();
+    legendActiveRow[0] = createCell(
+      t("timesheet.legendActive"),
+      legendTextStyle,
+    );
+    legendActiveRow[7] = createCell(
+      "06:35",
+      dayCellStyle(whiteFill, "start", "bottom", greenText),
+    );
+    legendActiveRow[8] = createCell(
+      "",
+      dayCellStyle(whiteFill, "middle", "bottom"),
+    );
+    legendActiveRow[9] = createCell(
+      "08:32",
+      dayCellStyle(whiteFill, "end", "bottom"),
+    );
+    legendActiveRow[10] = createCell(
+      t("timesheet.legendPresence"),
+      legendTextStyle,
+    );
+    sheetData.push(legendActiveRow);
+
+    sheetData.push(createBlankRow());
+
+    const legendComplianceRow = createBlankRow();
+    legendComplianceRow[0] = createCell(
+      t("timesheet.legendCompliance"),
+      legendTextStyle,
+    );
+    legendComplianceRow[7] = createCell("", {
+      fill: { patternType: "solid", fgColor: { rgb: greenText } },
+    });
+    sheetData.push(legendComplianceRow);
+
+    sheetData.push(createBlankRow());
+
+    const legendViolationRow = createBlankRow();
+    legendViolationRow[0] = createCell(
+      t("timesheet.legendViolation"),
+      legendTextStyle,
+    );
+    legendViolationRow[7] = createCell("", {
+      fill: { patternType: "solid", fgColor: { rgb: redText } },
+    });
+    sheetData.push(legendViolationRow);
+
+    sheetData.push(createBlankRow());
+    sheetData.push(createBlankRow());
+
+    const note1Row = createBlankRow();
+    note1Row[0] = createCell(
+      t("timesheet.noteMultipleStations"),
+      legendTextStyle,
+    );
+    sheetData.push(note1Row);
+
+    const note2Row = createBlankRow();
+    note2Row[0] = createCell(t("timesheet.noteNoDoubleCount"), legendTextStyle);
+    sheetData.push(note2Row);
+
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    const lastColumn = totalColumns - 1;
+    const merges = [
+      { s: { r: 2, c: 0 }, e: { r: 2, c: lastColumn } },
+      { s: { r: 4, c: 0 }, e: { r: 4, c: lastColumn } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: lastColumn } },
+      { s: { r: 7, c: 0 }, e: { r: 8, c: 1 } },
+      { s: { r: 7, c: 2 }, e: { r: 8, c: 2 } },
+      { s: { r: 7, c: 3 }, e: { r: 8, c: 3 } },
+      { s: { r: 7, c: 4 }, e: { r: 8, c: 4 } },
+      { s: { r: 7, c: 5 }, e: { r: 8, c: 5 } },
+      { s: { r: 7, c: 6 }, e: { r: 8, c: 6 } },
+      { s: { r: 7, c: 7 }, e: { r: 7, c: lastColumn } },
+    ];
+
+    for (let dayNumber = 1; dayNumber <= reportDayCount; dayNumber += 1) {
+      const startColumn = 7 + (dayNumber - 1) * 3;
+      merges.push({
+        s: { r: 8, c: startColumn },
+        e: { r: 8, c: startColumn + 2 },
+      });
+    }
+
+    clients.forEach((_, clientIndex) => {
+      const rowIndex = 9 + clientIndex * 2;
+      for (let column = 0; column <= 6; column += 1) {
+        merges.push({
+          s: { r: rowIndex, c: column },
+          e: { r: rowIndex + 1, c: column },
         });
       }
     });
 
-    // --- STYLES ---
-    const borderStyle = {
-      top: { style: "thin", color: { rgb: "000000" } },
-      bottom: { style: "thin", color: { rgb: "000000" } },
-      left: { style: "thin", color: { rgb: "000000" } },
-      right: { style: "thin", color: { rgb: "000000" } },
-    };
-
-    const headerStyle = {
-      font: { bold: true, sz: 10 },
-      alignment: { horizontal: "center", vertical: "center", wrapText: true },
-      border: borderStyle,
-      fill: { fgColor: { rgb: "FFFFFF" } },
-    };
-
-    const cellStyle = {
-      font: { sz: 10 },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: borderStyle,
-    };
-
-    const nameStyle = {
-      font: { sz: 10 },
-      alignment: { horizontal: "left", vertical: "center" },
-      border: borderStyle,
-    };
-
-    const titleStyle = {
-      font: { bold: true, sz: 14 },
-    };
-
-    const blueTextStyle = {
-      font: { sz: 10, color: { rgb: "5B9BD5" } },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: borderStyle,
-    };
-    const redTextStyle = {
-      font: { sz: 10, color: { rgb: "FF0000" } },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: borderStyle,
-    };
-    const blueFillStyle = {
-      font: { sz: 10 },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: borderStyle,
-      fill: { fgColor: { rgb: "5B9BD5" } },
-    };
-    const redFillStyle = {
-      font: { sz: 10 },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: borderStyle,
-      fill: { fgColor: { rgb: "FF0000" } },
-    };
-    const legendLabelStyle = {
-      font: { sz: 10, bold: true },
-      alignment: { horizontal: "right", vertical: "center" },
-    };
-
-    // --- BUILD DATA ---
-    const sheetData = [];
-
-    // Row 1: Title (Merged)
-    const rowTitle = Array(50).fill(""); // Pre-fill for safer indexing
-    rowTitle[0] = t("timesheet.title");
-    sheetData.push(rowTitle.map((v) => ({ v, s: titleStyle })));
-
-    sheetData.push([]); // Empty row
-
-    // Row 3: Period
-    const rowPeriod = Array(50).fill("");
-    rowPeriod[0] = t("timesheet.period", {
-      start: date.startOf("month").format("DD.MM.YYYY"),
-      end: date.endOf("month").format("DD.MM.YYYY"),
-    });
-    sheetData.push(rowPeriod.map((v) => ({ v, s: { font: { sz: 10 } } })));
-
-    // Row 4: Users count
-    const rowCount = Array(50).fill("");
-    rowCount[0] = t("timesheet.totalUsers", {
-      count: exportClientsList.length,
-    });
-    sheetData.push(rowCount.map((v) => ({ v, s: { font: { sz: 10 } } })));
-
-    sheetData.push([]); // Empty row
-
-    // Row 6: Main Headers
-    const daysInMonth = date.daysInMonth();
-
-    // Static headers
-    const headers = [
-      "", // A
-      t("timesheet.user"), // B
-      t("timesheet.totalActive"), // C
-      t("timesheet.totalPresence"), // D
-      t("timesheet.daysWorked"), // E
-      t("timesheet.sheetFor", { date: date.format("MMMM YYYY") }), // F - merged
-    ];
-
-    const row6 = headers.map((h) => ({ v: h, s: headerStyle }));
-    // Fill remaining header cells for merge area
-    for (let i = 0; i < daysInMonth; i++) {
-      if (i > 0) row6.push({ v: "", s: headerStyle });
-    }
-    sheetData.push(row6);
-
-    // Row 7: Day Headers
-    const row7 = [
-      { v: "", s: headerStyle },
-      { v: "", s: headerStyle },
-      { v: "", s: headerStyle },
-      { v: "", s: headerStyle },
-      { v: "", s: headerStyle },
-    ];
-
-    for (let i = 1; i <= daysInMonth; i++) {
-      const dayDate = date.date(i);
-      const dayLabel = `${i} ${dayDate.format("dd")}`;
-      row7.push({
-        v: dayLabel,
-        s: { ...headerStyle, fill: { fgColor: { rgb: "F2F2F2" } } },
-      });
-    }
-    sheetData.push(row7);
-
-    // Data Rows
-    clients.forEach((client) => {
-      const r1 = [
-        { v: "", s: cellStyle }, // A
-        { v: client.clientId, s: nameStyle }, // B Name
-        { v: formatDuration(client.activeTotal), s: cellStyle }, // C Active Total
-        { v: formatDuration(client.presenceTotal), s: cellStyle }, // D Presence Total
-        { v: client.daysWorked, s: cellStyle }, // E Days
-      ];
-
-      const r2 = [
-        { v: "", s: cellStyle },
-        { v: "", s: cellStyle },
-        { v: "", s: cellStyle },
-        { v: "", s: cellStyle },
-        { v: "", s: cellStyle },
-      ];
-
-      for (let i = 1; i <= daysInMonth; i++) {
-        const dayData = client.days[i];
-        if (dayData) {
-          const startStr = formatTime(dayData.startTime);
-          const endStr = formatTime(dayData.endTime);
-          const activeStr = formatDuration(dayData.activeMs);
-          const presenceStr = formatDuration(dayData.presenceMs);
-
-          r1.push({ v: `${startStr} - ${endStr}`, s: cellStyle });
-          r2.push({ v: `${activeStr} ${presenceStr}`, s: cellStyle });
-        } else {
-          r1.push({ v: "", s: cellStyle });
-          r2.push({ v: "", s: cellStyle });
-        }
-      }
-      sheetData.push(r1);
-      sheetData.push(r2);
-    });
-
-    // --- LEGEND ---
-    sheetData.push([]);
-    sheetData.push([
-      { v: t("timesheet.legendTitle"), s: { font: { bold: true, sz: 12 } } },
-    ]);
-
-    // Row: Start/End
-    sheetData.push([
-      { v: "", s: {} },
-      { v: t("timesheet.legendStart"), s: legendLabelStyle },
-      { v: "09:25", s: blueTextStyle },
-      { v: "-", s: cellStyle },
-      { v: "16:30", s: redTextStyle },
-      { v: t("timesheet.legendEnd"), s: { font: { sz: 10 } } },
-    ]);
-
-    // Row: Active/Presence
-    sheetData.push([
-      { v: "", s: {} },
-      { v: t("timesheet.legendActive"), s: legendLabelStyle },
-      { v: "06:35", s: redTextStyle },
-      { v: "08:32", s: cellStyle },
-      { v: t("timesheet.legendPresence"), s: { font: { sz: 10 } } },
-    ]);
-
-    sheetData.push([]);
-
-    // Compliance
-    sheetData.push([
-      { v: "", s: {} },
-      { v: t("timesheet.legendCompliance"), s: legendLabelStyle },
-      { v: "", s: blueFillStyle },
-    ]);
-
-    sheetData.push([]);
-
-    // Violation
-    sheetData.push([
-      { v: "", s: {} },
-      { v: t("timesheet.legendViolation"), s: legendLabelStyle },
-      { v: "", s: redFillStyle },
-    ]);
-
-    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
-
-    // --- MERGES ---
-    const merges = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 20 } }, // Title
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 20 } }, // Period
-      { s: { r: 3, c: 0 }, e: { r: 3, c: 20 } }, // Count
-
-      // Header merges (Row 6)
-      { s: { r: 5, c: 1 }, e: { r: 6, c: 1 } }, // Пользователь (B6:B7)
-      { s: { r: 5, c: 2 }, e: { r: 6, c: 2 } }, // Общее время актив (C6:C7)
-      { s: { r: 5, c: 3 }, e: { r: 6, c: 3 } }, // Общее время присут (D6:D7)
-      { s: { r: 5, c: 4 }, e: { r: 6, c: 4 } }, // Отработано (E6:E7)
-
-      // "Табель рабочего времени за..." (F6 across all days)
-      { s: { r: 5, c: 5 }, e: { r: 5, c: 5 + daysInMonth - 1 } },
-    ];
-
-    // Client rows vertical merges
-    // Data starts at Row index 7 (sheetData[7])
-    // Each client is 2 rows.
-    for (let i = 0; i < clients.length; i++) {
-      const r = 7 + i * 2;
-      // Merge Name, Totals
-      merges.push({ s: { r: r, c: 1 }, e: { r: r + 1, c: 1 } }); // Name
-      merges.push({ s: { r: r, c: 2 }, e: { r: r + 1, c: 2 } }); // Active
-      merges.push({ s: { r: r, c: 3 }, e: { r: r + 1, c: 3 } }); // Presence
-      merges.push({ s: { r: r, c: 4 }, e: { r: r + 1, c: 4 } }); // Days
-    }
-
     worksheet["!merges"] = merges;
-
-    // Column Widths
-    const wscols = [
-      { wch: 2 }, // A (empty)
-      { wch: 30 }, // B Name
-      { wch: 15 }, // C Active Total
-      { wch: 15 }, // D Presence Total
-      { wch: 10 }, // E Days
+    worksheet["!cols"] = [
+      { wch: 5.1 },
+      { wch: 47.9 },
+      { wch: 13.6 },
+      { hidden: true, wch: 0.1 },
+      { wch: 15.1 },
+      { wch: 21.6 },
+      { wch: 12.2 },
+      ...Array.from({ length: reportDayCount }, () => [
+        { wch: 5.2 },
+        { wch: 0.9 },
+        { wch: 6.2 },
+      ]).flat(),
     ];
-    // Add widths for day columns
-    for (let i = 0; i < daysInMonth; i++) {
-      wscols.push({ wch: 12 }); // Day
-    }
-    worksheet["!cols"] = wscols;
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, t("nav.timesheet"));
-    XLSX.writeFile(workbook, `timesheet_styled_${date.format("YYYY-MM")}.xlsx`);
+    XLSX.writeFile(workbook, `timesheet_${date.format("YYYY-MM")}.xlsx`);
   };
 
   const columns = [
@@ -437,7 +595,7 @@ export default function Timesheet() {
       title: t("csv.date"),
       dataIndex: "date",
       key: "date",
-      render: (val) => (val ? dayjs(val).format("DD.MM.YYYY") : "-"),
+      render: (value) => (value ? dayjs(value).format("DD.MM.YYYY") : "-"),
     },
     {
       title: t("timesheet.user"),
@@ -449,25 +607,25 @@ export default function Timesheet() {
       title: t("common.workStart"),
       dataIndex: "startTime",
       key: "startTime",
-      render: (val) => formatTime(val),
+      render: (value) => formatTime(value),
     },
     {
       title: t("common.workEnd"),
       dataIndex: "endTime",
       key: "endTime",
-      render: (val) => formatTime(val),
+      render: (value) => formatTime(value),
     },
     {
       title: t("activity.activeTime"),
       dataIndex: "activeMs",
       key: "activeMs",
-      render: (val) => formatDuration(val),
+      render: (value) => formatDuration(value),
     },
     {
       title: t("common.presence"),
       dataIndex: "presenceMs",
       key: "presenceMs",
-      render: (val) => formatDuration(val),
+      render: (value) => formatDuration(value),
     },
   ];
 
@@ -479,12 +637,15 @@ export default function Timesheet() {
           style={{ minWidth: 240, marginRight: 8 }}
           placeholder={t("common.category")}
           value={categoryFilter}
-          options={categories.map((c) => ({ label: c, value: c }))}
-          onChange={(v) => setCategoryFilter(v || null)}
+          options={categories.map((category) => ({
+            label: category,
+            value: category,
+          }))}
+          onChange={(value) => setCategoryFilter(value || null)}
         />
         <DatePicker
           value={date}
-          onChange={(val) => setDate(val)}
+          onChange={(value) => setDate(value)}
           allowClear={false}
           format="MM.YYYY"
           picker="month"
