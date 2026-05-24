@@ -1,7 +1,5 @@
 import React from "react";
-import { List } from "@refinedev/antd";
 import {
-  Table,
   Modal,
   Form,
   Input,
@@ -9,27 +7,170 @@ import {
   message,
   Alert,
   Select,
-  Space,
+  Empty,
+  Dropdown,
+  Checkbox,
 } from "antd";
+import { Icon } from "@iconify/react";
 import { authFetch } from "../dataProvider.js";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import dayjs from "dayjs";
 
+/* ============ Design tokens ============ */
+const BP = {
+  white: "#FFFFFF",
+  surface: "#F7F7F7",
+  text: "#000000",
+  muted: "#707070",
+  light: "#A4A4A4",
+  green: "#267E26",
+  red: "#DC2626",
+  divider: "rgba(164,164,164,0.5)",
+  shadow: "0 0 4px 0 rgba(241,243,248,1)",
+  font: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "SF Pro", "Helvetica Neue", Arial, sans-serif',
+};
+
+/* ============ Helpers ============ */
+function formatDuration(ms) {
+  if (ms == null || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}с`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}м ${s % 60}с`;
+  const h = Math.floor(m / 60);
+  return `${h}ч ${m % 60}м`;
+}
+
+// Активность определяется по реальному `isActive` флагу из /api/activity/latest
+// (клиент шлёт его при каждой смене состояния через ActivityMonitorService).
+// Heartbeat НЕ используется для активности — только для online/offline.
+//
+// Для freshness/duration берём `_ingestedAt` (когда сервер получил запись),
+// а не клиентский `timestamp` — иначе из-за расхождения часов клиент/сервер
+// получаем отрицательную длительность.
+function statusFromHeartbeat(hb, activity, nowMs) {
+  const now = nowMs || Date.now();
+  if (!hb && !activity)
+    return { online: false, active: false, activeLabel: null, duration: null };
+  const lastHb = hb?.lastHeartbeat || hb?.lastSeen || hb?.timestamp;
+  const online = !!(lastHb && now - new Date(lastHb).getTime() < 3 * 60 * 1000);
+
+  // server-side timestamp = устойчив к расхождению часов
+  const actTs = activity?._ingestedAt
+    ? new Date(activity._ingestedAt).getTime()
+    : activity?.timestamp
+      ? new Date(activity.timestamp).getTime()
+      : null;
+  const STALE_MS = 15 * 60 * 1000;
+  const sinceAct = actTs != null ? Math.max(0, now - actTs) : null;
+  const hasFreshActivity = sinceAct != null && sinceAct < STALE_MS;
+
+  // Если клиент офлайн — он сейчас точно не активен (старая запись isActive=true игнорируется)
+  const isActive = online && hasFreshActivity && activity?.isActive === true;
+
+  let activeLabel = null;
+  let duration = null;
+  if (!online) {
+    activeLabel = "Не активен";
+    if (lastHb) duration = formatDuration(now - new Date(lastHb).getTime());
+  } else if (isActive) {
+    activeLabel = "Активен";
+    duration = formatDuration(sinceAct);
+  } else if (hasFreshActivity) {
+    activeLabel = "Не активен";
+    duration = formatDuration(sinceAct);
+  } else {
+    // online, но свежих данных активности нет — клиент ещё не сообщил состояние
+    activeLabel = "—";
+  }
+  return { online, active: isActive, activeLabel, duration };
+}
+
+/* ============ Components ============ */
+function ProfilePill({ onClick, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        background: BP.surface,
+        color: BP.muted,
+        border: "none",
+        borderRadius: 30,
+        padding: "8px 20px",
+        cursor: "pointer",
+        fontFamily: BP.font,
+        fontSize: 14,
+        fontWeight: 500,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ColumnHeader({ label, width, flex }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        color: BP.muted,
+        fontFamily: BP.font,
+        fontSize: 14,
+        ...(width ? { width } : {}),
+        ...(flex ? { flex } : {}),
+      }}
+    >
+      <span>{label}</span>
+      <Icon
+        icon="solar:sort-from-top-to-bottom-linear"
+        width={14}
+        height={14}
+        color={BP.light}
+      />
+    </div>
+  );
+}
+
+function Divider() {
+  return (
+    <div
+      style={{
+        height: 1,
+        background: BP.divider,
+        opacity: 0.5,
+        width: "calc(100% - 40px)",
+        marginLeft: 20,
+      }}
+    />
+  );
+}
+
+/* ============ Page ============ */
 export default function ClientsList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
+
   const [data, setData] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
-  const [serverTime, setServerTime] = React.useState(null);
+  const [latestActivity, setLatestActivity] = React.useState([]);
+  const [tickNow, setTickNow] = React.useState(Date.now());
+  const [, setServerTime] = React.useState(null);
+  const [search, setSearch] = React.useState("");
+  const [categoryFilter, setCategoryFilter] = React.useState(null);
+  const [selectMode, setSelectMode] = React.useState(false);
+  const [selected, setSelected] = React.useState([]);
+
+  // Modals
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [lastCreated, setLastCreated] = React.useState(null);
   const [form] = Form.useForm();
-  const [selected, setSelected] = React.useState([]);
   const [bulkOpen, setBulkOpen] = React.useState(false);
   const [bulkLoading, setBulkLoading] = React.useState(false);
   const [bulkForm] = Form.useForm();
@@ -39,7 +180,7 @@ export default function ClientsList() {
   const [catOpen, setCatOpen] = React.useState(false);
   const [catLoading, setCatLoading] = React.useState(false);
   const [catForm] = Form.useForm();
-  const [categoryFilter, setCategoryFilter] = React.useState(null);
+
   const genId = React.useCallback(() => {
     const n = Math.floor(Math.random() * 1e6)
       .toString()
@@ -60,9 +201,7 @@ export default function ClientsList() {
         if (!r.ok) throw new Error("unauthorized");
         return r.json();
       })
-      .then((json) => {
-        setData(Array.isArray(json) ? json : []);
-      })
+      .then((json) => setData(Array.isArray(json) ? json : []))
       .catch(() => setData([]));
     authFetch(`${API_URL}/heartbeat/latest`)
       .then((r) => r.json())
@@ -70,14 +209,46 @@ export default function ClientsList() {
         setLatestHeartbeats(json.data || []);
         setServerTime(json.serverTime ? new Date(json.serverTime) : new Date());
       })
-      .catch(() => {
-        setLatestHeartbeats([]);
-      });
+      .catch(() => setLatestHeartbeats([]));
+    authFetch(`${API_URL}/activity/latest`)
+      .then((r) => r.json())
+      .then((json) => setLatestActivity(json.data || []))
+      .catch(() => setLatestActivity([]));
   }, [API_URL]);
-
   React.useEffect(() => {
     load();
   }, [load]);
+
+  // Авто-обновление heartbeat и activity каждые 5 секунд (no-cache)
+  React.useEffect(() => {
+    const refresh = () => {
+      const ts = Date.now();
+      authFetch(`${API_URL}/heartbeat/latest?ts=${ts}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (!json) return;
+          setLatestHeartbeats(json.data || []);
+          setServerTime(json.serverTime ? new Date(json.serverTime) : new Date());
+        })
+        .catch(() => {});
+      authFetch(`${API_URL}/activity/latest?ts=${ts}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (!json) return;
+          setLatestActivity(json.data || []);
+        })
+        .catch(() => {});
+    };
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [API_URL]);
+
+  // Локальный тик каждую секунду — обновляет отображаемую длительность
+  // без новых сетевых запросов.
+  React.useEffect(() => {
+    const id = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const categories = React.useMemo(() => {
     const set = new Set();
@@ -89,21 +260,26 @@ export default function ClientsList() {
   }, [data]);
 
   const filteredData = React.useMemo(() => {
-    const arr = Array.isArray(data) ? data : [];
-    if (!categoryFilter) return arr;
-    return arr.filter(
-      (c) => String(c?.category || "") === String(categoryFilter),
-    );
-  }, [data, categoryFilter]);
+    let arr = Array.isArray(data) ? data : [];
+    if (categoryFilter)
+      arr = arr.filter(
+        (c) => String(c?.category || "") === String(categoryFilter),
+      );
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      arr = arr.filter((c) => String(c.id || "").toLowerCase().includes(q));
+    }
+    return arr;
+  }, [data, categoryFilter, search]);
 
+  /* ============ Actions ============ */
   const onCreate = async () => {
     try {
       const values = await form.validateFields();
       setLoading(true);
-      const headers = { "Content-Type": "application/json" };
       const res = await authFetch(`${API_URL}/clients/register`, {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: values.id,
           encryptionKey: values.encryptionKey,
@@ -131,10 +307,9 @@ export default function ClientsList() {
       setLoading(true);
       const id = genId();
       const encryptionKey = genKey();
-      const headers = { "Content-Type": "application/json" };
       const res = await authFetch(`${API_URL}/clients/register`, {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, encryptionKey }),
       });
       if (!res.ok) {
@@ -152,11 +327,6 @@ export default function ClientsList() {
       setLoading(false);
     }
   };
-  const bulkDelete = async () => {
-    if (!selected.length) return;
-    setDeleteOpen(true);
-  };
-
   const confirmBulkDelete = async () => {
     if (!selected.length) return;
     try {
@@ -164,7 +334,6 @@ export default function ClientsList() {
       setDeleteLoading(true);
       const password = String(vals.password || "").trim();
       const headers = { "X-Admin-Password": password };
-
       const results = await Promise.all(
         selected.map(async (id) => {
           try {
@@ -172,35 +341,20 @@ export default function ClientsList() {
               method: "DELETE",
               headers,
             });
-            let msg = "";
-            try {
-              const j = await resp.json();
-              msg = String(j?.message || "");
-            } catch {
-              msg = "";
-            }
-            return { id, ok: resp.ok, status: resp.status, message: msg };
-          } catch (e) {
-            return {
-              id,
-              ok: false,
-              status: 0,
-              message: String(e?.message || ""),
-            };
+            return { id, ok: resp.ok };
+          } catch {
+            return { id, ok: false };
           }
         }),
       );
-
       const failed = results.filter((r) => !r.ok);
-      if (failed.length) {
-        const first = failed[0];
-        const detail = first?.message ? ` (${first.message})` : "";
+      if (failed.length)
         message.error(
-          `${t("clients.deleteError")}: ${failed.length}/${selected.length}${detail}`,
+          `${t("clients.deleteError")}: ${failed.length}/${selected.length}`,
         );
-      } else message.success(t("clients.deleteComplete"));
-
+      else message.success(t("clients.deleteComplete"));
       setSelected([]);
+      setSelectMode(false);
       setDeleteOpen(false);
       deleteForm.resetFields();
       load();
@@ -212,12 +366,11 @@ export default function ClientsList() {
     try {
       const vals = await bulkForm.validateFields();
       setBulkLoading(true);
-      const headers = { "Content-Type": "application/json" };
       await Promise.allSettled(
         selected.map((id) =>
           authFetch(`${API_URL}/commands/send`, {
             method: "POST",
-            headers,
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               clientId: id,
               type: "setIntervals",
@@ -233,17 +386,15 @@ export default function ClientsList() {
       setBulkLoading(false);
     }
   };
-
   const bulkCategory = async () => {
     try {
       const vals = await catForm.validateFields();
       setCatLoading(true);
-      const headers = { "Content-Type": "application/json" };
       await Promise.allSettled(
         selected.map((id) =>
           authFetch(`${API_URL}/clients/${id}/category`, {
             method: "PUT",
-            headers,
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               category: String(vals.category || "").trim(),
             }),
@@ -258,117 +409,471 @@ export default function ClientsList() {
       setCatLoading(false);
     }
   };
+
+  const singleDelete = (id) => {
+    setSelected([id]);
+    setDeleteOpen(true);
+  };
+
+  const toggleRow = (id, on) => {
+    setSelected((prev) =>
+      on ? Array.from(new Set([...prev, id])) : prev.filter((x) => x !== id),
+    );
+  };
+
+  /* ============ Render ============ */
   return (
-    <List title={t("clients.title")}>
+    <div>
+      {/* Outer wrapper */}
       <div
         style={{
-          marginBottom: 16,
+          background: BP.surface,
+          borderRadius: 50,
+          boxShadow: BP.shadow,
+          padding: 20,
           display: "flex",
-          justifyContent: "flex-end",
-          gap: 8,
+          flexDirection: "column",
+          gap: 40,
+          minHeight: "calc(100vh - 64px)",
         }}
       >
-        <Button onClick={autoCreate}>{t("clients.autoCreate")}</Button>
-        <Button type="primary" onClick={() => setOpen(true)}>
-          {t("clients.addClient")}
-        </Button>
-      </div>
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Select
-          allowClear
-          style={{ minWidth: 240 }}
-          placeholder={t("common.category")}
-          value={categoryFilter}
-          options={categories.map((c) => ({ label: c, value: c }))}
-          onChange={(v) => {
-            setCategoryFilter(v || null);
-            setSelected([]);
+        {/* Inner table card */}
+        <div
+          style={{
+            background: BP.white,
+            border: `3px solid ${BP.white}`,
+            borderRadius: 30,
+            boxShadow: BP.shadow,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            flex: 1,
           }}
-        />
-      </Space>
-      <div
-        style={{
-          marginBottom: 16,
-          display: "flex",
-          justifyContent: "flex-end",
-          gap: 8,
-        }}
-      >
-        <Button disabled={!selected.length} onClick={() => setBulkOpen(true)}>
-          {t("clients.setIntervalsSelected")}
-        </Button>
-        <Button disabled={!selected.length} onClick={() => setCatOpen(true)}>
-          {t("clients.setCategorySelected")}
-        </Button>
-        <Button danger disabled={!selected.length} onClick={bulkDelete}>
-          {t("clients.deleteSelected")}
-        </Button>
-      </div>
-      {lastCreated && (
-        <Alert
-          style={{ marginBottom: 16 }}
-          type="info"
-          message={`ClientId: ${lastCreated.id}`}
-          description={`EncryptionKey: ${lastCreated.encryptionKey}`}
-          closable
-          onClose={() => setLastCreated(null)}
-        />
-      )}
-      <Table
-        rowKey="id"
-        dataSource={filteredData}
-        pagination={false}
-        size="small"
-        rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
-        columns={[
-          { title: "ClientId", dataIndex: "id" },
-          { title: t("common.category"), dataIndex: "category" },
-          {
-            title: t("common.created"),
-            dataIndex: "createdAt",
-            render: (val) =>
-              val ? dayjs(val).format("DD.MM.YYYY HH:mm") : "-",
-          },
-          {
-            title: t("common.updated"),
-            dataIndex: "updatedAt",
-            render: (val) =>
-              val ? dayjs(val).format("DD.MM.YYYY HH:mm") : "-",
-          },
-          {
-            title: t("common.status"),
-            render: (_, r) => {
-              const hb = latestHeartbeats.find((h) => h.clientId === r.id);
-              const lastSeen =
-                hb?.lastHeartbeat ||
-                hb?.lastActivity ||
-                hb?.lastSeen ||
-                hb?.timestamp;
-              const now = serverTime ? serverTime.getTime() : Date.now();
-              const online =
-                lastSeen && now - new Date(lastSeen).getTime() < 3 * 60 * 1000;
-              return online ? (
-                <span style={{ color: "#52c41a" }}>{t("common.online")}</span>
-              ) : (
-                <span style={{ color: "#ff4d4f" }}>{t("common.offline")}</span>
-              );
-            },
-          },
-          {
-            title: t("common.actions"),
-            render: (_, r) => (
-              <div style={{ display: "flex", gap: 8 }}>
-                <Button
-                  type="primary"
-                  onClick={() => navigate(`/clients/${r.id}`)}
-                >
-                  {t("common.details")}
-                </Button>
+        >
+          {/* Header: title + search + add + actions */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "20px 20px 0",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <h2
+              style={{
+                margin: 0,
+                fontFamily: BP.font,
+                fontSize: 24,
+                fontWeight: 510,
+                color: BP.text,
+              }}
+            >
+              {t("employees.title")}
+            </h2>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                flex: 1,
+                justifyContent: "flex-end",
+              }}
+            >
+              {/* Search */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  background: BP.surface,
+                  borderRadius: 10,
+                  padding: "12px 20px",
+                  minWidth: 280,
+                  gap: 10,
+                }}
+              >
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t("employees.search")}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    outline: "none",
+                    flex: 1,
+                    fontFamily: BP.font,
+                    fontSize: 14,
+                    color: BP.text,
+                  }}
+                />
+                <Icon
+                  icon="solar:magnifer-bold-duotone"
+                  width={20}
+                  height={20}
+                  color={BP.muted}
+                />
               </div>
-            ),
-          },
-        ]}
-      />
+
+              {/* Category filter */}
+              <Select
+                allowClear
+                style={{ minWidth: 180 }}
+                placeholder={t("common.category")}
+                value={categoryFilter}
+                options={categories.map((c) => ({ label: c, value: c }))}
+                onChange={(v) => {
+                  setCategoryFilter(v || null);
+                  setSelected([]);
+                }}
+              />
+
+              {/* Add */}
+              <Button
+                type="primary"
+                onClick={() => setOpen(true)}
+                icon={
+                  <Icon
+                    icon="solar:add-circle-bold-duotone"
+                    width={18}
+                    height={18}
+                  />
+                }
+                style={{
+                  background: BP.green,
+                  borderColor: BP.green,
+                  borderRadius: 30,
+                  height: 40,
+                  fontWeight: 510,
+                }}
+              >
+                {t("clients.addClient")}
+              </Button>
+
+              {/* Bulk actions menu */}
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    {
+                      key: "select",
+                      label: selectMode ? "Снять выбор" : "Выбрать несколько",
+                      onClick: () => {
+                        setSelectMode((v) => !v);
+                        if (selectMode) setSelected([]);
+                      },
+                    },
+                    { type: "divider" },
+                    {
+                      key: "auto",
+                      label: t("clients.autoCreate"),
+                      onClick: autoCreate,
+                    },
+                    {
+                      key: "intervals",
+                      label: t("clients.setIntervalsSelected"),
+                      disabled: !selected.length,
+                      onClick: () => setBulkOpen(true),
+                    },
+                    {
+                      key: "category",
+                      label: t("clients.setCategorySelected"),
+                      disabled: !selected.length,
+                      onClick: () => setCatOpen(true),
+                    },
+                    {
+                      key: "delete",
+                      danger: true,
+                      label: t("clients.deleteSelected"),
+                      disabled: !selected.length,
+                      onClick: () => setDeleteOpen(true),
+                    },
+                  ],
+                }}
+              >
+                <Button
+                  type="text"
+                  style={{
+                    padding: 8,
+                    height: 40,
+                    width: 40,
+                    borderRadius: 30,
+                    background: BP.surface,
+                  }}
+                  icon={
+                    <Icon
+                      icon="solar:menu-dots-bold"
+                      width={20}
+                      height={20}
+                      color={BP.muted}
+                    />
+                  }
+                />
+              </Dropdown>
+            </div>
+          </div>
+
+          {/* Selection bar */}
+          {selectMode && selected.length > 0 && (
+            <div
+              style={{
+                margin: "12px 20px 0",
+                padding: "10px 16px",
+                background: BP.surface,
+                borderRadius: 12,
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
+              }}
+            >
+              <span style={{ color: BP.muted }}>
+                Выбрано: {selected.length}
+              </span>
+              <div style={{ flex: 1 }} />
+              <Button size="small" onClick={() => setBulkOpen(true)}>
+                {t("clients.setIntervalsSelected")}
+              </Button>
+              <Button size="small" onClick={() => setCatOpen(true)}>
+                {t("clients.setCategorySelected")}
+              </Button>
+              <Button size="small" danger onClick={() => setDeleteOpen(true)}>
+                {t("clients.deleteSelected")}
+              </Button>
+            </div>
+          )}
+
+          {/* Last created alert */}
+          {lastCreated && (
+            <div style={{ margin: "12px 20px 0" }}>
+              <Alert
+                type="info"
+                message={`ClientId: ${lastCreated.id}`}
+                description={`EncryptionKey: ${lastCreated.encryptionKey}`}
+                closable
+                onClose={() => setLastCreated(null)}
+              />
+            </div>
+          )}
+
+          {/* Топ бар таблицы */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "16px 28px",
+              gap: 10,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                flex: 1,
+              }}
+            >
+              {selectMode && <div style={{ width: 28 }} />}
+              <ColumnHeader label="No" width={40} />
+              <ColumnHeader label={t("common.name")} flex={2} />
+              <ColumnHeader label={t("common.status")} flex={1} />
+              <ColumnHeader label="Активность" flex={1} />
+            </div>
+            <div style={{ width: 200 }} />
+          </div>
+
+          <Divider />
+
+          {/* База: rows */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              maxHeight: "calc(100vh - 280px)",
+              overflowY: "auto",
+            }}
+          >
+            {filteredData.length === 0 ? (
+              <div style={{ padding: 40 }}>
+                <Empty description={t("common.noData")} />
+              </div>
+            ) : (
+              filteredData.map((c, i) => {
+                const hb = latestHeartbeats.find((h) => h.clientId === c.id);
+                const act = latestActivity.find((a) => a.clientId === c.id);
+                const st = statusFromHeartbeat(hb, act, tickNow);
+                const statusColor = st.online ? BP.green : BP.red;
+                const statusLabel = st.online
+                  ? t("employees.connected")
+                  : t("employees.disconnected");
+                const activityColor = st.active ? BP.green : BP.red;
+                const isSelected = selected.includes(c.id);
+
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "12px 28px",
+                      gap: 10,
+                      borderTop: i === 0 ? "none" : `1px solid ${BP.surface}`,
+                      background: isSelected
+                        ? "rgba(38,126,38,0.04)"
+                        : "transparent",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        flex: 1,
+                      }}
+                    >
+                      {selectMode && (
+                        <div style={{ width: 28 }}>
+                          <Checkbox
+                            checked={isSelected}
+                            onChange={(e) => toggleRow(c.id, e.target.checked)}
+                          />
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          width: 40,
+                          color: BP.light,
+                          fontFamily: BP.font,
+                          fontSize: 14,
+                        }}
+                      >
+                        {i + 1}
+                      </div>
+                      <div
+                        style={{
+                          flex: 2,
+                          color: BP.text,
+                          fontFamily: BP.font,
+                          fontSize: 16,
+                          fontWeight: 510,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {c.id}
+                      </div>
+                      <div
+                        style={{
+                          flex: 1,
+                          color: statusColor,
+                          fontFamily: BP.font,
+                          fontSize: 16,
+                          fontWeight: 400,
+                        }}
+                      >
+                        {statusLabel}
+                      </div>
+                      <div
+                        style={{
+                          flex: 1,
+                          color: activityColor,
+                          fontFamily: BP.font,
+                          fontSize: 16,
+                          fontWeight: 400,
+                          display: "flex",
+                          alignItems: "baseline",
+                          gap: 6,
+                        }}
+                      >
+                        <span>{st.activeLabel}</span>
+                        {st.duration && (
+                          <span
+                            style={{
+                              color: BP.muted,
+                              fontSize: 13,
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {st.duration}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: 200,
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      <Dropdown
+                        trigger={["click"]}
+                        menu={{
+                          items: [
+                            {
+                              key: "open",
+                              label: t("dashboard.openProfile"),
+                              onClick: () => navigate(`/clients/${c.id}`),
+                            },
+                            {
+                              key: "screenshots",
+                              label: t("nav.screenshots"),
+                              onClick: () =>
+                                navigate(
+                                  `/screenshots?clientId=${encodeURIComponent(c.id)}`,
+                                ),
+                            },
+                            { type: "divider" },
+                            {
+                              key: "delete",
+                              label: t("common.delete"),
+                              danger: true,
+                              onClick: () => singleDelete(c.id),
+                            },
+                          ],
+                        }}
+                      >
+                        <button
+                          type="button"
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            padding: 4,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Icon
+                            icon="solar:menu-dots-bold"
+                            width={20}
+                            height={20}
+                            color={BP.muted}
+                          />
+                        </button>
+                      </Dropdown>
+
+                      <ProfilePill
+                        label={t("dashboard.openProfile")}
+                        onClick={() => navigate(`/clients/${c.id}`)}
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Modals — preserved */}
       <Modal
         open={bulkOpen}
         title={t("clients.intervalsForSelected")}
@@ -408,6 +913,7 @@ export default function ClientsList() {
           </Form.Item>
         </Form>
       </Modal>
+
       <Modal
         open={deleteOpen}
         title={t("clients.deleteSelected")}
@@ -426,6 +932,7 @@ export default function ClientsList() {
           </Form.Item>
         </Form>
       </Modal>
+
       <Modal
         open={open}
         title={t("clients.addClient")}
@@ -463,6 +970,6 @@ export default function ClientsList() {
           </Form.Item>
         </Form>
       </Modal>
-    </List>
+    </div>
   );
 }

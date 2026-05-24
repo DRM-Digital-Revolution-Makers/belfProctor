@@ -1,10 +1,39 @@
-/* FlyonUI Apex vendor depends on Tailwind; removed to avoid @apply. */
-
 @import "apexcharts/dist/apexcharts.css";
 @import "flyonui/src/vendor/apexcharts.css";
 
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Design tokens from Figma */
+  --bp-bg: #ffffff;
+  --bp-sidebar-bg: #f7f7f7;
+  --bp-card-bg: #ffffff;
+  --bp-surface: #f7f7f7;
+  --bp-border: #e8e8e8;
+  --bp-divider: #eeeeee;
+
+  --bp-text: #000000;
+  --bp-text-muted: #707070;
+  --bp-text-light: #a4a4a4;
+  --bp-text-lighter: #7a7a7a;
+  --bp-text-white: #ffffff;
+
+  --bp-accent: #36f097;
+  --bp-accent-strong: #267e26;
+  --bp-danger: #dc2626;
+  --bp-warning: #f59e0b;
+  --bp-purple: #8a38f5;
+  --bp-blue: #22408c;
+
+  --bp-shadow-card: 0 0 4px 0 rgba(241, 243, 248, 1);
+  --bp-shadow-elevated: 0 4px 16px 0 rgba(0, 0, 0, 0.05);
+
+  --bp-radius-sm: 10px;
+  --bp-radius-md: 16px;
+  --bp-radius-lg: 30px;
+  --bp-radius-pill: 50px;
+
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "SF Pro", "Helvetica Neue", Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -17,7 +46,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #f0f2f5;
+  background-color: var(--bp-bg);
+  color: var(--bp-text);
+  font-family: inherit;
 }
 
 #root {
@@ -26,13 +57,176 @@ body {
   flex-direction: column;
 }
 
+/* Ant Design overrides for new design */
+.ant-layout,
+.ant-layout-content {
+  background: var(--bp-bg);
+}
+
+.ant-layout-sider {
+  background: var(--bp-sidebar-bg) !important;
+}
+
 .ant-table {
-  font-size: 16px;
+  font-size: 15px;
 }
 .ant-table .ant-table-thead > tr > th,
 .ant-table .ant-table-tbody > tr > td {
   padding: 14px 18px;
 }
 
-/* Fallback styles for ApexCharts tooltip without Tailwind */
-/* Inline area chart base styles handled in component. */
+.ant-table-thead > tr > th {
+  background: var(--bp-sidebar-bg) !important;
+  color: var(--bp-text-muted) !important;
+  font-weight: 510 !important;
+  border-bottom: 1px solid var(--bp-border) !important;
+}
+
+/* Custom design system classes */
+.bp-card {
+  background: var(--bp-card-bg);
+  border-radius: var(--bp-radius-md);
+  box-shadow: var(--bp-shadow-card);
+  padding: 20px;
+}
+
+.bp-card-elevated {
+  background: var(--bp-card-bg);
+  border-radius: var(--bp-radius-lg);
+  box-shadow: var(--bp-shadow-elevated);
+  padding: 24px;
+}
+
+.bp-page-title {
+  font-size: 24px;
+  font-weight: 510;
+  color: var(--bp-text);
+  margin: 0 0 24px 0;
+}
+
+.bp-section-label {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--bp-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.bp-stat-card {
+  background: var(--bp-card-bg);
+  border-radius: var(--bp-radius-md);
+  box-shadow: var(--bp-shadow-card);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bp-stat-value {
+  font-size: 32px;
+  font-weight: 510;
+  color: var(--bp-text);
+  line-height: 1;
+}
+
+.bp-stat-label {
+  font-size: 14px;
+  color: var(--bp-text-muted);
+}
+
+.bp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--bp-radius-pill);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bp-badge-success {
+  background: rgba(38, 126, 38, 0.1);
+  color: var(--bp-accent-strong);
+}
+
+.bp-badge-danger {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--bp-danger);
+}
+
+.bp-badge-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--bp-warning);
+}
+
+.bp-badge-muted {
+  background: rgba(112, 112, 112, 0.1);
+  color: var(--bp-text-muted);
+}
+
+.bp-employee-card {
+  background: var(--bp-card-bg);
+  border-radius: var(--bp-radius-md);
+  box-shadow: var(--bp-shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.bp-employee-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px 0 rgba(0, 0, 0, 0.06);
+}
+
+.bp-sidebar-logo {
+  font-size: 24px;
+  font-weight: 510;
+  color: var(--bp-text);
+  letter-spacing: -0.3px;
+}
+
+/* Sidebar menu */
+.bp-sidebar .ant-menu {
+  background: transparent !important;
+  border-inline-end: none !important;
+}
+
+.bp-sidebar .ant-menu-item {
+  border-radius: var(--bp-radius-pill) !important;
+  height: 44px !important;
+  line-height: 44px !important;
+  color: var(--bp-text-muted) !important;
+  font-weight: 500;
+  margin: 4px 0 !important;
+  padding-inline: 14px !important;
+}
+
+.bp-sidebar .ant-menu-item:hover {
+  background: rgba(0, 0, 0, 0.04) !important;
+  color: var(--bp-text) !important;
+}
+
+.bp-sidebar .ant-menu-item-selected {
+  background: transparent !important;
+  color: var(--bp-accent-strong) !important;
+  font-weight: 510;
+}
+
+.bp-sidebar .ant-menu-item-selected .anticon,
+.bp-sidebar .ant-menu-item-selected svg {
+  color: var(--bp-accent-strong) !important;
+}
+
+@keyframes bp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

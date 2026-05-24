@@ -18,6 +18,7 @@ import filesRouter from "./routes/files";
 import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
 import logsRouter from "./routes/logs";
+import updatesRouter, { appendDeploymentStatus } from "./routes/updates";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -152,6 +153,7 @@ app.use("/api", filesRouter); // screenshots & reports
 app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 app.use("/api/logs", logsRouter);
+app.use("/api/updates", updatesRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -321,6 +323,26 @@ app.post(
       });
       await writeCommandIndex(commandId, filepath);
 
+      // If this looks like an update-status payload, record into deployment history
+      try {
+        const parsed = JSON.parse(decryptedJson);
+        if (parsed && typeof parsed === "object" && "status" in parsed) {
+          await appendDeploymentStatus(
+            commandId,
+            String(parsed.status || ""),
+            parsed.detail !== undefined ? String(parsed.detail) : undefined,
+          );
+        } else if (parsed && parsed.ok === false && parsed.error) {
+          await appendDeploymentStatus(
+            commandId,
+            `error:${String(parsed.error)}`,
+            parsed.detail !== undefined ? String(parsed.detail) : undefined,
+          );
+        }
+      } catch {
+        /* not JSON or not an update result — ignore */
+      }
+
       res.json({ ok: true, path: filepath });
     } catch (e) {
       console.error(e);
@@ -441,7 +463,10 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
       socket.close();
       return;
     }
-    registerClientSocket(clientId, socket);
+    // The IP this client used to reach the server — used to build
+    // downloadUrl for push-updates (auto-detected per client).
+    const localAddr = (req.socket as any)?.localAddress as string | undefined;
+    registerClientSocket(clientId, socket, localAddr);
     socket.on("close", () => {
       unregisterClientSocket(clientId, socket);
     });

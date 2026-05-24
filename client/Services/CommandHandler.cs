@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -12,11 +13,16 @@ public class CommandHandler
 {
     private readonly ProctorSettings _settings;
     private readonly IDataTransmissionService _transmission;
+    private readonly Microsoft.Extensions.Logging.ILogger<CommandHandler>? _logger;
 
-    public CommandHandler(IOptions<ProctorSettings> settings, IDataTransmissionService transmission)
+    public CommandHandler(
+        IOptions<ProctorSettings> settings,
+        IDataTransmissionService transmission,
+        Microsoft.Extensions.Logging.ILogger<CommandHandler>? logger = null)
     {
         _settings = settings.Value;
         _transmission = transmission;
+        _logger = logger;
     }
 
     public async Task HandleAsync(Command cmd)
@@ -151,7 +157,7 @@ public class CommandHandler
         {
             var path = ResolveAndValidatePath(GetString(cmd.Payload, "path", string.Empty));
             if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
-            
+
             var tempFile = Path.GetTempFileName() + ".zip";
             try
             {
@@ -162,6 +168,65 @@ public class CommandHandler
             {
                 try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
             }
+            return;
+        }
+
+        if (cmd.Type == "update")
+        {
+            var newVersion = GetString(cmd.Payload, "version", "");
+            var downloadUrl = GetString(cmd.Payload, "downloadUrl", "");
+            var sha256Expected = GetString(cmd.Payload, "sha256", "");
+
+            if (string.IsNullOrWhiteSpace(downloadUrl) || string.IsNullOrWhiteSpace(sha256Expected))
+            {
+                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(
+                    new { ok = false, error = "invalid_payload" }));
+                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                return;
+            }
+
+            // Run the update flow detached from this WS callback so we don't
+            // block the channel. The flow itself can take 60+ minutes (idle wait).
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var ok = await UpdateHelper.DownloadAndInstall(
+                        _settings,
+                        _logger,
+                        downloadUrl,
+                        sha256Expected,
+                        newVersion,
+                        async (status, detail) =>
+                        {
+                            try
+                            {
+                                var msg = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(
+                                    new { ok = true, status, detail, version = newVersion }));
+                                await _transmission.SendCommandResultJsonAsync(cmd.Id, msg);
+                            }
+                            catch { /* swallow — best-effort progress */ }
+                        });
+
+                    if (!ok)
+                    {
+                        var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(
+                            new { ok = false, error = "update_failed", version = newVersion }));
+                        await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Update task crashed");
+                    try
+                    {
+                        var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(
+                            new { ok = false, error = "exception", detail = ex.Message }));
+                        await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                    }
+                    catch { }
+                }
+            });
             return;
         }
     }

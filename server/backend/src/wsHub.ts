@@ -5,9 +5,78 @@ import type { WebSocket } from "ws";
 import { resolveUploadDir } from "./runtimePaths";
 
 const sockets = new Map<string, WebSocket>();
+// IP-адрес сервера, по которому каждый клиент успешно достучался через WS.
+// Используется для построения downloadUrl при push-обновлениях — каждый
+// клиент получает URL с тем IP сервера, который у него работает.
+const serverAddrByClient = new Map<string, string>();
 
 const UPLOAD_DIR = resolveUploadDir();
 const PENDING_UNINSTALL_DIR = path.join(UPLOAD_DIR, "pending_uninstall");
+const PENDING_UPDATE_DIR = path.join(UPLOAD_DIR, "pending_update");
+const SERVER_PORT = parseInt(process.env.PORT || "8080", 10);
+
+function cleanIp(addr: string | undefined | null): string {
+  if (!addr) return "";
+  return String(addr).replace(/^::ffff:/, "").trim();
+}
+
+function isLoopback(addr: string): boolean {
+  return (
+    !addr ||
+    addr === "127.0.0.1" ||
+    addr === "localhost" ||
+    addr === "::1" ||
+    addr.startsWith("127.")
+  );
+}
+
+/** Returns the server URL that this specific client successfully reached
+ * us at via WebSocket. Null if no WS history. */
+export function getServerAddrForClient(clientId: string): string | null {
+  const ip = serverAddrByClient.get(clientId);
+  if (!ip) return null;
+  return `http://${ip}:${SERVER_PORT}`;
+}
+
+/** Build a URL that the given client can use to download something from us.
+ * Strategy:
+ *   1. The IP this client used to reach us via WS (most reliable).
+ *   2. PUBLIC_BASE_URL env (optional override).
+ *   3. The IP the admin's HTTP request came in on (req.socket.localAddress) —
+ *      works if admin & client are on the same LAN segment.
+ *   4. First non-loopback IPv4 from OS network interfaces. */
+export function resolveClientDownloadBase(
+  clientId: string,
+  adminLocalAddr?: string,
+): string {
+  // 1. Per-client WS address — auto-detected
+  const wsAddr = serverAddrByClient.get(clientId);
+  if (wsAddr && !isLoopback(wsAddr)) {
+    return `http://${wsAddr}:${SERVER_PORT}`;
+  }
+
+  // 2. Env override
+  const envBase = process.env.PUBLIC_BASE_URL?.trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+
+  // 3. Admin's request landed on this server IP
+  const adminIp = cleanIp(adminLocalAddr);
+  if (adminIp && !isLoopback(adminIp)) {
+    return `http://${adminIp}:${SERVER_PORT}`;
+  }
+
+  // 4. Pick first non-loopback IPv4 from OS interfaces
+  const os = require("os");
+  const ifs = os.networkInterfaces();
+  for (const name of Object.keys(ifs)) {
+    for (const ni of ifs[name] || []) {
+      if (ni.family === "IPv4" && !ni.internal && ni.address) {
+        return `http://${ni.address}:${SERVER_PORT}`;
+      }
+    }
+  }
+  return `http://127.0.0.1:${SERVER_PORT}`;
+}
 
 function makeId(): string {
   return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -80,9 +149,106 @@ export async function requestClientUninstall(
   return { queued: true, sent: false, commandId: id };
 }
 
+// ============ Pending updates (offline clients) ============
+async function ensurePendingUpdateDir(): Promise<void> {
+  if (!fs.existsSync(PENDING_UPDATE_DIR)) {
+    await fsPromises.mkdir(PENDING_UPDATE_DIR, { recursive: true });
+  }
+}
+
+function pendingUpdatePath(clientId: string): string {
+  return path.join(PENDING_UPDATE_DIR, `${clientId}.json`);
+}
+
+async function hasPendingUpdate(clientId: string): Promise<boolean> {
+  return fs.existsSync(pendingUpdatePath(clientId));
+}
+
+async function clearPendingUpdate(clientId: string): Promise<void> {
+  const fp = pendingUpdatePath(clientId);
+  if (fs.existsSync(fp)) {
+    await fsPromises.unlink(fp);
+  }
+}
+
+/**
+ * Queue / send an update command.
+ * The `downloadUrl` is computed at send time from the client's current WS
+ * connection IP — NOT baked into the queue. This way, when an offline client
+ * eventually reconnects (possibly via a different network path), we still
+ * generate a working URL for them.
+ */
+export async function requestClientUpdate(
+  clientId: string,
+  payload: { version: string; sha256: string } & Record<string, any>,
+  adminLocalAddr?: string,
+): Promise<{ queued: boolean; sent: boolean; commandId: string | null }> {
+  const id = makeId();
+  await ensurePendingUpdateDir();
+  // Persist only stable bits (version + sha256). URL recomputed at send.
+  await fsPromises.writeFile(
+    pendingUpdatePath(clientId),
+    JSON.stringify({
+      id,
+      clientId,
+      payload: { version: payload.version, sha256: payload.sha256 },
+      createdAt: new Date().toISOString(),
+    }),
+    "utf-8",
+  );
+
+  const baseUrl = resolveClientDownloadBase(clientId, adminLocalAddr);
+  const downloadUrl =
+    `${baseUrl}/api/updates/${encodeURIComponent(payload.version)}/file`;
+
+  const sent = sendCommandToClient(clientId, "update", {
+    ...payload,
+    downloadUrl,
+    id,
+  });
+  if (sent) {
+    await clearPendingUpdate(clientId);
+    return { queued: true, sent: true, commandId: id };
+  }
+  return { queued: true, sent: false, commandId: id };
+}
+
+export async function listPendingUpdates(): Promise<
+  Array<{ clientId: string; payload: any; createdAt: string; id: string }>
+> {
+  await ensurePendingUpdateDir();
+  const result: Array<{
+    clientId: string;
+    payload: any;
+    createdAt: string;
+    id: string;
+  }> = [];
+  try {
+    const files = await fsPromises.readdir(PENDING_UPDATE_DIR);
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const content = await fsPromises.readFile(
+          path.join(PENDING_UPDATE_DIR, f),
+          "utf-8",
+        );
+        const rec = JSON.parse(content);
+        result.push({
+          clientId: rec?.clientId || f.replace(/\.json$/, ""),
+          payload: rec?.payload ?? {},
+          createdAt: rec?.createdAt || "",
+          id: rec?.id || "",
+        });
+      } catch {}
+    }
+  } catch {}
+  return result;
+}
+
 export function registerClientSocket(
   clientId: string,
   socket: WebSocket,
+  serverAddr?: string,
 ): void {
   const prev = sockets.get(clientId);
   if (prev && prev !== socket) {
@@ -91,6 +257,10 @@ export function registerClientSocket(
     } catch {}
   }
   sockets.set(clientId, socket);
+  const cleaned = cleanIp(serverAddr);
+  if (cleaned && !isLoopback(cleaned)) {
+    serverAddrByClient.set(clientId, cleaned);
+  }
   (async () => {
     if (await hasPendingUninstall(clientId)) {
       try {
@@ -110,6 +280,35 @@ export function registerClientSocket(
       } finally {
         try {
           await clearPendingUninstall(clientId);
+        } catch {}
+      }
+    }
+
+    if (await hasPendingUpdate(clientId)) {
+      try {
+        const content = await fsPromises.readFile(
+          pendingUpdatePath(clientId),
+          "utf-8",
+        );
+        const rec = JSON.parse(content);
+        const basePayload = rec?.payload ?? {};
+        // Recompute downloadUrl now that the client is connected — use the
+        // IP that just worked for them.
+        const baseUrl = resolveClientDownloadBase(clientId);
+        const downloadUrl = basePayload.version
+          ? `${baseUrl}/api/updates/${encodeURIComponent(basePayload.version)}/file`
+          : undefined;
+        const cmd = {
+          id: rec?.id || makeId(),
+          type: "update",
+          payload: { ...basePayload, downloadUrl },
+        };
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify(cmd));
+        }
+      } finally {
+        try {
+          await clearPendingUpdate(clientId);
         } catch {}
       }
     }
@@ -137,7 +336,12 @@ export function sendCommandToClient(
 ): string | null {
   const socket = sockets.get(String(clientId).trim());
   if (!socket || socket.readyState !== 1) return null;
-  const id = makeId();
+  // Use payload.id if caller provided one (so deployment tracking and client
+  // responses share the same command id). Otherwise mint a fresh one.
+  const id =
+    payload && typeof payload === "object" && payload.id
+      ? String(payload.id)
+      : makeId();
   const cmd = { id, type, payload: payload ?? {} };
   socket.send(JSON.stringify(cmd));
   return id;

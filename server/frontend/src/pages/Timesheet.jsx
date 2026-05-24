@@ -1,14 +1,83 @@
 import React from "react";
-import { List } from "@refinedev/antd";
-import { Table, DatePicker, Button, Select } from "antd";
+import {
+  Table,
+  DatePicker,
+  Button,
+  Select,
+  Checkbox,
+} from "antd";
+import { Icon } from "@iconify/react";
 import { authFetch } from "../dataProvider.js";
 import dayjs from "dayjs";
 import "dayjs/locale/ru";
 import "dayjs/locale/uz-latn";
 import { useTranslation } from "react-i18next";
-
-import { DownloadOutlined } from "@ant-design/icons";
 import XLSX from "xlsx-js-style";
+
+/* ============ Design tokens ============ */
+const BP = {
+  white: "#FFFFFF",
+  surface: "#F7F7F7",
+  innerCardBg: "#FEFEFE",
+  text: "#000000",
+  muted: "#707070",
+  light: "#A4A4A4",
+  green: "#267E26",
+  red: "#DC2626",
+  stroke: "rgba(164,164,164,0.5)",
+  shadow: "0 0 4px 0 rgba(241,243,248,1)",
+  font: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "SF Pro", "Helvetica Neue", Arial, sans-serif',
+};
+
+function SectionLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: BP.font,
+        fontSize: 18,
+        fontWeight: 510,
+        color: BP.text,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SmallLabel({ children }) {
+  return (
+    <div
+      style={{
+        fontFamily: BP.font,
+        fontSize: 14,
+        fontWeight: 400,
+        color: BP.text,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function BorderedCard({ children, style, alignFlexEnd }) {
+  return (
+    <div
+      style={{
+        border: `1px solid ${BP.stroke}`,
+        borderRadius: 24,
+        padding: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        background: "transparent",
+        alignItems: alignFlexEnd ? "flex-end" : "stretch",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default function Timesheet() {
   const { t, i18n } = useTranslation();
@@ -132,7 +201,6 @@ export default function Timesheet() {
     if (!Array.isArray(exportClientsList) || exportClientsList.length === 0)
       return;
 
-    const now = dayjs();
     const reportEnd = date.endOf("month");
     const reportDayCount = date.daysInMonth();
     const totalColumns = 7 + reportDayCount * 3;
@@ -629,46 +697,673 @@ export default function Timesheet() {
     },
   ];
 
+  // Selection in filters panel (new design)
+  const [selectedClients, setSelectedClients] = React.useState([]);
+  const [clientSearch, setClientSearch] = React.useState("");
+  const [periodMode, setPeriodMode] = React.useState("month");
+  const [rangeStart, setRangeStart] = React.useState(dayjs().startOf("month"));
+  const [rangeEnd, setRangeEnd] = React.useState(dayjs().endOf("month"));
+  const [fileType, setFileType] = React.useState("txt");
+
+  const filterListClients = React.useMemo(() => {
+    let list = filteredClientsList || [];
+    if (clientSearch.trim()) {
+      const q = clientSearch.toLowerCase();
+      list = list.filter((c) => String(c.id || "").toLowerCase().includes(q));
+    }
+    return list;
+  }, [filteredClientsList, clientSearch]);
+
+  const downloadTxt = () => {
+    const exportList = selectedClients.length
+      ? filteredClientsList.filter((c) => selectedClients.includes(c.id))
+      : filteredClientsList;
+    const rows = [];
+    rows.push(`Отчет за ${date.format("MMMM YYYY")}`);
+    rows.push(`Сотрудников: ${exportList.length}`);
+    rows.push("");
+    rows.push("Сотрудник | Дата | Начало | Конец | Активно | Присутствие");
+    rows.push("-".repeat(80));
+    const allowedIds = new Set(exportList.map((c) => c.id));
+    (data || [])
+      .filter((row) => allowedIds.has(row.clientId))
+      .forEach((row) => {
+        rows.push(
+          [
+            row.clientId,
+            row.date,
+            formatTime(row.startTime),
+            formatTime(row.endTime),
+            formatDuration(row.activeMs),
+            formatDuration(row.presenceMs),
+          ].join(" | "),
+        );
+      });
+    const blob = new Blob([rows.join("\n")], {
+      type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `report_${date.format("YYYY-MM")}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownload = () => {
+    if (fileType === "xlsx") downloadXlsx();
+    else downloadTxt();
+  };
+
+  const [previewOpen, setPreviewOpen] = React.useState(false);
+  const isDownloadDisabled =
+    !filteredCombinedData || filteredCombinedData.length === 0;
+
   return (
-    <List title={t("timesheet.title")}>
-      <div style={{ marginBottom: 16 }}>
-        <Select
-          allowClear
-          style={{ minWidth: 240, marginRight: 8 }}
-          placeholder={t("common.category")}
-          value={categoryFilter}
-          options={categories.map((category) => ({
-            label: category,
-            value: category,
-          }))}
-          onChange={(value) => setCategoryFilter(value || null)}
-        />
-        <DatePicker
-          value={date}
-          onChange={(value) => setDate(value)}
-          allowClear={false}
-          format="MM.YYYY"
-          picker="month"
-        />
-        <Button onClick={fetchData} style={{ marginLeft: 8 }}>
-          {t("common.refresh")}
-        </Button>
-        <Button
-          icon={<DownloadOutlined />}
-          onClick={downloadXlsx}
-          disabled={!filteredCombinedData || filteredCombinedData.length === 0}
-          style={{ marginLeft: 8 }}
+    <div>
+      {/* Outer wrapper */}
+      <div
+        style={{
+          background: BP.surface,
+          borderRadius: 50,
+          boxShadow: BP.shadow,
+          padding: 20,
+          minHeight: "calc(100vh - 64px)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Inner white card */}
+        <div
+          style={{
+            background: BP.innerCardBg,
+            borderRadius: 30,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            flex: 1,
+          }}
         >
-          {t("common.download")} Excel
-        </Button>
+          {/* Header */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              padding: "20px 20px 16px",
+              gap: 40,
+            }}
+          >
+            <h2
+              style={{
+                margin: 0,
+                fontFamily: BP.font,
+                fontSize: 24,
+                fontWeight: 510,
+                color: BP.text,
+              }}
+            >
+              Скачать отчет
+            </h2>
+          </div>
+
+          {/* Divider */}
+          <div
+            style={{
+              height: 1,
+              background: BP.stroke,
+              opacity: 0.5,
+              margin: "0 20px",
+            }}
+          />
+
+          {/* База */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              padding: 20,
+            }}
+          >
+            {/* Форма отчёта */}
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: 12 }}
+            >
+              {/* Title "Фильтры" */}
+              <div
+                style={{
+                  fontFamily: BP.font,
+                  fontSize: 20,
+                  fontWeight: 510,
+                  color: BP.text,
+                }}
+              >
+                {t("report.filters")}
+              </div>
+
+              {/* 2-col layout */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 20,
+                  alignItems: "stretch",
+                }}
+              >
+                {/* LEFT bordered card */}
+                <BorderedCard style={{ gap: 12 }}>
+                  {/* Подразделение section */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    <SectionLabel>{t("report.department")}</SectionLabel>
+                    <Select
+                      allowClear
+                      style={{ width: "100%" }}
+                      placeholder={t("report.allDepartments")}
+                      value={categoryFilter}
+                      options={categories.map((c) => ({
+                        label: c,
+                        value: c,
+                      }))}
+                      onChange={(v) => setCategoryFilter(v || null)}
+                      suffixIcon={
+                        <Icon
+                          icon="solar:alt-arrow-down-linear"
+                          width={16}
+                          height={16}
+                          color={BP.text}
+                        />
+                      }
+                    />
+                  </div>
+
+                  {/* Сотрудники section */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      padding: "0 4px",
+                      flex: 1,
+                    }}
+                  >
+                    <SectionLabel>{t("report.employees")}</SectionLabel>
+
+                    {/* Search + select-all row */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: BP.font,
+                          fontSize: 14,
+                          color: BP.light,
+                          minWidth: 24,
+                        }}
+                      >
+                        No
+                      </div>
+                      <Checkbox
+                        indeterminate={
+                          selectedClients.length > 0 &&
+                          selectedClients.length < filterListClients.length
+                        }
+                        checked={
+                          filterListClients.length > 0 &&
+                          selectedClients.length === filterListClients.length
+                        }
+                        onChange={(e) =>
+                          setSelectedClients(
+                            e.target.checked
+                              ? filterListClients.map((c) => c.id)
+                              : [],
+                          )
+                        }
+                      />
+                      <div
+                        style={{
+                          flex: 1,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <input
+                          value={clientSearch}
+                          onChange={(e) => setClientSearch(e.target.value)}
+                          placeholder="Имя..."
+                          style={{
+                            flex: 1,
+                            border: "none",
+                            background: "transparent",
+                            outline: "none",
+                            fontFamily: BP.font,
+                            fontSize: 14,
+                            color: BP.text,
+                          }}
+                        />
+                        <Icon
+                          icon="solar:magnifer-bold-duotone"
+                          width={18}
+                          height={18}
+                          color={BP.muted}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Divider */}
+                    <div
+                      style={{
+                        height: 1,
+                        background: BP.stroke,
+                        opacity: 0.5,
+                      }}
+                    />
+
+                    {/* Employee list */}
+                    <div
+                      style={{
+                        maxHeight: 200,
+                        overflowY: "auto",
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      {filterListClients.length === 0 ? (
+                        <div
+                          style={{
+                            color: BP.light,
+                            textAlign: "center",
+                            padding: 16,
+                          }}
+                        >
+                          {t("common.noData")}
+                        </div>
+                      ) : (
+                        filterListClients.map((c, i) => {
+                          const checked = selectedClients.includes(c.id);
+                          return (
+                            <div
+                              key={c.id}
+                              onClick={() =>
+                                setSelectedClients((prev) =>
+                                  checked
+                                    ? prev.filter((x) => x !== c.id)
+                                    : [...prev, c.id],
+                                )
+                              }
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 12,
+                                padding: 8,
+                                cursor: "pointer",
+                                borderRadius: 8,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontFamily: BP.font,
+                                  fontSize: 14,
+                                  color: BP.light,
+                                  minWidth: 24,
+                                }}
+                              >
+                                {i + 1}
+                              </div>
+                              <Checkbox
+                                checked={checked}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedClients((prev) =>
+                                    e.target.checked
+                                      ? Array.from(new Set([...prev, c.id]))
+                                      : prev.filter((x) => x !== c.id),
+                                  );
+                                }}
+                              />
+                              <span
+                                style={{
+                                  fontFamily: BP.font,
+                                  fontSize: 14,
+                                  color: BP.text,
+                                  flex: 1,
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                              >
+                                {c.id}
+                              </span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </BorderedCard>
+
+                {/* RIGHT column */}
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  {/* Period card */}
+                  <BorderedCard>
+                    {/* Период row */}
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      <SectionLabel>{t("report.period")}</SectionLabel>
+                      <Select
+                        value={periodMode}
+                        onChange={(v) => setPeriodMode(v)}
+                        style={{ width: "100%" }}
+                        options={[
+                          { label: t("report.oneDay"), value: "day" },
+                          { label: t("common.month"), value: "month" },
+                        ]}
+                        suffixIcon={
+                          <Icon
+                            icon="solar:alt-arrow-down-linear"
+                            width={16}
+                            height={16}
+                            color={BP.text}
+                          />
+                        }
+                      />
+                    </div>
+
+                    {/* Date row */}
+                    {periodMode === "day" ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                        }}
+                      >
+                        <SmallLabel>{t("report.startDate")}</SmallLabel>
+                        <DatePicker
+                          value={rangeStart}
+                          onChange={(v) => {
+                            if (v) {
+                              setRangeStart(v);
+                              setDate(v);
+                            }
+                          }}
+                          allowClear={false}
+                          format="DD.MM.YYYY"
+                          style={{ width: "100%" }}
+                          suffixIcon={
+                            <Icon
+                              icon="solar:calendar-bold-duotone"
+                              width={18}
+                              height={18}
+                              color={BP.text}
+                            />
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                          }}
+                        >
+                          <SmallLabel>{t("report.startDate")}</SmallLabel>
+                          <DatePicker
+                            value={rangeStart}
+                            onChange={(v) => v && setRangeStart(v)}
+                            allowClear={false}
+                            format="DD.MM.YYYY"
+                            style={{ width: "100%" }}
+                            suffixIcon={
+                              <Icon
+                                icon="solar:calendar-bold-duotone"
+                                width={18}
+                                height={18}
+                                color={BP.text}
+                              />
+                            }
+                          />
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                          }}
+                        >
+                          <SmallLabel>{t("report.endDate")}</SmallLabel>
+                          <DatePicker
+                            value={rangeEnd}
+                            onChange={(v) => v && setRangeEnd(v)}
+                            allowClear={false}
+                            format="DD.MM.YYYY"
+                            style={{ width: "100%" }}
+                            suffixIcon={
+                              <Icon
+                                icon="solar:calendar-bold-duotone"
+                                width={18}
+                                height={18}
+                                color={BP.text}
+                              />
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </BorderedCard>
+
+                  {/* Download card */}
+                  <BorderedCard alignFlexEnd>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        width: "100%",
+                      }}
+                    >
+                      <SectionLabel>{t("report.download")}</SectionLabel>
+
+                      {/* Тип файла */}
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                        }}
+                      >
+                        <SmallLabel>{t("report.fileType")}</SmallLabel>
+                        <Select
+                          value={fileType}
+                          onChange={setFileType}
+                          style={{ width: "100%" }}
+                          options={[
+                            { label: t("report.txtFormat"), value: "txt" },
+                            { label: "Excel (.xlsx)", value: "xlsx" },
+                          ]}
+                          suffixIcon={
+                            <Icon
+                              icon="solar:alt-arrow-down-linear"
+                              width={16}
+                              height={16}
+                              color={BP.text}
+                            />
+                          }
+                        />
+                      </div>
+
+                      {/* Path row */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: BP.font,
+                            fontSize: 14,
+                            color: BP.text,
+                          }}
+                        >
+                          Путь загрузки:
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: BP.font,
+                            fontSize: 16,
+                            color: BP.green,
+                            textDecoration: "underline",
+                          }}
+                        >
+                          {t("report.downloadFolder")}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Green button */}
+                    <button
+                      type="button"
+                      disabled={isDownloadDisabled}
+                      onClick={handleDownload}
+                      style={{
+                        background: isDownloadDisabled
+                          ? BP.stroke
+                          : BP.green,
+                        color: BP.white,
+                        border: "none",
+                        borderRadius: 12,
+                        padding: "12px 24px",
+                        fontFamily: BP.font,
+                        fontSize: 18,
+                        fontWeight: 400,
+                        cursor: isDownloadDisabled ? "not-allowed" : "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
+                      <Icon
+                        icon="solar:file-download-linear"
+                        width={18}
+                        height={18}
+                      />
+                      {t("report.download")}
+                    </button>
+                  </BorderedCard>
+                </div>
+              </div>
+            </div>
+
+            {/* Optional preview (preserved old functionality) */}
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setPreviewOpen((v) => !v)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: BP.muted,
+                  cursor: "pointer",
+                  fontFamily: BP.font,
+                  fontSize: 14,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: 0,
+                }}
+              >
+                <Icon
+                  icon={
+                    previewOpen
+                      ? "solar:alt-arrow-up-linear"
+                      : "solar:alt-arrow-down-linear"
+                  }
+                  width={16}
+                  height={16}
+                />
+                {previewOpen ? "Скрыть данные" : "Показать данные"}
+              </button>
+              <Button
+                size="small"
+                onClick={fetchData}
+                style={{ borderRadius: 30 }}
+                icon={
+                  <Icon
+                    icon="solar:refresh-linear"
+                    width={14}
+                    height={14}
+                  />
+                }
+              >
+                {t("common.refresh")}
+              </Button>
+            </div>
+
+            {previewOpen && (
+              <div
+                style={{
+                  border: `1px solid ${BP.stroke}`,
+                  borderRadius: 24,
+                  overflow: "hidden",
+                }}
+              >
+                <Table
+                  columns={columns}
+                  dataSource={filteredCombinedData}
+                  rowKey={(record) =>
+                    `${record.clientId}_${record.date || "empty"}`
+                  }
+                  loading={loading}
+                  pagination={{ pageSize: 50, showSizeChanger: false }}
+                  scroll={{ y: 400 }}
+                  size="middle"
+                />
+              </div>
+            )}
+          </div>
+        </div>
       </div>
-      <Table
-        columns={columns}
-        dataSource={filteredCombinedData}
-        rowKey={(record) => `${record.clientId}_${record.date || "empty"}`}
-        loading={loading}
-        pagination={false}
-      />
-    </List>
+    </div>
   );
 }

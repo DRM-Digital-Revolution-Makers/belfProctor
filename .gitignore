@@ -62,3 +62,7 @@ pnpm-debug.log*
 
 # Docker local artifacts (if any)
 *.tar
+
+# Large binaries (exceed GitHub 100MB limit)
+client/deploy-pkg/*.exe
+client/bootstrap-pkg/*.exe

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Text;
@@ -15,6 +16,11 @@ namespace BelfProctor.Services;
 
 public class DataTransmissionService : IDataTransmissionService, IDisposable
 {
+    private static readonly string AppVersion =
+        Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3)
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)
+        ?? "1.0.0";
+
     private readonly ILogger<DataTransmissionService> _logger;
     private readonly ProctorSettings _settings;
     private readonly HttpClient _httpClient;
@@ -493,7 +499,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 ClientId = _settings.ClientId,
                 Timestamp = DateTime.Now,
                 Status = "Online",
-                Version = "1.0.0",
+                Version = AppVersion,
                 Machine = Environment.MachineName,
                 OS = Environment.OSVersion.ToString(),
                 UptimeSeconds = (int)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
