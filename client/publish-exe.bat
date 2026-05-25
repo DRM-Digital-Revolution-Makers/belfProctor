@@ -14,7 +14,7 @@ copy /Y appsettings.json .\publish\appsettings.json
 echo.
 echo Build successful!
 echo The files are located at: client\publish\
-echo  - SystemWorker.exe
+echo  - BelfProctor.exe
 echo  - appsettings.json
 echo.
 echo IMPORTANT: Copy BOTH files to the target machine!

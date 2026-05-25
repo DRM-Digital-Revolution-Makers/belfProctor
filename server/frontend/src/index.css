@@ -7,7 +7,9 @@
   --bp-sidebar-bg: #f7f7f7;
   --bp-card-bg: #ffffff;
   --bp-surface: #f7f7f7;
+  --bp-surface-soft: #fbfbfb;
   --bp-border: #e8e8e8;
+  --bp-border-strong: rgba(164, 164, 164, 0.42);
   --bp-divider: #eeeeee;
 
   --bp-text: #000000;
@@ -25,6 +27,7 @@
 
   --bp-shadow-card: 0 0 4px 0 rgba(241, 243, 248, 1);
   --bp-shadow-elevated: 0 4px 16px 0 rgba(0, 0, 0, 0.05);
+  --bp-shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.04);
 
   --bp-radius-sm: 10px;
   --bp-radius-md: 16px;
@@ -51,6 +54,28 @@ body {
   font-family: inherit;
 }
 
+button,
+a,
+input,
+select,
+textarea {
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(38, 126, 38, 0.34);
+  outline-offset: 2px;
+}
+
 #root {
   min-height: 100vh;
   display: flex;
@@ -70,6 +95,11 @@ body {
 .ant-table {
   font-size: 15px;
 }
+
+.ant-table-wrapper .ant-table {
+  border-radius: 12px;
+}
+
 .ant-table .ant-table-thead > tr > th,
 .ant-table .ant-table-tbody > tr > td {
   padding: 14px 18px;
@@ -80,6 +110,32 @@ body {
   color: var(--bp-text-muted) !important;
   font-weight: 510 !important;
   border-bottom: 1px solid var(--bp-border) !important;
+}
+
+.ant-table-tbody > tr {
+  transition:
+    background 0.16s ease,
+    transform 0.16s ease;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: var(--bp-surface-soft) !important;
+}
+
+.ant-empty-description {
+  color: var(--bp-text-muted) !important;
+}
+
+.ant-btn {
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease !important;
+}
+
+.ant-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
 /* Custom design system classes */
@@ -183,6 +239,185 @@ body {
   box-shadow: 0 6px 18px 0 rgba(0, 0, 0, 0.06);
 }
 
+.bp-fade-in {
+  animation: bp-fade-in 0.18s ease both;
+}
+
+.bp-page-enter {
+  animation: bp-page-enter 0.24s ease both;
+}
+
+.bp-soft-panel {
+  background: var(--bp-surface-soft);
+  border: 1px solid var(--bp-border-strong);
+  border-radius: 14px;
+  box-shadow: var(--bp-shadow-soft);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.bp-hover-row {
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.bp-hover-row:hover {
+  background: #ffffff;
+  border-color: rgba(38, 126, 38, 0.28) !important;
+  transform: translateY(-1px);
+}
+
+.bp-interactive-card {
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.bp-interactive-card:hover {
+  border-color: rgba(38, 126, 38, 0.24) !important;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
+}
+
+.bp-section-card {
+  border: 1px solid var(--bp-border-strong);
+  border-radius: 18px;
+  background: var(--bp-card-bg);
+  box-shadow: var(--bp-shadow-soft);
+}
+
+.bp-section-card:hover {
+  border-color: rgba(38, 126, 38, 0.2);
+}
+
+.bp-icon-button {
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.bp-icon-button:hover {
+  transform: translateY(-1px);
+}
+
+.bp-primary-action,
+.bp-ghost-action {
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.bp-primary-action:hover:not(:disabled) {
+  box-shadow: 0 8px 20px rgba(38, 126, 38, 0.16);
+  transform: translateY(-1px);
+}
+
+.bp-ghost-action:hover:not(:disabled) {
+  background: #ffffff !important;
+  border-color: rgba(38, 126, 38, 0.24) !important;
+  transform: translateY(-1px);
+}
+
+.bp-primary-action:active:not(:disabled),
+.bp-ghost-action:active:not(:disabled),
+.bp-icon-button:active {
+  transform: translateY(0);
+}
+
+.bp-tab-button {
+  position: relative;
+  transition:
+    color 0.16s ease,
+    background 0.16s ease,
+    transform 0.16s ease;
+}
+
+.bp-tab-button:hover {
+  background: rgba(38, 126, 38, 0.05) !important;
+  color: var(--bp-accent-strong) !important;
+}
+
+.bp-empty-state {
+  min-height: 94px;
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 18px;
+  color: var(--bp-text-muted);
+  text-align: center;
+  border: 1px dashed var(--bp-border-strong);
+  border-radius: 12px;
+  background: var(--bp-surface-soft);
+}
+
+.bp-path-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.bp-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 510;
+  line-height: 1.2;
+}
+
+.bp-mobile-nav {
+  display: none;
+}
+
+.bp-toolbar-card {
+  background: var(--bp-card-bg);
+  border: 1px solid var(--bp-border-strong);
+  border-radius: 18px;
+  box-shadow: var(--bp-shadow-soft);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.bp-toolbar-card:hover {
+  border-color: rgba(38, 126, 38, 0.18);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.055);
+}
+
+.bp-page-shell {
+  background: var(--bp-surface);
+  border-radius: 40px;
+  box-shadow: var(--bp-shadow-card);
+  padding: 20px;
+  animation: bp-page-enter 0.24s ease both;
+}
+
+.bp-muted-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 247, 247, 0.94));
+  border: 1px solid rgba(164, 164, 164, 0.32);
+  border-radius: 16px;
+}
+
 .bp-sidebar-logo {
   font-size: 24px;
   font-weight: 510;
@@ -228,5 +463,98 @@ body {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes bp-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bp-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bp-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(38, 126, 38, 0.26);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(38, 126, 38, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(38, 126, 38, 0);
+  }
+}
+
+@media (max-width: 900px) {
+  .bp-app-shell {
+    flex-direction: column !important;
+    padding: 12px !important;
+    gap: 12px !important;
+  }
+
+  .bp-main-shell,
+  .bp-main-content {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .bp-mobile-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    background: var(--bp-sidebar-bg);
+    border-radius: 24px;
+    box-shadow: var(--bp-shadow-card);
+    padding: 10px 12px;
+    box-sizing: border-box;
+    position: sticky;
+    top: 8px;
+    z-index: 20;
+  }
+
+  .bp-sidebar-logo {
+    font-size: 20px;
+  }
+
+  .bp-page-shell {
+    border-radius: 24px !important;
+    padding: 12px !important;
+    min-height: auto !important;
+  }
+
+  .ant-table {
+    font-size: 13px;
+  }
+
+  .ant-table .ant-table-thead > tr > th,
+  .ant-table .ant-table-tbody > tr > td {
+    padding: 10px 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .bp-mobile-nav {
+    overflow-x: auto;
+  }
+
+  .bp-mobile-nav .bp-sidebar-logo {
+    min-width: max-content;
   }
 }

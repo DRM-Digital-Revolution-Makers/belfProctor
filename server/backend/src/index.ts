@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
@@ -19,6 +20,7 @@ import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
 import logsRouter from "./routes/logs";
 import updatesRouter, { appendDeploymentStatus } from "./routes/updates";
+import workRouter from "./routes/work";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -35,6 +37,8 @@ import {
   registerClientSocket,
   unregisterClientSocket,
   sendCommandToClient,
+  registerStreamSource,
+  registerStreamViewer,
 } from "./wsHub";
 import { runRetentionOnce } from "./retention";
 import { withLock } from "./locks";
@@ -46,6 +50,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 const UPLOAD_DIR = resolveUploadDir();
+const JWT_SECRET = process.env.JWT_SECRET || "devsecret";
 
 void getPrimaryEncryptionKey();
 
@@ -139,6 +144,10 @@ app.use(
   express.raw({ type: "application/octet-stream", limit: "10mb" }),
 );
 app.use(
+  "/api/work/events",
+  express.raw({ type: "application/octet-stream", limit: "10mb" }),
+);
+app.use(
   "/api/logs",
   express.raw({ type: "application/octet-stream", limit: "1mb" }),
 );
@@ -154,6 +163,7 @@ app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 app.use("/api/logs", logsRouter);
 app.use("/api/updates", updatesRouter);
+app.use("/api/work", workRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -452,11 +462,42 @@ const server = app.listen(PORT, HOST as any, () => {
 const wss = new WebSocketServer({
   server,
   perMessageDeflate: false,
-  maxPayload: 65536,
+  maxPayload: 2 * 1024 * 1024,
 });
 wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
+    if (url.pathname === "/ws/stream") {
+      const streamClientId = String(url.searchParams.get("clientId") || "").trim();
+      if (!streamClientId) {
+        socket.close();
+        return;
+      }
+      registerStreamSource(streamClientId, socket);
+      return;
+    }
+
+    if (url.pathname.startsWith("/ws/admin/stream/")) {
+      const token = String(url.searchParams.get("token") || "").trim();
+      let actor = "";
+      try {
+        const payload = jwt.verify(token, JWT_SECRET) as any;
+        actor = String(payload?.email || payload?.id || "");
+      } catch {
+        socket.close();
+        return;
+      }
+      const streamClientId = decodeURIComponent(
+        url.pathname.replace(/^\/ws\/admin\/stream\//, ""),
+      ).trim();
+      if (!streamClientId) {
+        socket.close();
+        return;
+      }
+      registerStreamViewer(streamClientId, socket, actor);
+      return;
+    }
+
     const rawId = url.searchParams.get("clientId") || "";
     const clientId = rawId.trim();
     if (!clientId) {

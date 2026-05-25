@@ -29,6 +29,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     private readonly string _pendingReports;
     private readonly string _pendingEvents;
     private readonly string _pendingActivity;
+    private readonly string _pendingWorkEvents;
     private readonly string _pendingHeartbeats;
     private readonly string _pendingCmdJson;
     private readonly string _pendingCmdFiles;
@@ -76,6 +77,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         _pendingReports = Path.Combine(_pendingBase, "Reports");
         _pendingEvents = Path.Combine(_pendingBase, "Events");
         _pendingActivity = Path.Combine(_pendingBase, "Activity");
+        _pendingWorkEvents = Path.Combine(_pendingBase, "WorkEvents");
         _pendingHeartbeats = Path.Combine(_pendingBase, "Heartbeats");
         _pendingCmdJson = Path.Combine(_pendingBase, "CmdJson");
         _pendingCmdFiles = Path.Combine(_pendingBase, "CmdFiles");
@@ -83,6 +85,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         Directory.CreateDirectory(_pendingReports);
         Directory.CreateDirectory(_pendingEvents);
         Directory.CreateDirectory(_pendingActivity);
+        Directory.CreateDirectory(_pendingWorkEvents);
         Directory.CreateDirectory(_pendingHeartbeats);
         Directory.CreateDirectory(_pendingCmdJson);
         Directory.CreateDirectory(_pendingCmdFiles);
@@ -337,7 +340,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         }
     }
 
-    public async Task SendScreenshotAsync(string filePath)
+    public async Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null)
     {
         try
         {
@@ -360,6 +363,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 content.Add(new StringContent(_settings.ClientId), "clientId");
                 // Send Local Time exactly as is (no Z, no offset)
                 content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                AddScreenshotMetadata(content, metadata);
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
                 
@@ -382,6 +386,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 try { Directory.CreateDirectory(_pendingScreenshots); } catch { }
                 try { if (File.Exists(filePath)) File.Move(filePath, destPending, true); } catch { }
+                TryWriteScreenshotSidecar(destPending, metadata);
                 _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
             }
         }
@@ -394,8 +399,43 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
                 var dest = Path.Combine(_pendingScreenshots, sendName);
                 if (File.Exists(filePath)) File.Move(filePath, dest, true); 
+                TryWriteScreenshotSidecar(dest, metadata);
             } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+        }
+    }
+
+    private static void AddScreenshotMetadata(MultipartFormDataContent content, WorkScreenshotMetadata? metadata)
+    {
+        if (metadata == null) return;
+        if (!string.IsNullOrWhiteSpace(metadata.CaptureReason)) content.Add(new StringContent(metadata.CaptureReason), "captureReason");
+        if (!string.IsNullOrWhiteSpace(metadata.LinkedSessionId)) content.Add(new StringContent(metadata.LinkedSessionId), "linkedSessionId");
+        if (!string.IsNullOrWhiteSpace(metadata.ProcessName)) content.Add(new StringContent(metadata.ProcessName), "processName");
+        if (!string.IsNullOrWhiteSpace(metadata.FilePath)) content.Add(new StringContent(metadata.FilePath), "filePath");
+        if (!string.IsNullOrWhiteSpace(metadata.ProjectName)) content.Add(new StringContent(metadata.ProjectName), "projectName");
+    }
+
+    private static void TryWriteScreenshotSidecar(string imagePath, WorkScreenshotMetadata? metadata)
+    {
+        if (metadata == null || string.IsNullOrWhiteSpace(imagePath)) return;
+        try
+        {
+            File.WriteAllText(imagePath + ".json", JsonConvert.SerializeObject(metadata));
+        }
+        catch { }
+    }
+
+    private static WorkScreenshotMetadata? TryReadScreenshotSidecar(string imagePath)
+    {
+        try
+        {
+            var sidecar = imagePath + ".json";
+            if (!File.Exists(sidecar)) return null;
+            return JsonConvert.DeserializeObject<WorkScreenshotMetadata>(File.ReadAllText(sidecar));
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -403,6 +443,52 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         _eventQueue.Enqueue(systemEvent);
         return Task.CompletedTask;
+    }
+
+    public async Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events)
+    {
+        var batch = events?.Where(e => e != null).ToList() ?? new List<WorkEventEnvelope>();
+        if (batch.Count == 0) return;
+
+        var json = JsonConvert.SerializeObject(batch, new JsonSerializerSettings
+        {
+            DateTimeZoneHandling = DateTimeZoneHandling.Utc,
+            NullValueHandling = NullValueHandling.Ignore
+        });
+
+        try
+        {
+            var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var response = await PostWithAutoDiscoverAsync("work/events", content);
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("Work event batch sent successfully: {Count}", batch.Count);
+                return;
+            }
+
+            _logger.LogWarning("Failed to send work events. Status: {StatusCode}", response.StatusCode);
+            await SavePendingWorkEventsAsync(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending work events");
+            await SavePendingWorkEventsAsync(json);
+        }
+    }
+
+    private async Task SavePendingWorkEventsAsync(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(_pendingWorkEvents);
+            var name = Path.Combine(_pendingWorkEvents, $"work_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(name, json);
+            TrimPendingDirectory(_pendingWorkEvents, "*.json", 1000);
+        }
+        catch { }
     }
 
     private async Task FlushEventBatchAsync()
@@ -943,6 +1029,8 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         content.Add(streamContent, "screenshot", uploadName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
                         content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                        var metadata = TryReadScreenshotSidecar(file);
+                        AddScreenshotMetadata(content, metadata);
                         
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
@@ -950,6 +1038,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         {
                             _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
                             File.Delete(file);
+                            try { File.Delete(file + ".json"); } catch { }
                         }
                         else
                         {
@@ -1008,6 +1097,20 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     using var content = new ByteArrayContent(encrypted);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
                     var resp = await PostWithAutoDiscoverAsync("activity", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingWorkEvents, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await PostWithAutoDiscoverAsync("work/events", content);
                     if (resp.IsSuccessStatusCode) File.Delete(file);
                 }
                 catch { }
@@ -1103,6 +1206,22 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         _currentBaseUrl = string.Empty;
         TryInitializeBaseAddress(extendedScan: true);
         _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+    }
+
+    private static void TrimPendingDirectory(string directory, string pattern, int maxFiles)
+    {
+        try
+        {
+            var files = Directory.GetFiles(directory, pattern)
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.CreationTimeUtc)
+                .ToList();
+            foreach (var file in files.Skip(maxFiles))
+            {
+                try { file.Delete(); } catch { }
+            }
+        }
+        catch { }
     }
 
     private static DateTime? TryExtractTimestampFromFileName(string fileName)

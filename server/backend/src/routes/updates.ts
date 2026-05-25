@@ -12,6 +12,7 @@ import {
   requestClientUpdate,
   listPendingUpdates,
 } from "../wsHub";
+import { prisma } from "../prisma";
 
 const router = Router();
 
@@ -59,6 +60,44 @@ interface DeploymentRecord {
   lastStatus?: string;
   lastStatusAt?: string;
   lastDetail?: string;
+}
+
+function toDeploymentStatus(status: string):
+  | "queued"
+  | "sent"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "restarted"
+  | "confirmed"
+  | "rolled_back"
+  | "failed"
+  | "already_up_to_date" {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("already")) return "already_up_to_date";
+  if (normalized.includes("queued")) return "queued";
+  if (normalized.includes("sent")) return "sent";
+  if (normalized.includes("download")) return "downloading";
+  if (normalized.includes("verify")) return "verifying";
+  if (normalized.includes("install")) return "installing";
+  if (normalized.includes("restart")) return "restarted";
+  if (normalized.includes("confirm") || normalized === "ok" || normalized === "success") {
+    return "confirmed";
+  }
+  if (normalized.includes("rollback") || normalized.includes("rolled")) return "rolled_back";
+  if (normalized.includes("sha") || normalized.includes("mismatch")) return "failed";
+  if (normalized.includes("fail") || normalized.includes("error")) return "failed";
+  return "sent";
+}
+
+async function ensurePrismaClient(clientId: string): Promise<void> {
+  if (!prisma) return;
+  const fileClient = await getClient(clientId);
+  await prisma.client.upsert({
+    where: { id: clientId },
+    update: fileClient?.encryptionKey ? { encryptionKey: fileClient.encryptionKey } : {},
+    create: { id: clientId, encryptionKey: fileClient?.encryptionKey || "" },
+  });
 }
 
 async function ensureRoot(): Promise<void> {
@@ -118,6 +157,17 @@ export async function appendDeploymentStatus(
   items[idx].lastStatusAt = new Date().toISOString();
   if (detail !== undefined) items[idx].lastDetail = detail;
   await writeDeployments(items);
+  if (prisma) {
+    await prisma.updateDeployment
+      .update({
+        where: { id: commandId },
+        data: {
+          status: toDeploymentStatus(status),
+          detail: detail !== undefined ? detail : status,
+        },
+      })
+      .catch(() => null);
+  }
 }
 
 function isValidVersion(v: string): boolean {
@@ -194,6 +244,24 @@ router.post(
       // Sort: newest version semantically last? Simpler — by uploadedAt desc.
       next.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
       await writeIndex(next);
+      if (prisma) {
+        await prisma.agentVersion.upsert({
+          where: { version },
+          update: {
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+          create: {
+            version,
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+        });
+      }
 
       return res.json({ ok: true, update: meta });
     } catch (e) {
@@ -227,6 +295,9 @@ router.delete("/:version", requireAuth, async (req, res) => {
   }
   const idx = await readIndex();
   await writeIndex(idx.filter((m) => m.version !== version));
+  if (prisma) {
+    await prisma.agentVersion.delete({ where: { version } }).catch(() => null);
+  }
   return res.json({ ok: true });
 });
 
@@ -272,6 +343,27 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
     sha256: meta.sha256,
   };
 
+  if (prisma) {
+    await prisma.agentVersion
+      .upsert({
+        where: { version: meta.version },
+        update: {
+          filename: meta.filename,
+          sha256: meta.sha256,
+          size: BigInt(meta.size),
+          notes: meta.notes || undefined,
+        },
+        create: {
+          version: meta.version,
+          filename: meta.filename,
+          sha256: meta.sha256,
+          size: BigInt(meta.size),
+          notes: meta.notes || undefined,
+        },
+      })
+      .catch(() => null);
+  }
+
   const deployments = await readDeployments();
   const results: Array<{
     clientId: string;
@@ -296,6 +388,19 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
         commandId: r.commandId,
       });
       if (r.commandId) {
+        if (prisma) {
+          await ensurePrismaClient(clientId);
+          await prisma.updateDeployment
+            .create({
+              data: {
+                id: r.commandId,
+                version: meta.version,
+                clientId,
+                status: r.sent ? "sent" : "queued",
+              },
+            })
+            .catch(() => null);
+        }
         deployments.push({
           id: r.commandId,
           version: meta.version,

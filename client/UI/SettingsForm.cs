@@ -331,10 +331,10 @@ public class SettingsForm : Form
             }
         }
 
-        // Define install path (stealth folder)
+        // Define install path
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var installDir = Path.Combine(appData, "SystemWorker");
-        var installPath = Path.Combine(installDir, "SystemWorker.exe");
+        var installDir = Path.Combine(appData, "BelfProctor");
+        var installPath = Path.Combine(installDir, "BelfProctor.exe");
         var currentPath = Environment.ProcessPath ?? Application.ExecutablePath;
 
         // Save settings to config file (standard logic)
@@ -387,7 +387,8 @@ public class SettingsForm : Form
                 if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
 
                 // Check for existing running process in install path and kill it
-                var existingProcess = Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
+                var existingProcess = Process.GetProcessesByName("BelfProctor").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id))
+                    ?? Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
                 if (existingProcess != null)
                 {
                     try 
@@ -409,7 +410,7 @@ public class SettingsForm : Form
                         var destFile = Path.Combine(installDir, fileName);
                         // Skip the main exe as we handle it specifically or it might be locked? 
                         // Actually, File.Copy allows overwriting. 
-                        // But we want to rename the main exe to SystemWorker.exe
+                        // Keep the main exe under the canonical BelfProctor.exe name.
                         
                         if (string.Equals(file, currentPath, StringComparison.OrdinalIgnoreCase))
                         {
@@ -439,12 +440,10 @@ public class SettingsForm : Form
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
             if (_runOnStartup.Checked)
             {
-                // Use a stealthy name key
                 // IMPORTANT: Quote the path to handle spaces in username/path
                 // Add --auto-start flag
-                key?.SetValue("WindowsSystemWorker", $"\"{installPath}\" --auto-start");
-                // Remove old key if exists
-                key?.DeleteValue("BelfProctor", false);
+                key?.SetValue("BelfProctor", $"\"{installPath}\" --auto-start");
+                key?.DeleteValue("WindowsSystemWorker", false);
                 
                 // FALLBACK 1: Create Shortcut in Startup Folder
                 CreateStartupShortcut(installPath, installDir);
@@ -459,8 +458,10 @@ public class SettingsForm : Form
                 
                 // Remove Shortcut
                 var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+                var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
                 if (File.Exists(shortcutPath)) File.Delete(shortcutPath);
+                var legacyShortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+                if (File.Exists(legacyShortcutPath)) File.Delete(legacyShortcutPath);
             }
         }
         catch (Exception ex)
@@ -529,7 +530,7 @@ public class SettingsForm : Form
         try
         {
             var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-            var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+            var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
             
             // Use VBScript to create shortcut to avoid COM dependencies
             var vbsScript = new StringBuilder();
@@ -570,7 +571,7 @@ public class SettingsForm : Form
             // We use schtasks.exe. This requires Admin usually, but if run as standard user, it might fail or create a user task.
             // We'll try to create a user-level task which doesn't strictly need Admin if it's for the current user.
             
-            var taskName = "WindowsSystemWorkerUpdate"; // Innocent name
+            var taskName = "BelfProctorUpdate";
             // Use escaped double quotes for path to handle spaces correctly
             var args = $"/create /tn \"{taskName}\" /tr \"\\\"{targetPath}\\\" --auto-start\" /sc onlogon /f";
             

@@ -62,8 +62,9 @@ public class PolicyServiceTests
     private class StubTransmission : IDataTransmissionService
     {
         public int SystemEventCount { get; private set; }
-        public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
+        public Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null) => Task.CompletedTask;
         public Task SendSystemEventAsync(SystemEvent systemEvent) { SystemEventCount++; return Task.CompletedTask; }
+        public Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events) => Task.CompletedTask;
         public Task<bool> SendHeartbeatAsync() => Task.FromResult(true);
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;

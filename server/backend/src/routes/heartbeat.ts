@@ -9,6 +9,7 @@ import {
 import { getSenderClientId } from "../clientId";
 import { consumePendingUninstall } from "../wsHub";
 import { getKeysToTry } from "../keyring";
+import { prisma } from "../prisma";
 
 const router = Router();
 
@@ -109,6 +110,21 @@ router.post("/", async (req, res) => {
       status: payload.Status || payload.status || "Online",
       version: payload.Version || payload.version || "",
     });
+    if (prisma) {
+      const heartbeatVersion = String(payload.Version || payload.version || "").trim();
+      if (heartbeatVersion) {
+        await prisma.updateDeployment
+          .updateMany({
+            where: {
+              clientId,
+              version: heartbeatVersion,
+              status: { in: ["sent", "downloading", "verifying", "installing", "restarted"] },
+            },
+            data: { status: "confirmed", detail: "confirmed_by_heartbeat" },
+          })
+          .catch(() => null);
+      }
+    }
     const ms = Date.now() - t0;
     if (ms > 100 && process.env.NODE_ENV === "production") {
       console.warn(`[Heartbeat] Slow request ${clientId}: ${ms}ms`);

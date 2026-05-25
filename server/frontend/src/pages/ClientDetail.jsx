@@ -596,6 +596,7 @@ const ClientDetail = () => {
     <div>
       {/* Outer wrapper */}
       <div
+        className="bp-page-shell"
         style={{
           background: BP.surface,
           borderRadius: 50,
@@ -751,6 +752,8 @@ const ClientDetail = () => {
               padding: "0 20px",
               gap: 2,
               marginTop: 8,
+              overflowX: "auto",
+              whiteSpace: "nowrap",
             }}
           >
             <TabButton
@@ -842,6 +845,9 @@ const ClientDetail = () => {
             >
               Файлы
             </TabButton>
+            <TabButton active={activeTab === "work"} onClick={() => setActiveTab("work")}>
+              Проекты / Файлы
+            </TabButton>
           </div>
 
           {/* Divider */}
@@ -911,6 +917,14 @@ const ClientDetail = () => {
             {activeTab === "files" && (
               <FilesTab clientId={id} t={t} i18n={i18n} />
             )}
+
+            {activeTab === "work" && (
+              <WorkTab
+                clientId={id}
+                date={selectedDate}
+                getImageUrl={getImageUrl}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -959,6 +973,7 @@ function TabButton({ active, onClick, children }) {
       role="button"
       tabIndex={0}
       onClick={onClick}
+      className="bp-tab-button"
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -987,6 +1002,7 @@ function TabButton({ active, onClick, children }) {
 function StatCard({ title, value, valueColor, sub }) {
   return (
     <div
+      className="bp-interactive-card"
       style={{
         flex: 1,
         minWidth: 200,
@@ -1514,6 +1530,562 @@ function MonthTab({ monthlyData, formatDurationHM, combinedChartData, t }) {
   );
 }
 
+function WorkTab({ clientId, date, getImageUrl }) {
+  const API_URL =
+    import.meta.env.VITE_API_URL ||
+    `http://${window.location.hostname}:8080/api`;
+  const [summary, setSummary] = React.useState(null);
+  const [sessions, setSessions] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const dateStr = date.format("YYYY-MM-DD");
+      const from = date.startOf("day").toISOString();
+      const to = date.endOf("day").toISOString();
+      const [summaryRes, sessionsRes] = await Promise.all([
+        authFetch(`${API_URL}/clients/${clientId}/work-summary?date=${dateStr}`),
+        authFetch(`${API_URL}/clients/${clientId}/work-sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+      ]);
+      if (summaryRes.ok) setSummary(await summaryRes.json());
+      if (sessionsRes.ok) {
+        const json = await sessionsRes.json();
+        setSessions(Array.isArray(json.data) ? json.data : []);
+      }
+    } catch (e) {
+      console.error(e);
+      message.error("Не удалось загрузить рабочие сессии");
+    } finally {
+      setLoading(false);
+    }
+  }, [API_URL, clientId, date]);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const totals = summary?.totals || {};
+  const projects = summary?.projects || [];
+  const files = summary?.files || [];
+  const folders = summary?.folders || [];
+  const apps = summary?.apps || [];
+  const screenshots = Array.isArray(summary?.screenshots) ? summary.screenshots : [];
+  const sessionColumns = [
+    { title: "Начало", dataIndex: "startedAt", render: fmtWorkDateTime, width: 150 },
+    { title: "Приложение", dataIndex: "processName", render: renderWorkApp, width: 150 },
+    { title: "Проект", dataIndex: "projectName", render: renderProjectName, width: 180 },
+    { title: "Файл", dataIndex: "filePath", render: renderWorkPath, ellipsis: true },
+    { title: "Открыто", dataIndex: "openedMs", render: formatWorkDuration, width: 110 },
+    { title: "Фокус", dataIndex: "focusedMs", render: formatWorkDuration, width: 120 },
+    { title: "Активно", dataIndex: "activeFocusedMs", render: formatWorkDuration, width: 120 },
+    { title: "Точность", dataIndex: "confidence", render: renderConfidence, width: 130 },
+    { title: "Завершение", dataIndex: "endReason", render: renderEndReason, width: 130 },
+  ];
+
+  return (
+    <div className="bp-fade-in" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        className="bp-section-card bp-interactive-card"
+        style={{
+          borderRadius: 14,
+          background: BP.white,
+          padding: "14px 16px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510, color: BP.text }}>
+            Работа с проектами и файлами
+          </div>
+          <div style={{ fontFamily: BP.font, fontSize: 13, color: BP.muted, marginTop: 3 }}>
+            Данные за {date.format("DD.MM.YYYY")}: приложения, пути, проекты и связанные скриншоты.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="bp-ghost-action"
+          style={{
+            border: `1px solid ${BP.stroke}`,
+            background: BP.surface,
+            color: BP.text,
+            borderRadius: 10,
+            padding: "8px 12px",
+            cursor: loading ? "wait" : "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            fontFamily: BP.font,
+            fontSize: 13,
+          }}
+        >
+          <Icon
+            icon="solar:refresh-linear"
+            width={16}
+            height={16}
+            style={loading ? { animation: "bp-spin 1s linear infinite" } : undefined}
+          />
+          Обновить
+        </button>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 12,
+        }}
+      >
+        <MetricBox icon="solar:folder-open-bold-duotone" label="Открыто" value={formatWorkDuration(totals.openedMs)} />
+        <MetricBox icon="solar:eye-bold-duotone" label="В фокусе" value={formatWorkDuration(totals.focusedMs)} />
+        <MetricBox icon="solar:user-check-bold-duotone" label="Активно в фокусе" value={formatWorkDuration(totals.activeFocusedMs)} />
+        <MetricBox icon="solar:clock-circle-bold-duotone" label="Сессии" value={String(sessions.length)} />
+      </div>
+
+      <LiveViewPanel clientId={clientId} apiUrl={API_URL} />
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: BP.muted }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 12, fontFamily: BP.font, fontSize: 13 }}>
+            Загружаю рабочие сессии...
+          </div>
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <MetricTable icon="solar:case-round-bold-duotone" title="Проекты" rows={projects} nameKey="projectName" emptyText="За день проекты не определены" />
+            <MetricTable icon="solar:document-text-bold-duotone" title="Файлы" rows={files} nameKey="filePath" emptyText="Файлы пока не зафиксированы" />
+            <MetricTable icon="solar:folder-bold-duotone" title="Папки" rows={folders} nameKey="folderPath" emptyText="Папки пока не зафиксированы" />
+            <MetricTable icon="solar:widget-5-bold-duotone" title="Приложения" rows={apps} nameKey="processName" emptyText="Активность приложений пока пустая" />
+          </div>
+
+          <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
+            <div
+              style={{
+                padding: "12px 14px",
+                fontFamily: BP.font,
+                fontSize: 16,
+                fontWeight: 510,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <span>Рабочие сессии</span>
+              <span style={{ color: BP.muted, fontSize: 13, fontWeight: 400 }}>
+                {sessions.length ? `${sessions.length} записей` : "Нет записей"}
+              </span>
+            </div>
+            <Table
+              size="small"
+              rowKey="id"
+              dataSource={sessions}
+              columns={sessionColumns}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 980 }}
+              locale={{
+                emptyText: (
+                  <WorkEmptyState
+                    icon="solar:calendar-search-bold-duotone"
+                    title="Рабочих сессий за этот день нет"
+                    description="Когда агент увидит работу в приложениях, строки появятся здесь."
+                  />
+                ),
+              }}
+            />
+          </div>
+
+          <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, padding: 14, background: BP.white }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510 }}>Связанные скриншоты</div>
+              <span style={{ color: BP.muted, fontFamily: BP.font, fontSize: 13 }}>
+                {screenshots.length ? `Показано: ${Math.min(12, screenshots.length)}` : "Пока пусто"}
+              </span>
+            </div>
+            {screenshots.length > 0 ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+                {screenshots.slice(0, 12).map((shot) => (
+                  <Image
+                    key={shot.id || shot.filename}
+                    src={getImageUrl(shot.url)}
+                    style={{ width: "100%", height: 112, objectFit: "cover", borderRadius: 10, border: `1px solid ${BP.stroke}` }}
+                    preview
+                  />
+                ))}
+              </div>
+            ) : (
+              <WorkEmptyState
+                icon="solar:gallery-minimalistic-bold-duotone"
+                title="Скриншоты появятся после рабочих событий"
+                description="Старт, переключение проекта и завершение сессии будут связываться с кадрами."
+              />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MetricBox({ icon, label, value }) {
+  return (
+    <div
+      className="bp-soft-panel bp-hover-row"
+      style={{
+        padding: 14,
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        minHeight: 74,
+      }}
+    >
+      <span
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          background: "rgba(38,126,38,0.09)",
+          display: "inline-grid",
+          placeItems: "center",
+          color: BP.green,
+          flex: "0 0 auto",
+        }}
+      >
+        <Icon icon={icon} width={20} height={20} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ color: BP.muted, fontFamily: BP.font, fontSize: 13 }}>{label}</div>
+        <div style={{ color: BP.text, fontFamily: BP.font, fontSize: 22, fontWeight: 510, marginTop: 2 }}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function MetricTable({ icon, title, rows, nameKey, emptyText }) {
+  const data = (rows || []).slice(0, 8).map((row, idx) => ({ ...row, key: `${title}_${idx}` }));
+  const isPath = nameKey === "filePath" || nameKey === "folderPath";
+  return (
+    <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
+      <div style={{ padding: "11px 12px", fontFamily: BP.font, fontSize: 15, fontWeight: 510, display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon icon={icon} width={17} height={17} color={BP.green} />
+        {title}
+      </div>
+      <Table
+        size="small"
+        dataSource={data}
+        pagination={false}
+        columns={[
+          {
+            title: "Название",
+            dataIndex: nameKey,
+            ellipsis: true,
+            render: (v) => (isPath ? renderWorkPath(v) : renderProjectName(v)),
+          },
+          { title: "Активно", dataIndex: "activeFocusedMs", render: formatWorkDuration, width: 105 },
+        ]}
+        locale={{
+          emptyText: (
+            <WorkEmptyState
+              icon="solar:inbox-bold-duotone"
+              title={emptyText || "Нет данных"}
+            />
+          ),
+        }}
+      />
+    </div>
+  );
+}
+
+function LiveViewPanel({ clientId, apiUrl }) {
+  const canvasRef = React.useRef(null);
+  const wsRef = React.useRef(null);
+  const [status, setStatus] = React.useState("stopped");
+  const [hasFrame, setHasFrame] = React.useState(false);
+
+  const stop = React.useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      wsRef.current.close();
+    }
+    wsRef.current = null;
+    setHasFrame(false);
+    setStatus("stopped");
+  }, []);
+
+  React.useEffect(() => stop, [stop]);
+
+  const start = React.useCallback(() => {
+    stop();
+    setHasFrame(false);
+    const token = localStorage.getItem("token") || "";
+    const base = apiUrl.replace(/\/api$/, "").replace(/^http/, "ws");
+    const ws = new WebSocket(`${base}/ws/admin/stream/${encodeURIComponent(clientId)}?token=${encodeURIComponent(token)}`);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    setStatus("connecting");
+    ws.onopen = () => setStatus("live");
+    ws.onerror = () => setStatus("error");
+    ws.onclose = () => setStatus((prev) => (prev === "error" ? "error" : "stopped"));
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "stream.error") setStatus("error");
+          if (msg.type === "stream.stopped") setStatus("stopped");
+        } catch {
+          setStatus("error");
+        }
+        return;
+      }
+      const blob = new Blob([event.data], { type: "image/jpeg" });
+      const url = URL.createObjectURL(blob);
+      const image = new window.Image();
+      image.onload = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(image, 0, 0);
+        setHasFrame(true);
+        URL.revokeObjectURL(url);
+      };
+      image.src = url;
+    };
+  }, [apiUrl, clientId, stop]);
+
+  const statusLabel = {
+    connecting: "Подключение",
+    live: "В эфире",
+    stopped: "Остановлено",
+    error: "Ошибка",
+  }[status];
+  const statusMeta = {
+    connecting: { color: BP.blue, bg: "rgba(34,64,140,0.1)", icon: "solar:refresh-linear" },
+    live: { color: BP.green, bg: "rgba(38,126,38,0.1)", icon: "solar:translation-2-bold-duotone" },
+    stopped: { color: BP.muted, bg: BP.surface, icon: "solar:stop-circle-bold-duotone" },
+    error: { color: BP.red, bg: "rgba(220,38,38,0.09)", icon: "solar:danger-triangle-bold-duotone" },
+  }[status];
+  const placeholder = {
+    connecting: {
+      title: "Подключаюсь к экрану клиента",
+      text: "Первый кадр появится автоматически.",
+      icon: "solar:monitor-smartphone-bold-duotone",
+    },
+    live: {
+      title: "Ожидание кадра",
+      text: "Трансляция запущена, но кадр ещё не пришёл.",
+      icon: "solar:gallery-wide-bold-duotone",
+    },
+    stopped: {
+      title: "Просмотр экрана остановлен",
+      text: "Запустите трансляцию, когда нужно посмотреть экран сотрудника.",
+      icon: "solar:monitor-bold-duotone",
+    },
+    error: {
+      title: "Не удалось открыть трансляцию",
+      text: "Проверьте, что агент онлайн и просмотр экрана включён в настройках.",
+      icon: "solar:danger-triangle-bold-duotone",
+    },
+  }[status];
+
+  return (
+    <div
+      className="bp-section-card bp-interactive-card"
+      style={{
+        borderRadius: 14,
+        padding: 14,
+        display: "grid",
+        gap: 12,
+        background: BP.white,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510 }}>Просмотр экрана</div>
+          <div style={{ fontFamily: BP.font, fontSize: 13, color: BP.muted, marginTop: 3 }}>
+            Просмотр экрана запускается только по команде администратора.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            className="bp-status-pill"
+            style={{
+              color: statusMeta.color,
+              background: statusMeta.bg,
+            }}
+          >
+            <Icon
+              icon={statusMeta.icon}
+              width={14}
+              height={14}
+              style={status === "connecting" ? { animation: "bp-spin 1s linear infinite" } : undefined}
+            />
+            {statusLabel}
+          </span>
+          {status === "live" || status === "connecting" ? (
+            <Button className="bp-ghost-action" onClick={stop} icon={<Icon icon="solar:stop-bold" />}>Остановить</Button>
+          ) : (
+            <Button className="bp-primary-action" type="primary" onClick={start} icon={<Icon icon="solar:play-bold" />}>Запустить</Button>
+          )}
+        </div>
+      </div>
+      <div
+        style={{
+          position: "relative",
+          height: hasFrame ? "auto" : 240,
+          minHeight: hasFrame ? 220 : 240,
+          maxHeight: hasFrame ? 520 : 260,
+          background: BP.surface,
+          borderRadius: 12,
+          overflow: "hidden",
+          border: `1px solid ${BP.stroke}`,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          style={{
+            width: "100%",
+            height: hasFrame ? "auto" : "100%",
+            minHeight: hasFrame ? 220 : "100%",
+            maxHeight: hasFrame ? 520 : "100%",
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
+        {!hasFrame && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              background: "linear-gradient(180deg, rgba(255,255,255,0.74), rgba(247,247,247,0.94))",
+            }}
+          >
+            <div style={{ textAlign: "center", maxWidth: 360, fontFamily: BP.font }}>
+              <span
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 16,
+                  display: "inline-grid",
+                  placeItems: "center",
+                  background: statusMeta.bg,
+                  color: statusMeta.color,
+                  animation: status === "connecting" ? "bp-live-pulse 1.4s ease infinite" : undefined,
+                }}
+              >
+                <Icon icon={placeholder.icon} width={25} height={25} />
+              </span>
+              <div style={{ marginTop: 12, color: BP.text, fontSize: 15, fontWeight: 510 }}>
+                {placeholder.title}
+              </div>
+              <div style={{ marginTop: 4, color: BP.muted, fontSize: 13 }}>
+                {placeholder.text}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WorkEmptyState({ icon, title, description }) {
+  return (
+    <div className="bp-empty-state" style={{ fontFamily: BP.font }}>
+      <Icon icon={icon} width={24} height={24} color={BP.light} />
+      <div style={{ fontSize: 13, color: BP.muted }}>{title}</div>
+      {description && <div style={{ fontSize: 12, color: BP.light }}>{description}</div>}
+    </div>
+  );
+}
+
+function renderWorkPath(value) {
+  if (!value) return <span style={{ color: BP.light }}>Не указан</span>;
+  return (
+    <span className="bp-path-text" title={value} style={{ display: "block", color: BP.text }}>
+      {value}
+    </span>
+  );
+}
+
+function renderProjectName(value) {
+  if (!value || value === "unknown/external") {
+    return (
+      <span className="bp-status-pill" style={{ background: BP.surface, color: BP.muted }}>
+        Внешний / неизвестный
+      </span>
+    );
+  }
+  return <span style={{ fontWeight: 510 }}>{value}</span>;
+}
+
+function renderWorkApp(value) {
+  if (!value) return <span style={{ color: BP.light }}>Неизвестно</span>;
+  return (
+    <span className="bp-status-pill" style={{ background: "rgba(34,64,140,0.08)", color: BP.blue }}>
+      {value}
+    </span>
+  );
+}
+
+function renderConfidence(value) {
+  const normalized = String(value || "low").toLowerCase();
+  const map = {
+    high: { label: "Высокая", color: BP.green, bg: "rgba(38,126,38,0.1)" },
+    medium: { label: "Средняя", color: "#B45309", bg: "rgba(245,158,11,0.13)" },
+    low: { label: "Низкая", color: BP.muted, bg: BP.surface },
+  };
+  const item = map[normalized] || map.low;
+  return (
+    <span className="bp-status-pill" style={{ color: item.color, background: item.bg }}>
+      {item.label}
+    </span>
+  );
+}
+
+function renderEndReason(value) {
+  const map = {
+    timeout: "Таймаут",
+    app_closed: "Приложение закрыто",
+    process_exit: "Процесс завершён",
+    switched: "Переключение",
+    manual: "Вручную",
+  };
+  return <span style={{ color: BP.muted }}>{map[value] || value || "—"}</span>;
+}
+
+function formatWorkDuration(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return `${h}ч ${m}м`;
+}
+
+function fmtWorkDateTime(value) {
+  if (!value) return "—";
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("DD.MM HH:mm") : "—";
+}
+
 function AppsTab({ clientId, t, i18n }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
@@ -1952,16 +2524,15 @@ function FilesTab({ clientId, t, i18n }) {
       setDrivesLoading(true);
       setDrivesError(null);
 
-      // Probe all 26 letters in parallel.
       const letters = Array.from({ length: 26 }, (_, i) =>
         String.fromCharCode(65 + i),
       );
-      const results = await Promise.all(letters.map((l) => probeLetter(l)));
-      if (cancelled) return;
 
-      // Offline detection — if ALL results say offline, client is offline.
-      const offline = results.every((r) => r && r.offline);
-      if (offline) {
+      // First probe C:\ to detect offline clients without firing 26 failed
+      // commands. If the agent is online, scan the rest in parallel.
+      const first = await probeLetter("C");
+      if (cancelled) return;
+      if (first && first.offline) {
         setDrivesError(t("common.clientOffline"));
         setDriveOptions([]);
         setRootPath("");
@@ -1970,9 +2541,16 @@ function FilesTab({ clientId, t, i18n }) {
         return;
       }
 
+      const remainingLetters = letters.filter((l) => l !== "C");
+      const remainingResults = await Promise.all(
+        remainingLetters.map((l) => probeLetter(l)),
+      );
+      if (cancelled) return;
+
       const found = [];
-      results.forEach((r, idx) => {
-        if (r && r.path) found.push(`${letters[idx]}:\\`);
+      if (first && first.path) found.push("C:\\");
+      remainingResults.forEach((r, idx) => {
+        if (r && r.path) found.push(`${remainingLetters[idx]}:\\`);
       });
 
       setDriveOptions(found);
@@ -2200,6 +2778,12 @@ function FilesTab({ clientId, t, i18n }) {
       return { title: part, path: pp };
     });
   }, [currentPath]);
+  const commandOffline =
+    !drivesLoading &&
+    driveOptions.length === 0 &&
+    drivesError === t("common.clientOffline");
+  const noDrives =
+    !drivesLoading && driveOptions.length === 0 && !commandOffline;
 
   return (
     <div
@@ -2266,16 +2850,21 @@ function FilesTab({ clientId, t, i18n }) {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
-                background: "rgba(220,38,38,0.08)",
+                background: commandOffline ? BP.surface : "rgba(245,158,11,0.12)",
                 borderRadius: 10,
                 padding: "8px 14px",
-                color: BP.red,
+                color: commandOffline ? BP.muted : "#B45309",
                 fontFamily: BP.font,
                 fontSize: 14,
                 minWidth: 140,
               }}
             >
-              {drivesError || "Нет доступных дисков"}
+              <Icon
+                icon={commandOffline ? "solar:cloud-cross-bold-duotone" : "solar:danger-triangle-bold-duotone"}
+                width={15}
+                height={15}
+              />
+              {commandOffline ? "Клиент оффлайн" : drivesError || "Нет доступных дисков"}
             </div>
           ) : (
             <select
@@ -2340,7 +2929,7 @@ function FilesTab({ clientId, t, i18n }) {
       {/* Breadcrumbs */}
       <div
         style={{
-          display: "flex",
+          display: commandOffline || noDrives ? "none" : "flex",
           alignItems: "center",
           gap: 6,
           padding: "12px 28px",
@@ -2397,6 +2986,7 @@ function FilesTab({ clientId, t, i18n }) {
       {/* Divider */}
       <div
         style={{
+          display: commandOffline || noDrives ? "none" : "block",
           height: 1,
           background: BP.stroke,
           opacity: 0.5,
@@ -2404,7 +2994,39 @@ function FilesTab({ clientId, t, i18n }) {
       />
 
       {/* Error / Content */}
-      {dirError ? (
+      {commandOffline ? (
+        <FileManagerState
+          icon="solar:cloud-cross-bold-duotone"
+          title="Клиент оффлайн"
+          description="Файловый менеджер будет доступен, когда агент подключится к командному каналу."
+          action={
+            <Button
+              size="small"
+              onClick={() => setRetryTrigger((p) => p + 1)}
+              icon={<Icon icon="solar:refresh-linear" width={14} height={14} />}
+              style={{ borderRadius: 30 }}
+            >
+              Проверить снова
+            </Button>
+          }
+        />
+      ) : noDrives ? (
+        <FileManagerState
+          icon="solar:folder-error-bold-duotone"
+          title="Диски не найдены"
+          description="Агент ответил, но доступных дисков для просмотра сейчас нет."
+          action={
+            <Button
+              size="small"
+              onClick={() => setRetryTrigger((p) => p + 1)}
+              icon={<Icon icon="solar:refresh-linear" width={14} height={14} />}
+              style={{ borderRadius: 30 }}
+            >
+              Обновить
+            </Button>
+          }
+        />
+      ) : dirError ? (
         <div
           style={{
             margin: 20,
@@ -2592,6 +3214,42 @@ function FilesTab({ clientId, t, i18n }) {
           ]}
         />
       )}
+    </div>
+  );
+}
+
+function FileManagerState({ icon, title, description, action }) {
+  return (
+    <div style={{ padding: 20 }}>
+      <div
+        className="bp-empty-state"
+        style={{
+          minHeight: 220,
+          fontFamily: BP.font,
+          borderStyle: "solid",
+        }}
+      >
+        <span
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 18,
+            background: BP.surface,
+            color: BP.muted,
+            display: "inline-grid",
+            placeItems: "center",
+          }}
+        >
+          <Icon icon={icon} width={28} height={28} />
+        </span>
+        <div style={{ color: BP.text, fontSize: 16, fontWeight: 510 }}>
+          {title}
+        </div>
+        <div style={{ color: BP.muted, fontSize: 13, maxWidth: 420 }}>
+          {description}
+        </div>
+        {action && <div style={{ marginTop: 8 }}>{action}</div>}
+      </div>
     </div>
   );
 }

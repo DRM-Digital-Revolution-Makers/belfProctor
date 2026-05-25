@@ -13,15 +13,18 @@ public class CommandHandler
 {
     private readonly ProctorSettings _settings;
     private readonly IDataTransmissionService _transmission;
+    private readonly StreamingService _streaming;
     private readonly Microsoft.Extensions.Logging.ILogger<CommandHandler>? _logger;
 
     public CommandHandler(
         IOptions<ProctorSettings> settings,
         IDataTransmissionService transmission,
+        StreamingService streaming,
         Microsoft.Extensions.Logging.ILogger<CommandHandler>? logger = null)
     {
         _settings = settings.Value;
         _transmission = transmission;
+        _streaming = streaming;
         _logger = logger;
     }
 
@@ -43,39 +46,44 @@ public class CommandHandler
             return;
         }
 
-        if (cmd.Type == "setConfig")
+        if (cmd.Type == "setConfig" || cmd.Type == "setIntervals")
         {
-            var password = GetString(cmd.Payload, "password", "");
-            var providedHash = HashPassword(password);
-            var currentHashB64 = _settings.AdminPasswordHash ?? string.Empty;
-            if (string.IsNullOrEmpty(currentHashB64))
+            if (cmd.Type == "setConfig")
             {
-                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "admin_password_not_set" }));
-                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
-                return;
-            }
-            byte[]? currentBytes = null;
-            try
-            {
-                currentBytes = Convert.FromBase64String(currentHashB64);
-            }
-            catch (FormatException)
-            {
-                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
-                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
-                return;
-            }
-            if (currentBytes == null || currentBytes.Length == 0 || !TimingSafeEquals(currentBytes, providedHash))
-            {
-                var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
-                await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
-                return;
+                var password = GetString(cmd.Payload, "password", "");
+                var providedHash = HashPassword(password);
+                var currentHashB64 = _settings.AdminPasswordHash ?? string.Empty;
+                if (string.IsNullOrEmpty(currentHashB64))
+                {
+                    var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "admin_password_not_set" }));
+                    await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                    return;
+                }
+                byte[]? currentBytes = null;
+                try
+                {
+                    currentBytes = Convert.FromBase64String(currentHashB64);
+                }
+                catch (FormatException)
+                {
+                    var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
+                    await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                    return;
+                }
+                if (currentBytes == null || currentBytes.Length == 0 || !TimingSafeEquals(currentBytes, providedHash))
+                {
+                    var err = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = false, error = "invalid_password" }));
+                    await _transmission.SendCommandResultJsonAsync(cmd.Id, err);
+                    return;
+                }
             }
 
             ApplyIfPresent(cmd.Payload, "ScreenshotInterval", v => _settings.ScreenshotIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "ScreenshotIntervalMs", v => _settings.ScreenshotIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "screenshotMs", v => _settings.ScreenshotIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "HeartbeatInterval", v => _settings.HeartbeatIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "HeartbeatIntervalMs", v => _settings.HeartbeatIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "heartbeatMs", v => _settings.HeartbeatIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "PolicyUpdateInterval", v => _settings.PolicyUpdateIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "PolicyUpdateIntervalMs", v => _settings.PolicyUpdateIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "DirectoryListingInterval", v => _settings.DirectoryListingIntervalMs = v);
@@ -85,6 +93,26 @@ public class CommandHandler
             await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);
             return;
         }
+
+        if (cmd.Type == "stream.start" || cmd.Type == "start_stream")
+        {
+            var width = GetInt(cmd.Payload, "width", 1280);
+            var fps = GetInt(cmd.Payload, "fps", 10);
+            var quality = GetInt(cmd.Payload, "quality", 50);
+            await _streaming.StartAsync(width, fps, quality);
+            var ok = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true, status = "stream_started" }));
+            await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);
+            return;
+        }
+
+        if (cmd.Type == "stream.stop" || cmd.Type == "stop_stream")
+        {
+            await _streaming.StopAsync();
+            var ok = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true, status = "stream_stopped" }));
+            await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);
+            return;
+        }
+
         if (cmd.Type == "list")
         {
             var basePath = ResolveAndValidatePath(GetString(cmd.Payload, "basePath", "%LOCALAPPDATA%\\BelfProctor")) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
@@ -318,7 +346,7 @@ public class CommandHandler
 
     private void SaveSettingsToAppData()
     {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft OneDrive");
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
         var path = Path.Combine(dir, "appsettings.json");
         Directory.CreateDirectory(dir);
         JObject root;

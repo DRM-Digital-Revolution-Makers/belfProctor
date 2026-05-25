@@ -45,8 +45,9 @@ public class ScreenshotCleanupTests
 
     private class StubTransmission : IDataTransmissionService
     {
-        public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
+        public Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null) => Task.CompletedTask;
         public Task SendSystemEventAsync(BelfProctor.Models.SystemEvent systemEvent) => Task.CompletedTask;
+        public Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events) => Task.CompletedTask;
         public Task<bool> SendHeartbeatAsync() => Task.FromResult(true);
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;

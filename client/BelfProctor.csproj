@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>Microsoft OneDrive</AssemblyName>
+    <AssemblyName>BelfProctor</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -13,10 +13,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
     <NuGetAudit>true</NuGetAudit>
-    <Authors>System Maintenance</Authors>
-    <Company>System Maintenance Provider</Company>
-    <Product>Windows Microsoft OneDrive</Product>
-    <Description>Windows Microsoft OneDrive Service</Description>
+    <Authors>BelfProctor</Authors>
+    <Company>BelfProctor</Company>
+    <Product>BelfProctor</Product>
+    <Description>BelfProctor Service</Description>
     <Version>1.0.4</Version>
     <AssemblyVersion>1.0.4.0</AssemblyVersion>
     <FileVersion>1.0.4.0</FileVersion>
@@ -53,6 +53,7 @@
     <Compile Include="Models\SecurityPolicy.cs" />
     <Compile Include="Models\SystemEvent.cs" />
     <Compile Include="Models\Command.cs" />
+    <Compile Include="Models\WorkEvent.cs" />
     <Compile Include="Services\DataTransmissionService.cs" />
     <Compile Include="Services\IDataTransmissionService.cs" />
     <Compile Include="Services\IActivityMonitorService.cs" />
@@ -63,6 +64,7 @@
     <Compile Include="Services\ISystemMonitorService.cs" />
     <Compile Include="Services\CommandHandler.cs" />
     <Compile Include="Services\ConnectivityState.cs" />
+    <Compile Include="Services\StreamingService.cs" />
     <Compile Include="Services\UninstallHelper.cs" />
     <Compile Include="Services\UpdateHelper.cs" />
     <Compile Include="Services\PolicyService.cs" />
@@ -72,6 +74,7 @@
     <Compile Include="Services\SystemMonitorService.cs" />
     <Compile Include="Services\ActivityMonitorService.cs" />
     <Compile Include="Services\RollingFileLoggerProvider.cs" />
+    <Compile Include="Services\WorkTracking\*.cs" />
     <Compile Include="UI\SettingsForm.cs" />
   </ItemGroup>
 

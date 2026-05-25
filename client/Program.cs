@@ -8,6 +8,7 @@ using System.Windows.Forms;
 using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.IO;
+using BelfProctor.Services.WorkTracking;
 
 namespace BelfProctor;
 
@@ -18,7 +19,7 @@ public class Program
         // Immediate debug logging to verify process start
         try 
         {
-            var debugDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
+            var debugDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
             if (!Directory.Exists(debugDir)) Directory.CreateDirectory(debugDir);
             File.AppendAllText(Path.Combine(debugDir, "startup_log.txt"), $"{DateTime.Now}: Process started. Args: {string.Join(" ", args)}\n");
         }
@@ -27,13 +28,13 @@ public class Program
         try
         {
             // Mutex to prevent multiple instances
-            using var mutex = new Mutex(false, "Global\\BelfProctorSystemWorker", out bool createdNew);
+            using var mutex = new Mutex(false, "Global\\BelfProctor", out bool createdNew);
             if (!createdNew)
             {
                 // If auto-start, log and exit
                 if (args.Contains("--auto-start")) 
                 {
-                    try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker", "startup_log.txt"), $"{DateTime.Now}: Exiting - Instance already running.\n"); } catch { }
+                    try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: Exiting - Instance already running.\n"); } catch { }
                     return;
                 }
                 
@@ -50,12 +51,12 @@ public class Program
             var baseDir = AppContext.BaseDirectory;
             Directory.SetCurrentDirectory(baseDir);
             
-            try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker", "startup_log.txt"), $"{DateTime.Now}: BaseDir set to {baseDir}\n"); } catch { }
+            try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: BaseDir set to {baseDir}\n"); } catch { }
 
             var builder = Host.CreateApplicationBuilder(args);
             
             // Ensure AppData directory exists
-            var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker");
+            var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
             if (!Directory.Exists(localAppData)) Directory.CreateDirectory(localAppData);
             
             var appDataConfig = Path.Combine(localAppData, "appsettings.json");
@@ -123,6 +124,24 @@ public class Program
             int GetOverride(string key, int fallback) =>
                 overrides.TryGetValue(key, out var s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
+            FeatureSettings ReadFeatures(IConfigurationSection parent)
+            {
+                var features = parent.GetSection("Features");
+                bool GetFeature(string key, bool fallback)
+                {
+                    var raw = features[key];
+                    return bool.TryParse(raw, out var parsed) ? parsed : fallback;
+                }
+                return new FeatureSettings
+                {
+                    UpdateV2 = GetFeature("UpdateV2", true),
+                    WorkTracking = GetFeature("WorkTracking", true),
+                    ProjectMapping = GetFeature("ProjectMapping", true),
+                    LiveView = GetFeature("LiveView", true),
+                    RulesClassifier = GetFeature("RulesClassifier", true),
+                };
+            }
+
             // If auto-start and config missing, we can't run.
             if (isAutoStart && needsConfig)
             {
@@ -158,6 +177,7 @@ public class Program
                     MonitorProcesses = bool.TryParse(section["MonitorProcesses"], out var procVal1) ? procVal1 : true,
                     MonitorNetwork = bool.TryParse(section["MonitorNetwork"], out var netVal1) ? netVal1 : true,
                     RunOnStartup = bool.TryParse(section["RunOnStartup"], out var runVal1) ? runVal1 : true,
+                    Features = ReadFeatures(section),
                 };
                 
                 var savePaths = new[] { appDataConfig, baseConfig };
@@ -190,6 +210,7 @@ public class Program
                 MonitorProcesses = bool.TryParse(sanitizedSection["MonitorProcesses"], out var procVal2) ? procVal2 : true,
                 MonitorNetwork = bool.TryParse(sanitizedSection["MonitorNetwork"], out var netVal2) ? netVal2 : true,
                 RunOnStartup = bool.TryParse(sanitizedSection["RunOnStartup"], out var runVal2) ? runVal2 : true,
+                Features = ReadFeatures(sanitizedSection),
             };
             builder.Services.AddSingleton<IOptions<ProctorSettings>>(Options.Create(settings));
 
@@ -200,9 +221,11 @@ public class Program
             builder.Services.AddSingleton<IPolicyService, PolicyService>();
             builder.Services.AddSingleton<IReportingService, ReportingService>();
             builder.Services.AddSingleton<IStabilityService, StabilityService>();
+            builder.Services.AddSingleton<StreamingService>();
             builder.Services.AddSingleton<CommandHandler>();
             
             builder.Services.AddHostedService<ProctorWorker>();
+            builder.Services.AddHostedService<WorkTrackingService>();
             builder.Services.AddHostedService<CommandChannelWorker>();
             builder.Services.AddHostedService<ClientLogUploadWorker>();
 
@@ -221,7 +244,7 @@ public class Program
         {
             try
             {
-                var logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemWorker", "crash_log.txt");
+                var logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "crash_log.txt");
                 File.AppendAllText(logPath, $"{DateTime.Now}: Critical Crash: {ex}\n");
             }
             catch { }

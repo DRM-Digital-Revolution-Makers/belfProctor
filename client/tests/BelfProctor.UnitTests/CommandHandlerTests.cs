@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using BelfProctor.Models;
 using BelfProctor.Services;
@@ -40,7 +41,7 @@ public class CommandHandlerTests
             ReportsPath = "%LOCALAPPDATA%\\BelfProctor\\Reports",
             DirectoryRoots = new List<string> { tmp }
         });
-        var handler = new CommandHandler(settings, tx);
+        var handler = new CommandHandler(settings, tx, new StreamingService(NullLogger<StreamingService>.Instance, settings));
         var cmd = new Command
         {
             Id = "cmd-1",
@@ -81,7 +82,7 @@ public class CommandHandlerTests
             ReportsPath = "%LOCALAPPDATA%\\BelfProctor\\Reports",
             DirectoryRoots = new List<string> { tmp }
         });
-        var handler = new CommandHandler(settings, tx);
+        var handler = new CommandHandler(settings, tx, new StreamingService(NullLogger<StreamingService>.Instance, settings));
         var cmd = new Command
         {
             Id = "cmd-2",
@@ -104,8 +105,9 @@ public class CommandHandlerTests
     {
         public int JsonCalls { get; private set; }
         public List<(string, string)> FileCalls { get; } = new();
-        public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
+        public Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null) => Task.CompletedTask;
         public Task SendSystemEventAsync(SystemEvent systemEvent) => Task.CompletedTask;
+        public Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events) => Task.CompletedTask;
         public Task<bool> SendHeartbeatAsync() => Task.FromResult(true);
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;

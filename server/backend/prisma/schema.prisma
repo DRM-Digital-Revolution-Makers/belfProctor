@@ -30,6 +30,35 @@ enum SystemEventType {
   AppUsage
 }
 
+enum ConfidenceLevel {
+  high
+  medium
+  low
+  unknown
+}
+
+enum WorkSessionEndReason {
+  active
+  switch
+  app_closed
+  timeout
+  shutdown
+  unknown
+}
+
+enum UpdateDeploymentStatus {
+  queued
+  sent
+  downloading
+  verifying
+  installing
+  restarted
+  confirmed
+  rolled_back
+  failed
+  already_up_to_date
+}
+
 model User {
   id          Int      @id @default(autoincrement())
   email       String   @unique
@@ -49,6 +78,9 @@ model Client {
   screenshots   Screenshot[]
   reports       Report[]
   activities    Activity[]
+  workSessions  WorkSession[]
+  workEvents    WorkSessionEvent[]
+  updateDeployments UpdateDeployment[]
 }
 
 model Event {
@@ -88,9 +120,125 @@ model Screenshot {
   filename  String
   path      String
   isFavorite Boolean  @default(false)
+  captureReason String?
+  linkedSessionId String?
+  processName String?
+  filePath String?
+  projectName String?
   createdAt DateTime @default(now())
 
   @@index([clientId, timestamp])
+}
+
+model WorkSession {
+  id              String    @id
+  clientId        String
+  client          Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  adapter         String
+  processName     String
+  windowTitle     String?
+  filePath        String?
+  folderPath      String?
+  projectName     String?
+  category        String?
+  productivityLevel String?
+  confidence      ConfidenceLevel @default(unknown)
+  openedMs        BigInt    @default(0)
+  focusedMs       BigInt    @default(0)
+  activeFocusedMs BigInt    @default(0)
+  startedAt       DateTime
+  endedAt         DateTime?
+  endReason       WorkSessionEndReason @default(active)
+  lastEventAt     DateTime
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  events          WorkSessionEvent[]
+
+  @@index([clientId, startedAt])
+  @@index([projectName, startedAt])
+  @@index([processName, startedAt])
+  @@index([filePath])
+}
+
+model WorkSessionEvent {
+  eventId       String   @id
+  schemaVersion Int      @default(1)
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sessionId     String?
+  session       WorkSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  eventType     String
+  timestampUtc  DateTime
+  adapter       String?
+  processName   String?
+  windowTitle   String?
+  filePath      String?
+  folderPath    String?
+  projectName   String?
+  confidence    ConfidenceLevel @default(unknown)
+  payload        Json?
+  sourceVersion String?
+  receivedAt    DateTime @default(now())
+
+  @@index([clientId, timestampUtc])
+  @@index([sessionId])
+}
+
+model ProjectRoot {
+  id          String   @id
+  name        String
+  path        String   @unique
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ProjectAlias {
+  id          String   @id
+  alias       String   @unique
+  projectName String
+  rootId      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model UnknownProjectPath {
+  id          String   @id
+  path        String   @unique
+  clientId    String?
+  processName String?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  seenCount   Int      @default(1)
+  resolvedProjectName String?
+  ignored     Boolean  @default(false)
+}
+
+model AgentVersion {
+  version     String   @id
+  filename    String
+  sha256      String
+  size        BigInt
+  notes       String?
+  uploadedAt  DateTime @default(now())
+  deployments UpdateDeployment[]
+}
+
+model UpdateDeployment {
+  id          String   @id
+  version     String
+  agentVersion AgentVersion @relation(fields: [version], references: [version], onDelete: Cascade)
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status      UpdateDeploymentStatus @default(queued)
+  detail      String?
+  sentAt      DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([clientId, sentAt])
+  @@index([version])
+  @@index([status])
 }
 
 model Report {
