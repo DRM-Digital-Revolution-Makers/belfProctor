@@ -17,13 +17,32 @@ public class Program
     public static async Task Main(string[] args)
     {
         // Immediate debug logging to verify process start
-        try 
+        try
         {
             var debugDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
             if (!Directory.Exists(debugDir)) Directory.CreateDirectory(debugDir);
             File.AppendAllText(Path.Combine(debugDir, "startup_log.txt"), $"{DateTime.Now}: Process started. Args: {string.Join(" ", args)}\n");
         }
         catch { }
+
+        // Elevation handoff: when the unprivileged process needs to install the
+        // service it relaunches itself with this arg under UAC. Do the install
+        // and exit — the freshly-created service will start the worker.
+        if (args.Contains("--install-service"))
+        {
+            try
+            {
+                using var currentProc = Process.GetCurrentProcess();
+                var exePath = currentProc.MainModule?.FileName
+                    ?? Path.Combine(AppContext.BaseDirectory, "BelfProctor.exe");
+                ServiceInstaller.EnsureInstalled(exePath);
+            }
+            catch (Exception ex)
+            {
+                try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: --install-service failed: {ex.Message}\n"); } catch { }
+            }
+            return;
+        }
 
         try
         {

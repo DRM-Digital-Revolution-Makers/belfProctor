@@ -303,7 +303,7 @@ try {{
   foreach ($n in 'BelfProctor','Microsoft OneDrive','SystemWorker') {{
     try {{ taskkill /F /IM ($n + '.exe') /T 2>$null | Out-Null }} catch {{}}
   }}
-  sc.exe config $svc binPath= ('""' + $targetExe + '""') | Out-Null
+  sc.exe config $svc binPath= ('""' + $targetExe + '"" --auto-start') | Out-Null
   if (-not (StartAndWait $svc)) {{ throw 'new service version did not start' }}
   Log 'new version started'
   try {{
@@ -314,7 +314,7 @@ try {{
   }} catch {{}}
 }} catch {{
   Log ('update failed: ' + $_.Exception.Message)
-  try {{ sc.exe config $svc binPath= ('""' + $currentExe + '""') | Out-Null }} catch {{}}
+  try {{ sc.exe config $svc binPath= ('""' + $currentExe + '"" --auto-start') | Out-Null }} catch {{}}
   try {{ StartAndWait $svc | Out-Null }} catch {{}}
 }}
 try {{ Remove-Item -LiteralPath $stagedExe -Force -ErrorAction SilentlyContinue }} catch {{}}

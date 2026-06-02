@@ -245,22 +245,29 @@ router.post(
       next.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
       await writeIndex(next);
       if (prisma) {
-        await prisma.agentVersion.upsert({
-          where: { version },
-          update: {
-            filename: "BelfProctor.exe",
-            sha256: sha,
-            size: BigInt(size),
-            notes: notes || undefined,
-          },
-          create: {
-            version,
-            filename: "BelfProctor.exe",
-            sha256: sha,
-            size: BigInt(size),
-            notes: notes || undefined,
-          },
-        });
+        try {
+          await prisma.agentVersion.upsert({
+            where: { version },
+            update: {
+              filename: "BelfProctor.exe",
+              sha256: sha,
+              size: BigInt(size),
+              notes: notes || undefined,
+            },
+            create: {
+              version,
+              filename: "BelfProctor.exe",
+              sha256: sha,
+              size: BigInt(size),
+              notes: notes || undefined,
+            },
+          });
+        } catch (prismaErr) {
+          console.warn(
+            "[updates] prisma agentVersion mirror failed (file record kept):",
+            (prismaErr as Error)?.message || prismaErr,
+          );
+        }
       }
 
       return res.json({ ok: true, update: meta });
@@ -388,19 +395,8 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
         commandId: r.commandId,
       });
       if (r.commandId) {
-        if (prisma) {
-          await ensurePrismaClient(clientId);
-          await prisma.updateDeployment
-            .create({
-              data: {
-                id: r.commandId,
-                version: meta.version,
-                clientId,
-                status: r.sent ? "sent" : "queued",
-              },
-            })
-            .catch(() => null);
-        }
+        // Persist file-based record FIRST — it's the source of truth for the UI.
+        // Prisma mirror is best-effort; never let it block the file write.
         deployments.push({
           id: r.commandId,
           version: meta.version,
@@ -410,6 +406,26 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
           lastStatus: r.sent ? "sent" : "queued_offline",
           lastStatusAt: new Date().toISOString(),
         });
+        if (prisma) {
+          try {
+            await ensurePrismaClient(clientId);
+            await prisma.updateDeployment
+              .create({
+                data: {
+                  id: r.commandId,
+                  version: meta.version,
+                  clientId,
+                  status: r.sent ? "sent" : "queued",
+                },
+              })
+              .catch(() => null);
+          } catch (prismaErr) {
+            console.warn(
+              "[updates] prisma mirror failed (file record kept):",
+              (prismaErr as Error)?.message || prismaErr,
+            );
+          }
+        }
       }
     } catch (e) {
       console.error("[updates] deploy failed for", clientId, e);

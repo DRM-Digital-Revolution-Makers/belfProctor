@@ -1160,7 +1160,6 @@ function AgentsTab({ clients }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".exe"
               onChange={(e) => setFileObj(e.target.files?.[0] || null)}
             />
             {fileObj && (

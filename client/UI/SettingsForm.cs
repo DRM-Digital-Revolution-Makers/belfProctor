@@ -470,8 +470,27 @@ public class SettingsForm : Form
         }
 
         MessageBox.Show("Settings saved. Application updated and will restart in background.");
-        
-        // If we just installed it, launch the installed version and exit this one
+
+        // Make sure the BelfProctor Windows service exists and is running.
+        // If we're not elevated, this kicks UAC for a child process that does the
+        // sc.exe create + start, then returns ElevationRequested — we treat that
+        // as success and exit; the service will own the worker from then on.
+        var serviceResult = BelfProctor.Services.ServiceInstaller.EnsureInstalled(installPath);
+        bool serviceOwnsWorker =
+            serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.AlreadyInstalled
+            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.Installed
+            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.ElevationRequested;
+
+        if (serviceOwnsWorker)
+        {
+            // The service runs the worker as LocalSystem with --auto-start; no
+            // need to spawn another user-mode copy.
+            Application.Exit();
+            return;
+        }
+
+        // Service install failed (e.g. user denied UAC) — fall back to the
+        // legacy HKCU\Run launch so the agent still runs, just not as a service.
         if (!isInstalled && File.Exists(installPath))
         {
             Process.Start(installPath);
@@ -479,25 +498,14 @@ public class SettingsForm : Form
         }
         else
         {
-            // If already installed, we might need to restart to pick up config?
-            // Actually, we are running as Settings UI. The background service might be running or not.
-            // If we killed it above, we should restart it.
-            // But we only killed it if we were NOT installed (updating).
-            // If we ARE installed (isInstalled=true), we didn't kill anything.
-            // But we saved config.
-            // We should restart to apply config.
-            
-            // Check if we are running as worker or just UI?
-             // This is SettingsForm. We are likely just UI or UI mode of worker.
-             // We should restart ourselves.
-             
-             // Restart with --auto-start to run silently as service
-             var proc = new ProcessStartInfo(Application.ExecutablePath);
-             proc.UseShellExecute = true;
-             proc.Arguments = "--auto-start";
-             Process.Start(proc);
-             Application.Exit();
-         }
+            var proc = new ProcessStartInfo(Application.ExecutablePath)
+            {
+                UseShellExecute = true,
+                Arguments = "--auto-start",
+            };
+            Process.Start(proc);
+            Application.Exit();
+        }
     }
 
     private static bool IsAdmin()
