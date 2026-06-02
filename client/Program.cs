@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using BelfProctor.Services;
 using BelfProctor.Models;
+using System.Diagnostics;
 using System.Windows.Forms;
 using Microsoft.Extensions.Options;
 using System.Globalization;
