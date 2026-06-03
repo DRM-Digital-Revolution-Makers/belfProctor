@@ -47,17 +47,39 @@ public class Program
 
         try
         {
-            // Mutex to prevent multiple instances
-            using var mutex = new Mutex(false, "Global\\BelfProctor", out bool createdNew);
+            // Mutex to prevent multiple instances.
+            // Global\ requires SeCreateGlobalPrivilege — services have it, but
+            // a non-admin user-mode launch (HKCU\Run, double-click) does not and
+            // gets UnauthorizedAccessException. Fall back to a session-local
+            // mutex in that case so the agent still runs.
+            Mutex? mutex = null;
+            bool createdNew = true;
+            try
+            {
+                mutex = new Mutex(false, "Global\\BelfProctor", out createdNew);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                try { mutex = new Mutex(false, "Local\\BelfProctor", out createdNew); }
+                catch { mutex = null; createdNew = true; }
+            }
+            catch (Exception)
+            {
+                // Mutex unavailable for any other reason — don't crash, just run.
+                mutex = null;
+                createdNew = true;
+            }
+            using var _mutexGuard = mutex;
+
             if (!createdNew)
             {
                 // If auto-start, log and exit
-                if (args.Contains("--auto-start")) 
+                if (args.Contains("--auto-start"))
                 {
                     try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: Exiting - Instance already running.\n"); } catch { }
                     return;
                 }
-                
+
                 if (args.Contains("--config-ui"))
                 {
                     MessageBox.Show("Another instance is running.", "Already Running");

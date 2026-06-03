@@ -298,12 +298,24 @@ try {{
   New-Item -ItemType Directory -Force -Path $versionDir | Out-Null
   Copy-Item -LiteralPath $stagedExe -Destination $targetExe -Force -ErrorAction Stop
   try {{ Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue }} catch {{}}
+  # Mirror config files from install root next to the new exe — Program.cs
+  # reads appsettings.json from AppContext.BaseDirectory and from LocalSystem's
+  # AppData (empty), so without this the new versioned exe sees no ClientId
+  # and the worker exits immediately.
+  foreach ($cfg in 'appsettings.json','appsettings.Production.json') {{
+    $src = Join-Path $installRoot $cfg
+    if (Test-Path -LiteralPath $src) {{
+      Copy-Item -LiteralPath $src -Destination (Join-Path $versionDir $cfg) -Force -ErrorAction SilentlyContinue
+    }}
+  }}
   Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
   foreach ($n in 'BelfProctor','Microsoft OneDrive','SystemWorker') {{
     try {{ taskkill /F /IM ($n + '.exe') /T 2>$null | Out-Null }} catch {{}}
   }}
-  sc.exe config $svc binPath= ('""' + $targetExe + '"" --auto-start') | Out-Null
+  $imagePath = '""' + $targetExe + '"" --auto-start'
+  Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $imagePath -Type ExpandString -ErrorAction Stop
+  Log ('binPath set to ' + $imagePath)
   if (-not (StartAndWait $svc)) {{ throw 'new service version did not start' }}
   Log 'new version started'
   try {{
@@ -314,7 +326,10 @@ try {{
   }} catch {{}}
 }} catch {{
   Log ('update failed: ' + $_.Exception.Message)
-  try {{ sc.exe config $svc binPath= ('""' + $currentExe + '"" --auto-start') | Out-Null }} catch {{}}
+  try {{
+    $rollbackImage = '""' + $currentExe + '"" --auto-start'
+    Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $rollbackImage -Type ExpandString -ErrorAction SilentlyContinue
+  }} catch {{}}
   try {{ StartAndWait $svc | Out-Null }} catch {{}}
 }}
 try {{ Remove-Item -LiteralPath $stagedExe -Force -ErrorAction SilentlyContinue }} catch {{}}
