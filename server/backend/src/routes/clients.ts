@@ -152,18 +152,6 @@ router.get("/categories", requireAuth, async (_req, res) => {
 });
 
 router.get("/:id/work-summary", requireAuth, async (req, res) => {
-  if (!prisma) {
-    return res.json({
-      date: req.query.date || "",
-      totals: { openedMs: 0, focusedMs: 0, activeFocusedMs: 0 },
-      projects: [],
-      files: [],
-      folders: [],
-      apps: [],
-      screenshots: [],
-    });
-  }
-
   try {
     const id = String(req.params.id);
     const dateStr =
@@ -220,8 +208,6 @@ router.get("/:id/work-summary", requireAuth, async (req, res) => {
 });
 
 router.get("/:id/work-sessions", requireAuth, async (req, res) => {
-  if (!prisma) return res.json({ data: [], total: 0 });
-
   try {
     const id = String(req.params.id);
     const from = req.query.from
@@ -264,7 +250,7 @@ router.put("/:id/category", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || "");
     const category = String((req.body as any)?.category || "").trim();
-    await saveClient({ id, category, updatedAt: new Date() });
+    await saveClient({ id, category });
     res.json(await getClient(id));
   } catch (e) {
     console.error(e);

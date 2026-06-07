@@ -91,12 +91,11 @@ function toDeploymentStatus(status: string):
 }
 
 async function ensurePrismaClient(clientId: string): Promise<void> {
-  if (!prisma) return;
-  const fileClient = await getClient(clientId);
+  const existing = await getClient(clientId);
   await prisma.client.upsert({
     where: { id: clientId },
-    update: fileClient?.encryptionKey ? { encryptionKey: fileClient.encryptionKey } : {},
-    create: { id: clientId, encryptionKey: fileClient?.encryptionKey || "" },
+    update: existing?.encryptionKey ? { encryptionKey: existing.encryptionKey } : {},
+    create: { id: clientId, encryptionKey: existing?.encryptionKey || "" },
   });
 }
 
@@ -157,17 +156,15 @@ export async function appendDeploymentStatus(
   items[idx].lastStatusAt = new Date().toISOString();
   if (detail !== undefined) items[idx].lastDetail = detail;
   await writeDeployments(items);
-  if (prisma) {
-    await prisma.updateDeployment
-      .update({
-        where: { id: commandId },
-        data: {
-          status: toDeploymentStatus(status),
-          detail: detail !== undefined ? detail : status,
-        },
-      })
-      .catch(() => null);
-  }
+  await prisma.updateDeployment
+    .update({
+      where: { id: commandId },
+      data: {
+        status: toDeploymentStatus(status),
+        detail: detail !== undefined ? detail : status,
+      },
+    })
+    .catch(() => null);
 }
 
 function isValidVersion(v: string): boolean {
@@ -244,30 +241,28 @@ router.post(
       // Sort: newest version semantically last? Simpler — by uploadedAt desc.
       next.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
       await writeIndex(next);
-      if (prisma) {
-        try {
-          await prisma.agentVersion.upsert({
-            where: { version },
-            update: {
-              filename: "BelfProctor.exe",
-              sha256: sha,
-              size: BigInt(size),
-              notes: notes || undefined,
-            },
-            create: {
-              version,
-              filename: "BelfProctor.exe",
-              sha256: sha,
-              size: BigInt(size),
-              notes: notes || undefined,
-            },
-          });
-        } catch (prismaErr) {
-          console.warn(
-            "[updates] prisma agentVersion mirror failed (file record kept):",
-            (prismaErr as Error)?.message || prismaErr,
-          );
-        }
+      try {
+        await prisma.agentVersion.upsert({
+          where: { version },
+          update: {
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+          create: {
+            version,
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+        });
+      } catch (prismaErr) {
+        console.warn(
+          "[updates] prisma agentVersion mirror failed (file record kept):",
+          (prismaErr as Error)?.message || prismaErr,
+        );
       }
 
       return res.json({ ok: true, update: meta });
@@ -302,9 +297,7 @@ router.delete("/:version", requireAuth, async (req, res) => {
   }
   const idx = await readIndex();
   await writeIndex(idx.filter((m) => m.version !== version));
-  if (prisma) {
-    await prisma.agentVersion.delete({ where: { version } }).catch(() => null);
-  }
+  await prisma.agentVersion.delete({ where: { version } }).catch(() => null);
   return res.json({ ok: true });
 });
 
@@ -350,26 +343,24 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
     sha256: meta.sha256,
   };
 
-  if (prisma) {
-    await prisma.agentVersion
-      .upsert({
-        where: { version: meta.version },
-        update: {
-          filename: meta.filename,
-          sha256: meta.sha256,
-          size: BigInt(meta.size),
-          notes: meta.notes || undefined,
-        },
-        create: {
-          version: meta.version,
-          filename: meta.filename,
-          sha256: meta.sha256,
-          size: BigInt(meta.size),
-          notes: meta.notes || undefined,
-        },
-      })
-      .catch(() => null);
-  }
+  await prisma.agentVersion
+    .upsert({
+      where: { version: meta.version },
+      update: {
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+      create: {
+        version: meta.version,
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+    })
+    .catch(() => null);
 
   const deployments = await readDeployments();
   const results: Array<{
@@ -406,25 +397,23 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
           lastStatus: r.sent ? "sent" : "queued_offline",
           lastStatusAt: new Date().toISOString(),
         });
-        if (prisma) {
-          try {
-            await ensurePrismaClient(clientId);
-            await prisma.updateDeployment
-              .create({
-                data: {
-                  id: r.commandId,
-                  version: meta.version,
-                  clientId,
-                  status: r.sent ? "sent" : "queued",
-                },
-              })
-              .catch(() => null);
-          } catch (prismaErr) {
-            console.warn(
-              "[updates] prisma mirror failed (file record kept):",
-              (prismaErr as Error)?.message || prismaErr,
-            );
-          }
+        try {
+          await ensurePrismaClient(clientId);
+          await prisma.updateDeployment
+            .create({
+              data: {
+                id: r.commandId,
+                version: meta.version,
+                clientId,
+                status: r.sent ? "sent" : "queued",
+              },
+            })
+            .catch(() => null);
+        } catch (prismaErr) {
+          console.warn(
+            "[updates] prisma mirror failed (file record kept):",
+            (prismaErr as Error)?.message || prismaErr,
+          );
         }
       }
     } catch (e) {

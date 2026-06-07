@@ -1,13 +1,9 @@
 import { Router } from "express";
-import fs from "fs";
-import fsPromises from "fs/promises";
-import path from "path";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
 import { getSenderClientId } from "../clientId";
 import { getClient, saveClient } from "../store";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
-import { resolveUploadDir } from "../runtimePaths";
 import { makeId } from "../services/id";
 import { resolveProjectFromPath } from "../services/projectResolver";
 import { classifyActivity } from "../services/rulesClassifier";
@@ -82,7 +78,6 @@ async function readEncryptedPayload(req: any, clientId: string): Promise<{ paylo
 }
 
 async function getRootsAndAliases() {
-  if (!prisma) return { roots: [], aliases: [] };
   const [roots, aliases] = await Promise.all([
     prisma.projectRoot.findMany({ where: { isActive: true } }),
     prisma.projectAlias.findMany(),
@@ -90,22 +85,12 @@ async function getRootsAndAliases() {
   return { roots, aliases };
 }
 
-async function appendFallback(clientId: string, item: any): Promise<void> {
-  const dir = path.join(resolveUploadDir(), "work_sessions");
-  await fsPromises.mkdir(dir, { recursive: true });
-  await fsPromises.appendFile(
-    path.join(dir, `${clientId}.jsonl`),
-    JSON.stringify({ ...item, _ingestedAt: new Date().toISOString() }) + "\n",
-    "utf-8",
-  );
-}
-
 async function markUnknownPath(input: {
   filePath?: string;
   clientId: string;
   processName?: string;
 }): Promise<void> {
-  if (!prisma || !input.filePath) return;
+  if (!input.filePath) return;
   const id = makeId("unknown_path");
   await prisma.unknownProjectPath.upsert({
     where: { path: input.filePath },
@@ -120,19 +105,6 @@ async function markUnknownPath(input: {
       path: input.filePath,
       clientId: input.clientId,
       processName: input.processName || undefined,
-    },
-  });
-}
-
-async function ensurePrismaClient(clientId: string): Promise<void> {
-  if (!prisma) return;
-  const fileClient = await getClient(clientId);
-  await prisma.client.upsert({
-    where: { id: clientId },
-    update: fileClient?.encryptionKey ? { encryptionKey: fileClient.encryptionKey } : {},
-    create: {
-      id: clientId,
-      encryptionKey: fileClient?.encryptionKey || "",
     },
   });
 }
@@ -165,11 +137,6 @@ async function ingestEnvelope(raw: WorkEnvelope, fallbackClientId: string): Prom
 
   await saveClient({ id: clientId, lastSeen: new Date() });
 
-  if (!prisma) {
-    await appendFallback(clientId, { raw, payload, projectName, folderPath, classification });
-    return;
-  }
-
   const existingEvent = await prisma.workSessionEvent.findUnique({
     where: { eventId },
     select: { eventId: true },
@@ -181,8 +148,6 @@ async function ingestEnvelope(raw: WorkEnvelope, fallbackClientId: string): Prom
   if (filePath && projectResolution.isExternal && !projectName) {
     await markUnknownPath({ filePath, clientId, processName });
   }
-
-  await ensurePrismaClient(clientId);
 
   await prisma.workSession.upsert({
     where: { id: sessionId },
@@ -276,7 +241,6 @@ router.post("/events", async (req, res) => {
 });
 
 router.get("/projects", requireAuth, async (req, res) => {
-  if (!prisma) return res.json({ data: [], total: 0 });
   const from = toDate(req.query.from || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
   const to = toDate(req.query.to || new Date().toISOString());
   const rows = await prisma.workSession.groupBy({
@@ -300,7 +264,6 @@ router.get("/projects", requireAuth, async (req, res) => {
 });
 
 router.get("/unknown", requireAuth, async (req, res) => {
-  if (!prisma) return res.json({ data: [], total: 0 });
   const fromRaw = String(req.query.from || "").trim();
   const toRaw = String(req.query.to || "").trim();
   const where: any = { ignored: false, resolvedProjectName: null };
@@ -318,7 +281,6 @@ router.get("/unknown", requireAuth, async (req, res) => {
 });
 
 router.put("/unknown/:id/resolve", requireAuth, async (req, res) => {
-  if (!prisma) return res.status(503).json({ message: "Prisma unavailable" });
   const id = String(req.params.id);
   const projectName = String(req.body?.projectName || "").trim();
   if (!projectName) return res.status(400).json({ message: "projectName required" });
@@ -330,13 +292,11 @@ router.put("/unknown/:id/resolve", requireAuth, async (req, res) => {
 });
 
 router.get("/project-roots", requireAuth, async (_req, res) => {
-  if (!prisma) return res.json({ data: [], total: 0 });
   const data = await prisma.projectRoot.findMany({ orderBy: { createdAt: "desc" } });
   res.json({ data, total: data.length });
 });
 
 router.post("/project-roots", requireAuth, async (req, res) => {
-  if (!prisma) return res.status(503).json({ message: "Prisma unavailable" });
   const name = String(req.body?.name || "").trim();
   const rootPath = String(req.body?.path || "").trim();
   if (!name || !rootPath) return res.status(400).json({ message: "name and path required" });
@@ -347,19 +307,16 @@ router.post("/project-roots", requireAuth, async (req, res) => {
 });
 
 router.delete("/project-roots/:id", requireAuth, async (req, res) => {
-  if (!prisma) return res.status(503).json({ message: "Prisma unavailable" });
   await prisma.projectRoot.delete({ where: { id: String(req.params.id) } });
   res.json({ ok: true });
 });
 
 router.get("/project-aliases", requireAuth, async (_req, res) => {
-  if (!prisma) return res.json({ data: [], total: 0 });
   const data = await prisma.projectAlias.findMany({ orderBy: { createdAt: "desc" } });
   res.json({ data, total: data.length });
 });
 
 router.post("/project-aliases", requireAuth, async (req, res) => {
-  if (!prisma) return res.status(503).json({ message: "Prisma unavailable" });
   const alias = String(req.body?.alias || "").trim();
   const projectName = String(req.body?.projectName || "").trim();
   if (!alias || !projectName) return res.status(400).json({ message: "alias and projectName required" });
@@ -370,7 +327,6 @@ router.post("/project-aliases", requireAuth, async (req, res) => {
 });
 
 router.delete("/project-aliases/:id", requireAuth, async (req, res) => {
-  if (!prisma) return res.status(503).json({ message: "Prisma unavailable" });
   await prisma.projectAlias.delete({ where: { id: String(req.params.id) } });
   res.json({ ok: true });
 });

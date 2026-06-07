@@ -8,7 +8,8 @@ datasource db {
 
 // Prisma client generator
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 enum Role {
@@ -69,18 +70,30 @@ model User {
 }
 
 model Client {
-  id            String    @id // matches ProctorSettings.ClientId
-  encryptionKey String
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  events        Event[]
-  heartbeats    Heartbeat[]
-  screenshots   Screenshot[]
-  reports       Report[]
-  activities    Activity[]
-  workSessions  WorkSession[]
-  workEvents    WorkSessionEvent[]
-  updateDeployments UpdateDeployment[]
+  id                     String    @id // matches ProctorSettings.ClientId
+  encryptionKey          String
+  category               String?
+  hostname               String?
+  os                     String?
+  version                String?
+  lastSeen               DateTime?
+  lastHeartbeat          DateTime?
+  lastActivity           DateTime?
+  lastActivityActiveMs   Int       @default(0)
+  lastActivityInactiveMs Int       @default(0)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  events                 Event[]
+  heartbeats             Heartbeat[]
+  screenshots            Screenshot[]
+  reports                Report[]
+  activities             Activity[]
+  workSessions           WorkSession[]
+  workEvents             WorkSessionEvent[]
+  updateDeployments      UpdateDeployment[]
+  appUsages              AppUsage[]
+  commandResults         CommandResult[]
+  timesheetDays          TimesheetDay[]
 }
 
 model Event {
@@ -273,4 +286,45 @@ model Activity {
   createdAt         DateTime @default(now())
 
   @@index([clientId, timestamp])
+}
+
+model AppUsage {
+  id          Int      @id @default(autoincrement())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  processName String
+  count       Int      @default(0)
+  lastSeen    DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([clientId, processName])
+  @@index([clientId, lastSeen])
+}
+
+model CommandResult {
+  id          Int      @id @default(autoincrement())
+  commandId   String
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  payload     Json
+  receivedAt  DateTime @default(now())
+
+  @@index([commandId, receivedAt])
+  @@index([clientId, receivedAt])
+}
+
+model TimesheetDay {
+  id         Int      @id @default(autoincrement())
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  startTime  DateTime?
+  endTime    DateTime?
+  activeMs   BigInt   @default(0)
+  presenceMs BigInt   @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([clientId, date])
 }

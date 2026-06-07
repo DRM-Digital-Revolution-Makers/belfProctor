@@ -386,16 +386,46 @@ public class SettingsForm : Form
             {
                 if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
 
-                // Check for existing running process in install path and kill it
+                // Stop the Windows service first — it owns the running exe as
+                // LocalSystem, so a user-mode Process.Kill cannot release the
+                // file lock. sc.exe stop succeeds for both admin and a service
+                // that allows user control; if neither, the catch below falls
+                // through to Kill+overwrite which may still fail.
+                try
+                {
+                    var stopPsi = new ProcessStartInfo("sc.exe", "stop BelfProctor")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                    };
+                    using var stopProc = Process.Start(stopPsi);
+                    stopProc?.WaitForExit(10000);
+                    // Give SCM a moment to release the file handle even after
+                    // STATE: STOPPED is reported.
+                    for (int i = 0; i < 20; i++)
+                    {
+                        try
+                        {
+                            using var probe = File.Open(installPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                            break;
+                        }
+                        catch { System.Threading.Thread.Sleep(250); }
+                    }
+                }
+                catch { }
+
+                // Best-effort: also kill any lingering user-mode processes by name.
                 var existingProcess = Process.GetProcessesByName("BelfProctor").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id))
                     ?? Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
                 if (existingProcess != null)
                 {
-                    try 
-                    { 
-                        existingProcess.Kill(); 
+                    try
+                    {
+                        existingProcess.Kill();
                         existingProcess.WaitForExit(3000);
-                    } 
+                    }
                     catch { }
                 }
 

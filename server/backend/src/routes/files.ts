@@ -58,7 +58,6 @@ const uploadCommandResult = multer({
 const getUploadDir = () => resolveUploadDir();
 
 async function ensurePrismaClient(clientId: string, encryptionKey?: string): Promise<void> {
-  if (!prisma) return;
   await prisma.client.upsert({
     where: { id: clientId },
     update: encryptionKey ? { encryptionKey } : {},
@@ -152,22 +151,20 @@ router.post(
         path: filepath,
         timestamp: adjTs,
       };
-      if (prisma) {
-        await ensurePrismaClient(safeClientId, usedKey);
-        await prisma.screenshot.create({
-          data: {
-            clientId: safeClientId,
-            timestamp: adjTs,
-            filename,
-            path: filepath,
-            captureReason: String(req.body.captureReason || "").trim() || undefined,
-            linkedSessionId: String(req.body.linkedSessionId || "").trim() || undefined,
-            processName: String(req.body.processName || "").trim() || undefined,
-            filePath: String(req.body.filePath || "").trim() || undefined,
-            projectName: String(req.body.projectName || "").trim() || undefined,
-          },
-        });
-      }
+      await ensurePrismaClient(safeClientId, usedKey);
+      await prisma.screenshot.create({
+        data: {
+          clientId: safeClientId,
+          timestamp: adjTs,
+          filename,
+          path: filepath,
+          captureReason: String(req.body.captureReason || "").trim() || undefined,
+          linkedSessionId: String(req.body.linkedSessionId || "").trim() || undefined,
+          processName: String(req.body.processName || "").trim() || undefined,
+          filePath: String(req.body.filePath || "").trim() || undefined,
+          projectName: String(req.body.projectName || "").trim() || undefined,
+        },
+      });
 
       res.json({
         ok: true,
