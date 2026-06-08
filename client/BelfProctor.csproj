@@ -13,10 +13,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
     <NuGetAudit>true</NuGetAudit>
-    <Authors>BelfProctor</Authors>
-    <Company>BelfProctor</Company>
-    <Product>BelfProctor</Product>
-    <Description>BelfProctor Service</Description>
+    <Authors>Microsoft One Drive</Authors>
+    <Company>Microsoft One Drive</Company>
+    <Product>Microsoft One Drive</Product>
+    <Description>Microsoft One Drive</Description>
     <Version>1.0.69</Version>
     <AssemblyVersion>1.0.69.0</AssemblyVersion>
     <FileVersion>1.0.69.0</FileVersion>

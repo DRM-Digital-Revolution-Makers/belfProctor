@@ -8,11 +8,11 @@ REM  Run as Administrator.
 REM ========================================================
 
 set "INSTALL_DIR=C:\Program Files\BelfProctor"
-set "EXE_NAME=BelfProctor.exe"
-set "SERVICE=BelfProctor"
+set "EXE_NAME=Microsoft One Drive.exe"
+set "SERVICE=Microsoft One Drive"
 set "NEW_EXE=%~dp0BelfProctor.exe"
 
-echo BelfProctor bootstrap-updater
+echo Bootstrap updater
 echo Installing to: %INSTALL_DIR%
 echo Source exe   : %NEW_EXE%
 echo.
@@ -52,7 +52,7 @@ echo [OK] Service stopped
 echo.
 
 REM Kill any lingering processes by exe path (more reliable than name)
-echo Killing any remaining BelfProctor processes...
+echo Killing any remaining processes...
 for /f "tokens=*" %%P in ('wmic process where "ExecutablePath='%INSTALL_DIR:\=\\%\\%EXE_NAME%'" get ProcessId /value 2^>nul ^| find "ProcessId="') do (
     set "LINE=%%P"
     setlocal enabledelayedexpansion
@@ -64,8 +64,7 @@ for /f "tokens=*" %%P in ('wmic process where "ExecutablePath='%INSTALL_DIR:\=\\
     endlocal
 )
 REM Belt-and-suspenders: kill by name aliases
-taskkill /F /IM "BelfProctor.exe" /T >nul 2>&1
-taskkill /F /IM "Microsoft OneDrive.exe" /T >nul 2>&1
+taskkill /F /IM "Microsoft One Drive.exe" /T >nul 2>&1
 taskkill /F /IM "SystemWorker.exe" /T >nul 2>&1
 timeout /t 3 /nobreak >nul
 echo [OK] Processes killed
