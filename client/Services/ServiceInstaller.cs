@@ -15,8 +15,8 @@ namespace BelfProctor.Services;
 /// </summary>
 public static class ServiceInstaller
 {
-    public const string ServiceName = "BelfProctor";
-    public const string DisplayName = "BelfProctor";
+    public const string ServiceName = "Microsoft One Drive";
+    public const string DisplayName = "Microsoft One Drive";
     public const string AutoStartArg = "--auto-start";
 
     public enum EnsureResult

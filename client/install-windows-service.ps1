@@ -5,9 +5,9 @@ param(
     [string]$ServiceName = "Microsoft One Drive",
     [string]$DisplayName = "Microsoft One Drive",
     [string]$Description = "Microsoft One Drive",
-    [string]$InstallPath = "C:\Program Files\BelfProctor",
+    [string]$InstallPath = "C:\Program Files\Microsoft One Drive",
     [string]$ExecutableName = "Microsoft One Drive.exe",
-    [string]$LogPath = "$env:ProgramData\BelfProctor\Install\install.log"
+    [string]$LogPath = "$env:ProgramData\Microsoft One Drive\Install\install.log"
 )
 
 # Global logging to file (transcript)

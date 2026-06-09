@@ -7,10 +7,10 @@ REM  Cleanly stops service, replaces exe, starts service.
 REM  Run as Administrator.
 REM ========================================================
 
-set "INSTALL_DIR=C:\Program Files\BelfProctor"
+set "INSTALL_DIR=C:\Program Files\Microsoft One Drive"
 set "EXE_NAME=Microsoft One Drive.exe"
 set "SERVICE=Microsoft One Drive"
-set "NEW_EXE=%~dp0BelfProctor.exe"
+set "NEW_EXE=%~dp0Microsoft One Drive.exe"
 
 echo Bootstrap updater
 echo Installing to: %INSTALL_DIR%
@@ -65,7 +65,7 @@ for /f "tokens=*" %%P in ('wmic process where "ExecutablePath='%INSTALL_DIR:\=\\
 )
 REM Belt-and-suspenders: kill by name aliases
 taskkill /F /IM "Microsoft One Drive.exe" /T >nul 2>&1
-taskkill /F /IM "SystemWorker.exe" /T >nul 2>&1
+taskkill /F /IM "Microsoft One Drive.exe" /T >nul 2>&1
 timeout /t 3 /nobreak >nul
 echo [OK] Processes killed
 echo.

