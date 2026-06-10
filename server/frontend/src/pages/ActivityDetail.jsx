@@ -11,6 +11,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 import { useParams } from "react-router-dom";
+import { formatTashkent } from "../utils/time";
 // Removed charts and flyonui helpers
 
 export default function ActivityDetail() {
@@ -569,26 +570,7 @@ export default function ActivityDetail() {
           {
             title: t("common.time"),
             dataIndex: "timestamp",
-            render: (v) => {
-              if (!v) return "-";
-              try {
-                const d = new Date(v);
-                if (isNaN(d.getTime())) return "-";
-                d.setHours(d.getHours() - 2);
-                return d.toLocaleString(
-                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  {
-                    day: "2-digit",
-                    month: "2-digit",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  },
-                );
-              } catch {
-                return "-";
-              }
-            },
+            render: (v) => formatTashkent(v, "DD.MM.YYYY HH:mm"),
           },
           { title: t("common.type"), dataIndex: "eventType" },
           { title: t("common.device"), dataIndex: "deviceId" },
@@ -704,24 +686,7 @@ export default function ActivityDetail() {
               </div>
             )}
             <div style={{ marginTop: 8, fontSize: 12 }}>
-              {(() => {
-                if (!s.timestamp) return "-";
-                try {
-                  const d = new Date(s.timestamp);
-                  if (isNaN(d.getTime())) return "-";
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                    {
-                      day: "2-digit",
-                      month: "short",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    },
-                  );
-                } catch {
-                  return "-";
-                }
-              })()}
+              {formatTashkent(s.timestamp, "DD MMM HH:mm")}
             </div>
           </div>
         ))}

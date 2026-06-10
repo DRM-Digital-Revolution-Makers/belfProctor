@@ -14,4 +14,12 @@ public interface IDataTransmissionService
     Task SendCommandResultFileAsync(string commandId, string filePath);
     Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds);
     Task SendClientLogChunkAsync(string fileName, string text);
+    Task SendPcSessionEventAsync(string kind, DateTime utcTimestamp, string bootId);
+    Task SendBrowserActivityAsync(IReadOnlyList<BrowserVisit> visits);
+
+    /// <summary>
+    /// Raised on the first successful heartbeat after process start.
+    /// PcSessionService subscribes to delay the Boot event until the channel is up.
+    /// </summary>
+    event Action? HeartbeatSucceeded;
 }

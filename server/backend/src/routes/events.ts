@@ -90,11 +90,9 @@ router.post("/", async (req, res) => {
       const timestamp = new Date(p.Timestamp || p.timestamp || Date.now());
       const processName = p.ProcessName || p.processName;
 
-      // Update stats for ProcessStarted AND AppUsage
-      if (
-        (eventType === "ProcessStarted" || eventType === "AppUsage") &&
-        processName
-      ) {
+      // Update stats only for foreground AppUsage so Top-apps reflect
+      // what the user actually interacted with, not every spawned process.
+      if (eventType === "AppUsage" && processName) {
         await upsertAppStat(clientId, processName, timestamp);
       }
 

@@ -46,4 +46,5 @@ public class FeatureSettings
     public bool ProjectMapping { get; set; } = true;
     public bool LiveView { get; set; } = true;
     public bool RulesClassifier { get; set; } = true;
+    public bool BrowserActivity { get; set; } = false;
 }

@@ -1,0 +1,140 @@
+import express from "express";
+import request from "supertest";
+import { encryptAes256CbcPrefixedIv } from "../encryption";
+
+const createManyMock = jest.fn();
+const findManyMock = jest.fn();
+const groupByMock = jest.fn();
+
+jest.mock("../prisma", () => ({
+  prisma: {
+    browserActivity: {
+      createMany: (...a: unknown[]) => createManyMock(...a),
+      findMany: (...a: unknown[]) => findManyMock(...a),
+      groupBy: (...a: unknown[]) => groupByMock(...a),
+    },
+  },
+}));
+
+jest.mock("../store", () => ({
+  getClient: jest.fn().mockResolvedValue({
+    id: "CLIENT_TEST",
+    encryptionKey: "test_key_for_jest_unit_tests",
+  }),
+  saveClient: jest.fn().mockResolvedValue(undefined),
+}));
+
+import browserActivityRouter from "../routes/browserActivity";
+
+function buildApp() {
+  const app = express();
+  app.use(
+    "/api/browser-activity",
+    express.raw({ type: "application/octet-stream", limit: "5mb" }),
+  );
+  app.use("/api/browser-activity", browserActivityRouter);
+  return app;
+}
+
+function encrypted(payload: unknown): Buffer {
+  return encryptAes256CbcPrefixedIv(
+    Buffer.from(JSON.stringify(payload), "utf8"),
+    "test_key_for_jest_unit_tests",
+  );
+}
+
+describe("POST /api/browser-activity", () => {
+  beforeEach(() => {
+    createManyMock.mockReset().mockResolvedValue({ count: 2 });
+    findManyMock.mockReset();
+    groupByMock.mockReset();
+  });
+
+  it("extracts domains and inserts rows skipping duplicates", async () => {
+    const app = buildApp();
+    const body = encrypted([
+      {
+        Url: "https://www.example.com/some/page?q=1",
+        Title: "Example",
+        Browser: "Chrome",
+        Profile: "Default",
+        VisitedAtUtc: "2026-06-11T10:00:00.000Z",
+      },
+      {
+        Url: "https://docs.google.com/document/d/123",
+        Title: "Doc",
+        Browser: "Chrome",
+        Profile: "Default",
+        VisitedAtUtc: "2026-06-11T10:05:00.000Z",
+      },
+    ]);
+
+    await request(app)
+      .post("/api/browser-activity")
+      .set("X-Client-Id", "CLIENT_TEST")
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(200);
+
+    expect(createManyMock).toHaveBeenCalledTimes(1);
+    const call = createManyMock.mock.calls[0][0];
+    expect(call.skipDuplicates).toBe(true);
+    expect(call.data).toHaveLength(2);
+    expect(call.data[0]).toMatchObject({
+      clientId: "CLIENT_TEST",
+      url: "https://www.example.com/some/page?q=1",
+      domain: "www.example.com",
+      browser: "chrome",
+      profile: "Default",
+      title: "Example",
+    });
+    expect(call.data[1].domain).toBe("docs.google.com");
+  });
+
+  it("drops invalid URLs and empty rows", async () => {
+    const app = buildApp();
+    const body = encrypted([
+      {
+        Url: "not a url",
+        Browser: "Chrome",
+        VisitedAtUtc: "2026-06-11T10:00:00.000Z",
+      },
+      {
+        // missing url
+        Browser: "Chrome",
+        VisitedAtUtc: "2026-06-11T10:01:00.000Z",
+      },
+      {
+        Url: "https://valid.example/",
+        Browser: "Chrome",
+        VisitedAtUtc: "2026-06-11T10:02:00.000Z",
+      },
+    ]);
+
+    await request(app)
+      .post("/api/browser-activity")
+      .set("X-Client-Id", "CLIENT_TEST")
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(200);
+
+    const call = createManyMock.mock.calls[0][0];
+    expect(call.data).toHaveLength(1);
+    expect(call.data[0].domain).toBe("valid.example");
+  });
+
+  it("returns 0 inserted when there are no usable rows", async () => {
+    const app = buildApp();
+    const body = encrypted([]);
+
+    const res = await request(app)
+      .post("/api/browser-activity")
+      .set("X-Client-Id", "CLIENT_TEST")
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true, inserted: 0 });
+    expect(createManyMock).not.toHaveBeenCalled();
+  });
+});

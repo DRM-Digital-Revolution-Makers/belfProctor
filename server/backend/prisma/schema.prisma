@@ -94,6 +94,8 @@ model Client {
   appUsages              AppUsage[]
   commandResults         CommandResult[]
   timesheetDays          TimesheetDay[]
+  pcSessions             PcSession[]
+  browserActivity        BrowserActivity[]
 }
 
 model Event {
@@ -327,4 +329,38 @@ model TimesheetDay {
   updatedAt  DateTime @updatedAt
 
   @@unique([clientId, date])
+}
+
+model PcSession {
+  id         String    @id @default(cuid())
+  clientId   String
+  client     Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  bootAt     DateTime
+  shutdownAt DateTime?
+  // "explicit" — client sent boot/shutdown events
+  // "heartbeat_gap" — server inferred from missing heartbeats (>= 10 min)
+  // "explicit_with_gap_close" — explicit boot, server-inferred shutdown
+  source     String
+  bootId     String?   @unique
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([clientId, bootAt])
+}
+
+model BrowserActivity {
+  id        Int      @id @default(autoincrement())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  url       String
+  domain    String
+  title     String?
+  browser   String
+  profile   String?
+  visitedAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([clientId, visitedAt])
+  @@index([clientId, domain])
+  @@unique([clientId, browser, profile, url, visitedAt])
 }

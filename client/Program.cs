@@ -175,6 +175,7 @@ public class Program
                     ProjectMapping = GetFeature("ProjectMapping", true),
                     LiveView = GetFeature("LiveView", true),
                     RulesClassifier = GetFeature("RulesClassifier", true),
+                    BrowserActivity = GetFeature("BrowserActivity", false),
                 };
             }
 
@@ -264,6 +265,8 @@ public class Program
             builder.Services.AddHostedService<WorkTrackingService>();
             builder.Services.AddHostedService<CommandChannelWorker>();
             builder.Services.AddHostedService<ClientLogUploadWorker>();
+            builder.Services.AddHostedService<PcSessionService>();
+            builder.Services.AddHostedService<BrowserActivityService>();
 
             var fileLoggerProvider = new RollingFileLoggerProvider(Options.Create(settings));
             builder.Services.AddLogging(logging =>

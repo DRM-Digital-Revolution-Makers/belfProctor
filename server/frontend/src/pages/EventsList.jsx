@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider.js";
+import { formatTashkent } from "../utils/time";
 
 /* ============ Design primitives (pixel-perfect Figma) ============ */
 
@@ -731,19 +732,7 @@ export default function EventsList() {
               title: t("common.time"),
               dataIndex: "timestamp",
               width: 180,
-              render: (v) => {
-                if (!v) return "-";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "-";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "-";
-                }
-              },
+              render: (v) => formatTashkent(v),
             },
             {
               title: t("common.browser"),

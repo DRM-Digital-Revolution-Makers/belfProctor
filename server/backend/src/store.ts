@@ -1,5 +1,11 @@
 import { Prisma, PrismaClient, Role, SystemEventType } from "@prisma/client";
 import { withLock } from "./locks";
+import {
+  endOfTashkentDay,
+  startOfTashkentDay,
+  tashkentDayKey,
+  tashkentHourOf,
+} from "./tz";
 
 const prisma = new PrismaClient();
 
@@ -25,20 +31,18 @@ function toDate(value: unknown): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+// Day boundaries follow Asia/Tashkent (UTC+5) so daily aggregations match
+// what the user sees on the clock, regardless of where the server runs.
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return tashkentDayKey(d);
 }
 
 function startOfDay(date: Date): Date {
-  const d = new Date(date);
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
+  return startOfTashkentDay(date);
 }
 
 function endOfDay(date: Date): Date {
-  const d = new Date(date);
-  d.setUTCHours(23, 59, 59, 999);
-  return d;
+  return endOfTashkentDay(date);
 }
 
 function activityDelta(
@@ -450,7 +454,7 @@ export async function streamDailyActivitySummary(
     const { activeMs: addA, inactiveMs: addI } = activityDelta(curr, prev);
     activeMs += addA;
     inactiveMs += addI;
-    const hour = curr.timestamp.getUTCHours();
+    const hour = tashkentHourOf(curr.timestamp);
     if (hour >= 0 && hour < 24) {
       hourly[hour].activeMs += addA;
       hourly[hour].inactiveMs += addI;

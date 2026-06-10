@@ -30,7 +30,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.EventLog" Version="8.0.0" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
   </ItemGroup>
 
   <ItemGroup>
@@ -54,6 +54,7 @@
     <Compile Include="Models\SystemEvent.cs" />
     <Compile Include="Models\Command.cs" />
     <Compile Include="Models\WorkEvent.cs" />
+    <Compile Include="Models\BrowserVisit.cs" />
     <Compile Include="Services\DataTransmissionService.cs" />
     <Compile Include="Services\IDataTransmissionService.cs" />
     <Compile Include="Services\IActivityMonitorService.cs" />
@@ -74,6 +75,8 @@
     <Compile Include="Services\StabilityService.cs" />
     <Compile Include="Services\SystemMonitorService.cs" />
     <Compile Include="Services\ActivityMonitorService.cs" />
+    <Compile Include="Services\PcSessionService.cs" />
+    <Compile Include="Services\BrowserActivityService.cs" />
     <Compile Include="Services\RollingFileLoggerProvider.cs" />
     <Compile Include="Services\WorkTracking\*.cs" />
     <Compile Include="UI\SettingsForm.cs" />

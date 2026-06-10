@@ -21,6 +21,9 @@ import activityRouter from "./routes/activity";
 import logsRouter from "./routes/logs";
 import updatesRouter, { appendDeploymentStatus } from "./routes/updates";
 import workRouter from "./routes/work";
+import pcSessionRouter from "./routes/pcSession";
+import browserActivityRouter from "./routes/browserActivity";
+import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -151,6 +154,14 @@ app.use(
   "/api/logs",
   express.raw({ type: "application/octet-stream", limit: "1mb" }),
 );
+app.use(
+  "/api/pc-session",
+  express.raw({ type: "application/octet-stream", limit: "256kb" }),
+);
+app.use(
+  "/api/browser-activity",
+  express.raw({ type: "application/octet-stream", limit: "5mb" }),
+);
 // Use raw parser only for the specific octet-stream endpoint to avoid breaking JSON admin endpoints under /api/commands
 
 // Routes
@@ -164,6 +175,8 @@ app.use("/api/activity", activityRouter);
 app.use("/api/logs", logsRouter);
 app.use("/api/updates", updatesRouter);
 app.use("/api/work", workRouter);
+app.use("/api/pc-session", pcSessionRouter);
+app.use("/api/browser-activity", browserActivityRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -450,6 +463,8 @@ setTimeout(() => {
       },
       6 * 60 * 60 * 1000,
     );
+
+    startHeartbeatGapDetector();
   })();
 }, 30_000);
 

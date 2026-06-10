@@ -29,6 +29,9 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
+import { formatTashkent } from "../utils/time";
+import PcSessionsToday from "../components/PcSessionsToday";
+import BrowserActivityPanel from "../components/BrowserActivityPanel";
 
 /* ============ Design tokens (pixel-perfect Figma) ============ */
 const BP = {
@@ -1218,6 +1221,14 @@ function DayTab({
         />
       </div>
 
+      <div style={{ marginTop: 12 }}>
+        <PcSessionsToday clientId={id} />
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <BrowserActivityPanel clientId={id} />
+      </div>
+
       {/* Working day card */}
       <div
         style={{
@@ -2254,27 +2265,7 @@ function AppsTab({ clientId, t, i18n }) {
               title: t("common.time"),
               dataIndex: "timestamp",
               width: 160,
-              render: (v) => {
-                if (!v) return "—";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "—";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                    {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    },
-                  );
-                } catch {
-                  return "—";
-                }
-              },
+              render: (v) => formatTashkent(v),
             },
             { title: t("common.type"), dataIndex: "eventType", width: 140 },
             {
@@ -2366,19 +2357,7 @@ function AppsTab({ clientId, t, i18n }) {
               title: t("common.time"),
               dataIndex: "timestamp",
               width: 180,
-              render: (v) => {
-                if (!v) return "—";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "—";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "—";
-                }
-              },
+              render: (v) => formatTashkent(v),
             },
             {
               title: t("common.browser"),
