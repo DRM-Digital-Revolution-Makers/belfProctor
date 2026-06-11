@@ -32,3 +32,11 @@ export function endOfTashkentDay(d: Date): Date {
 export function tashkentHourOf(d: Date): number {
   return parseInt(formatInTimeZone(d, TASHKENT_TZ, "H"), 10);
 }
+
+/**
+ * Minutes-since-midnight (0..1439) in Tashkent time. Use for HH:mm time-of-day filters.
+ */
+export function tashkentMinutesOfDay(d: Date): number {
+  const [h, m] = formatInTimeZone(d, TASHKENT_TZ, "H:m").split(":");
+  return parseInt(h, 10) * 60 + parseInt(m, 10);
+}

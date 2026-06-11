@@ -18,15 +18,21 @@ import {
 import { requestClientUninstall } from "../wsHub";
 import { resolveUploadDir } from "../runtimePaths";
 import { prisma } from "../prisma";
+import {
+  startOfTashkentDay,
+  endOfTashkentDay,
+  tashkentHourOf,
+  tashkentMinutesOfDay,
+  tashkentDayKey,
+} from "../tz";
 
 const router = Router();
 
+// Boundaries follow Asia/Tashkent (UTC+5) — a "day" on the dashboard means
+// the user's local calendar day, not the server-container UTC day.
 function dateRangeFromDay(dateStr: string): { start: Date; end: Date } {
-  const start = new Date(dateStr);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(dateStr);
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
+  const anchor = new Date(`${dateStr}T12:00:00Z`);
+  return { start: startOfTashkentDay(anchor), end: endOfTashkentDay(anchor) };
 }
 
 function toNumberMs(value: unknown): number {
@@ -154,8 +160,10 @@ router.get("/categories", requireAuth, async (_req, res) => {
 router.get("/:id/work-summary", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id);
+    // Default to today's calendar day in Asia/Tashkent so the dashboard matches
+    // what the user sees on their own clock, not the server-container UTC day.
     const dateStr =
-      String(req.query.date || "").trim() || new Date().toISOString().slice(0, 10);
+      String(req.query.date || "").trim() || tashkentDayKey(new Date());
     const { start, end } = dateRangeFromDay(dateStr);
     const sessions = await prisma.workSession.findMany({
       where: { clientId: id, startedAt: { gte: start, lte: end } },
@@ -316,11 +324,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     return res.status(400).json({ message: "Date required (YYYY-MM-DD)" });
   }
 
-  const startOfDay = new Date(dateStr);
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date(dateStr);
-  endOfDay.setHours(23, 59, 59, 999);
+  const { start: startOfDay, end: endOfDay } = dateRangeFromDay(dateStr);
 
   // 1. Activity: stream + compute aggregates (no arrays, CPU-bound)
   const {
@@ -361,8 +365,8 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
           url: `/api/screenshots/${f}/file`,
         });
 
-        // Add to hourly stats
-        const hour = timestamp.getHours();
+        // Add to hourly stats (Tashkent-anchored — matches the dashboard's day boundary)
+        const hour = tashkentHourOf(timestamp);
         if (hour >= 0 && hour < 24) {
           hourlyStats[hour].screenshotsCount++;
         }
@@ -405,11 +409,8 @@ router.get("/:id/screenshots/pdf", requireAuth, async (req, res) => {
     return res.status(400).json({ message: "from/to required (YYYY-MM-DD)" });
   }
 
-  const startOfRange = new Date(fromStr);
-  startOfRange.setHours(0, 0, 0, 0);
-
-  const endOfRange = new Date(toStr);
-  endOfRange.setHours(23, 59, 59, 999);
+  const { start: startOfRange } = dateRangeFromDay(fromStr);
+  const { end: endOfRange } = dateRangeFromDay(toStr);
 
   let startMinutes: number | null = null;
   let endMinutes: number | null = null;
@@ -464,7 +465,7 @@ router.get("/:id/screenshots/pdf", requireAuth, async (req, res) => {
       if (ts < startOfRange || ts > endOfRange) continue;
 
       if (startMinutes !== null && endMinutes !== null) {
-        const mins = ts.getHours() * 60 + ts.getMinutes();
+        const mins = tashkentMinutesOfDay(ts);
         if (mins < startMinutes || mins > endMinutes) continue;
       }
 
@@ -539,8 +540,13 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
   }
 
   const [year, month] = dateStr.split("-").map(Number);
-  const startOfMonth = new Date(year, month - 1, 1);
-  const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+  // Month boundaries follow Asia/Tashkent: the first day's 00:00 in Tashkent
+  // through the last day's 23:59 in Tashkent.
+  const firstDayStr = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const lastDayStr = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const { start: startOfMonth } = dateRangeFromDay(firstDayStr);
+  const { end: endOfMonth } = dateRangeFromDay(lastDayStr);
 
   // 1. Activity: stream + compute daily aggregates (no arrays)
   const { dailyActivity, totalActiveMs, totalInactiveMs } =

@@ -111,12 +111,22 @@ router.post("/", async (req, res) => {
       return res.json({ ok: true, inserted: 0 });
     }
 
-    const result = await prisma.browserActivity.createMany({
-      data: rows,
-      skipDuplicates: true,
-    });
+    // Dedup is enforced by the functional unique index on md5(url) — but Prisma
+    // can't address a functional index from `skipDuplicates`. Insert one row at
+    // a time and swallow unique-constraint errors so a single duplicate doesn't
+    // poison the whole batch.
+    let inserted = 0;
+    for (const data of rows) {
+      try {
+        await prisma.browserActivity.create({ data });
+        inserted += 1;
+      } catch (err: any) {
+        if (err?.code === "P2002") continue; // duplicate — expected, ignore
+        throw err;
+      }
+    }
 
-    return res.json({ ok: true, inserted: result.count });
+    return res.json({ ok: true, inserted });
   } catch (e) {
     console.error("[browser-activity] ingest failed", e);
     res.status(500).json({ message: "Failed to ingest browser activity" });

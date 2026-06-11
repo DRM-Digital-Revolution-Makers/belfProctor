@@ -360,7 +360,9 @@ model BrowserActivity {
   visitedAt DateTime
   createdAt DateTime @default(now())
 
+  // Dedup uniqueness is enforced via a Postgres functional index on md5(url)
+  // (see migration 20260611001700_browser_activity_url_hash) — Prisma can't
+  // model functional indexes, so we don't declare @@unique here.
   @@index([clientId, visitedAt])
   @@index([clientId, domain])
-  @@unique([clientId, browser, profile, url, visitedAt])
 }

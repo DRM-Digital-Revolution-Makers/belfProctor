@@ -9,6 +9,7 @@ import {
 import { Icon } from "@iconify/react";
 import { authFetch } from "../dataProvider.js";
 import dayjs from "dayjs";
+import MonthlyScreenshotsPdf from "../components/MonthlyScreenshotsPdf";
 import "dayjs/locale/ru";
 import "dayjs/locale/uz-latn";
 import { useTranslation } from "react-i18next";
@@ -763,6 +764,7 @@ export default function Timesheet() {
 
   return (
     <div>
+      <MonthlyScreenshotsPdf clients={clientsList} />
       {/* Outer wrapper */}
       <div
         style={{

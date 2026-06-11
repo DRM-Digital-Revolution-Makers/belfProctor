@@ -360,7 +360,8 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
             bool sent = false;
             var now = DateTime.UtcNow;
-            var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
+            // Embed 'Z' in the filename so the pending-flush parser knows the value is UTC.
+            var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
             var destPending = Path.Combine(_pendingScreenshots, sendName);
 
             using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -369,8 +370,8 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "screenshot", sendName);
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                // Send Local Time exactly as is (no Z, no offset)
-                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                // Explicit Z — server must treat this as UTC, no guessing.
+                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                 AddScreenshotMetadata(content, metadata);
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
@@ -404,9 +405,9 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             try 
             { 
                 var now = DateTime.UtcNow;
-                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
+                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
                 var dest = Path.Combine(_pendingScreenshots, sendName);
-                if (File.Exists(filePath)) File.Move(filePath, dest, true); 
+                if (File.Exists(filePath)) File.Move(filePath, dest, true);
                 TryWriteScreenshotSidecar(dest, metadata);
             } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
@@ -786,7 +787,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "report", Path.GetFileName(reportPath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("reports", content);
                 
@@ -890,7 +891,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "file", Path.GetFileName(filePath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 response = await PostWithAutoDiscoverAsync($"commands/{commandId}/result", content);
             }
@@ -1119,15 +1120,22 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     using (var content = new MultipartFormDataContent())
                     {
                         var sendName = Path.GetFileName(file);
-                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTime(file);
-                        var uploadName = $"{_settings.ClientId}_{timestamp:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
-                        
+                        // Filename was stamped with DateTime.UtcNow at capture time, so parsing it
+                        // gives us back the original UTC. GetCreationTimeUtc is the safe fallback —
+                        // GetCreationTime returns Local, which would later be misread as UTC.
+                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTimeUtc(file);
+                        var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
+                            ? timestamp
+                            : timestamp.ToUniversalTime();
+                        var uploadName = $"{_settings.ClientId}_{utcTimestamp:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
+
                         content.Add(streamContent, "screenshot", uploadName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                        // Explicit 'Z' suffix so the server doesn't have to guess.
+                        content.Add(new StringContent(utcTimestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         var metadata = TryReadScreenshotSidecar(file);
                         AddScreenshotMetadata(content, metadata);
-                        
+
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
                         
                         if (resp.IsSuccessStatusCode) 
@@ -1158,7 +1166,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     {
                         content.Add(streamContent, "report", Path.GetFileName(file));
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                        content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         var resp = await PostWithAutoDiscoverAsync("reports", content);
                         
                         if (resp.IsSuccessStatusCode) 
@@ -1293,7 +1301,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         {
                             content.Add(streamContent, "file", Path.GetFileName(file));
                             content.Add(new StringContent(_settings.ClientId), "clientId");
-                            content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                            content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {
@@ -1350,21 +1358,25 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     private static DateTime? TryExtractTimestampFromFileName(string fileName)
     {
+        // Filename is "CLIENTID_yyyy-MM-ddTHH-mm-ss.fff[.bla].jpg".
+        // Pull the last underscore-separated token, strip extension, parse.
+        // Critically: SendScreenshotAsync now writes DateTime.UtcNow, so the
+        // string IS already UTC — return it tagged DateTimeKind.Utc to avoid
+        // an accidental local-time re-interpretation at the next flush.
         try
         {
-            var name = Path.GetFileNameWithoutExtension(fileName);
-            var parts = name.Split('_');
-            if (parts.Length >= 3)
+            var name = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            var lastUnderscore = name.LastIndexOf('_');
+            if (lastUnderscore < 0 || lastUnderscore >= name.Length - 1) return null;
+            var ts = name.Substring(lastUnderscore + 1);
+            // Strip trailing Z (new format stamps the filename with explicit UTC marker).
+            if (ts.EndsWith("Z", StringComparison.OrdinalIgnoreCase)) ts = ts.Substring(0, ts.Length - 1);
+
+            DateTime parsed;
+            if (DateTime.TryParseExact(ts, "yyyy-MM-ddTHH-mm-ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out parsed) ||
+                DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out parsed))
             {
-                var ts = parts[^1];
-                // Try parsing the format we actually use: yyyy-MM-ddTHH-mm-ss.fff
-                // Also support legacy format just in case
-                if (DateTime.TryParseExact(ts, "yyyy-MM-ddTHH-mm-ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var local) ||
-                    DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out local))
-                {
-                    // Return as is (Unspecified/Local) so it prints cleanly
-                    return local;
-                }
+                return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
             }
         }
         catch { }

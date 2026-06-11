@@ -488,16 +488,7 @@ export default function ActivityDetail() {
       dataIndex: "lastWriteTime",
       key: "lastWriteTime",
       width: 200,
-      render: (text) => {
-        if (!text) return "-";
-        try {
-          const d = new Date(text);
-          if (isNaN(d.getTime())) return "-";
-          return d.toLocaleString(i18n.language === "uz" ? "uz-UZ" : "ru-RU");
-        } catch {
-          return "-";
-        }
-      },
+      render: (text) => formatTashkent(text),
     },
     {
       title: t("common.actions"),

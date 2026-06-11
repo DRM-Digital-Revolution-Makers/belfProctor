@@ -109,7 +109,7 @@ public class PolicyService : IPolicyService
                         // Создаем событие нарушения политики
                         var violationEvent = new SystemEvent
                         {
-                            Timestamp = DateTime.Now,
+                            Timestamp = DateTime.UtcNow,
                             EventType = SystemEventType.PolicyViolation,
                             Description = $"Policy violation: {policy.Name}",
                             AdditionalData = new Dictionary<string, object>

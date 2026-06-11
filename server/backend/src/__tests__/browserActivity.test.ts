@@ -2,14 +2,14 @@ import express from "express";
 import request from "supertest";
 import { encryptAes256CbcPrefixedIv } from "../encryption";
 
-const createManyMock = jest.fn();
+const createMock = jest.fn();
 const findManyMock = jest.fn();
 const groupByMock = jest.fn();
 
 jest.mock("../prisma", () => ({
   prisma: {
     browserActivity: {
-      createMany: (...a: unknown[]) => createManyMock(...a),
+      create: (...a: unknown[]) => createMock(...a),
       findMany: (...a: unknown[]) => findManyMock(...a),
       groupBy: (...a: unknown[]) => groupByMock(...a),
     },
@@ -45,12 +45,12 @@ function encrypted(payload: unknown): Buffer {
 
 describe("POST /api/browser-activity", () => {
   beforeEach(() => {
-    createManyMock.mockReset().mockResolvedValue({ count: 2 });
+    createMock.mockReset().mockResolvedValue(undefined);
     findManyMock.mockReset();
     groupByMock.mockReset();
   });
 
-  it("extracts domains and inserts rows skipping duplicates", async () => {
+  it("extracts domains and inserts each row (one prisma.create per visit)", async () => {
     const app = buildApp();
     const body = encrypted([
       {
@@ -69,18 +69,16 @@ describe("POST /api/browser-activity", () => {
       },
     ]);
 
-    await request(app)
+    const res = await request(app)
       .post("/api/browser-activity")
       .set("X-Client-Id", "CLIENT_TEST")
       .set("Content-Type", "application/octet-stream")
       .send(body)
       .expect(200);
 
-    expect(createManyMock).toHaveBeenCalledTimes(1);
-    const call = createManyMock.mock.calls[0][0];
-    expect(call.skipDuplicates).toBe(true);
-    expect(call.data).toHaveLength(2);
-    expect(call.data[0]).toMatchObject({
+    expect(res.body).toEqual({ ok: true, inserted: 2 });
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(createMock.mock.calls[0][0].data).toMatchObject({
       clientId: "CLIENT_TEST",
       url: "https://www.example.com/some/page?q=1",
       domain: "www.example.com",
@@ -88,7 +86,7 @@ describe("POST /api/browser-activity", () => {
       profile: "Default",
       title: "Example",
     });
-    expect(call.data[1].domain).toBe("docs.google.com");
+    expect(createMock.mock.calls[1][0].data.domain).toBe("docs.google.com");
   });
 
   it("drops invalid URLs and empty rows", async () => {
@@ -118,9 +116,34 @@ describe("POST /api/browser-activity", () => {
       .send(body)
       .expect(200);
 
-    const call = createManyMock.mock.calls[0][0];
-    expect(call.data).toHaveLength(1);
-    expect(call.data[0].domain).toBe("valid.example");
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(createMock.mock.calls[0][0].data.domain).toBe("valid.example");
+  });
+
+  it("swallows P2002 duplicate-key errors without failing the batch", async () => {
+    createMock.mockReset();
+    // First insert succeeds, second is a duplicate (P2002), third succeeds.
+    createMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "P2002" }))
+      .mockResolvedValueOnce(undefined);
+
+    const app = buildApp();
+    const body = encrypted([
+      { Url: "https://a.example/", Browser: "Chrome", VisitedAtUtc: "2026-06-11T10:00:00Z" },
+      { Url: "https://b.example/", Browser: "Chrome", VisitedAtUtc: "2026-06-11T10:01:00Z" },
+      { Url: "https://c.example/", Browser: "Chrome", VisitedAtUtc: "2026-06-11T10:02:00Z" },
+    ]);
+
+    const res = await request(app)
+      .post("/api/browser-activity")
+      .set("X-Client-Id", "CLIENT_TEST")
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true, inserted: 2 });
+    expect(createMock).toHaveBeenCalledTimes(3);
   });
 
   it("returns 0 inserted when there are no usable rows", async () => {
@@ -135,6 +158,6 @@ describe("POST /api/browser-activity", () => {
       .expect(200);
 
     expect(res.body).toEqual({ ok: true, inserted: 0 });
-    expect(createManyMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 });

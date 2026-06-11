@@ -17,6 +17,7 @@ import { withLock } from "../locks";
 import { getKeysToTry } from "../keyring";
 import { resolveUploadDir } from "../runtimePaths";
 import { prisma } from "../prisma";
+import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 
 const router = Router();
 const storage = multer.diskStorage({
@@ -286,7 +287,17 @@ router.get("/screenshots", requireAuth, async (req, res) => {
       clientDirs = clientDirs.filter((id) => allowed.has(id));
     }
 
-    const maxPerClient = 10; // Low memory: ~20 clients * 10 = 200 entries max
+    // If a specific Tashkent day is requested, read the full set for that window.
+    // Otherwise apply a soft cap so the global overview doesn't load tens of thousands.
+    const dateStr = String(req.query.date || "").trim();
+    const dateMatch = /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
+    const dayFrom = dateMatch
+      ? startOfTashkentDay(new Date(`${dateStr}T12:00:00Z`))
+      : null;
+    const dayTo = dateMatch
+      ? endOfTashkentDay(new Date(`${dateStr}T12:00:00Z`))
+      : null;
+    const maxPerClient = dayFrom ? Infinity : 200;
     for (const clientId of clientDirs) {
       const clientDir = path.join(screenshotsDir, clientId);
       if (!fs.statSync(clientDir).isDirectory()) continue;
@@ -299,7 +310,7 @@ router.get("/screenshots", requireAuth, async (req, res) => {
           mtime: fs.statSync(path.join(clientDir, f)).mtime.getTime(),
         }))
         .sort((a, b) => b.mtime - a.mtime)
-        .slice(0, maxPerClient);
+        .slice(0, Number.isFinite(maxPerClient) ? maxPerClient : files.length);
       for (const { f, mtime } of sorted) {
         let timestamp: Date;
         const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
@@ -310,6 +321,9 @@ router.get("/screenshots", requireAuth, async (req, res) => {
           timestamp = !isNaN(d.getTime()) ? d : new Date(mtime);
         } else {
           timestamp = new Date(mtime);
+        }
+        if (dayFrom && dayTo) {
+          if (timestamp < dayFrom || timestamp > dayTo) continue;
         }
         allFiles.push({
           id: f,

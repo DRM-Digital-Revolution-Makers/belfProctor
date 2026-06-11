@@ -63,6 +63,7 @@ export default function PcSessionsToday({ clientId, date }) {
         <div style={{ color: "#888" }}>Нет данных за {dateStr}</div>
       )}
       {!loading && !error && rows.length > 0 && (
+        <div style={{ maxHeight: 240, overflowY: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ textAlign: "left", color: "#6b7280", fontSize: 12 }}>
@@ -89,6 +90,7 @@ export default function PcSessionsToday({ clientId, date }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );

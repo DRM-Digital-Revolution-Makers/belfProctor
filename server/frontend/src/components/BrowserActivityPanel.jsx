@@ -118,41 +118,71 @@ export default function BrowserActivityPanel({ clientId }) {
       )}
 
       {!loading && !error && rows.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "#6b7280", fontSize: 12 }}>
-              <th style={{ padding: "4px 8px" }}>Время</th>
-              <th style={{ padding: "4px 8px" }}>Браузер</th>
-              <th style={{ padding: "4px 8px" }}>Домен</th>
-              <th style={{ padding: "4px 8px" }}>Заголовок / URL</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr
-                key={r.id}
-                style={{ borderTop: "1px solid #f1f5f9", verticalAlign: "top" }}
-              >
-                <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                  {formatTashkent(r.visitedAt, "DD.MM HH:mm:ss")}
-                </td>
-                <td style={{ padding: "6px 8px" }}>{r.browser}</td>
-                <td style={{ padding: "6px 8px" }}>{r.domain}</td>
-                <td style={{ padding: "6px 8px" }}>
-                  <div style={{ fontWeight: 500 }}>{r.title || "—"}</div>
-                  <a
-                    href={r.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontSize: 12, color: "#2563eb" }}
-                  >
-                    {r.url}
-                  </a>
-                </td>
+        <div
+          style={{
+            maxHeight: 400,
+            overflowY: "auto",
+            border: "1px solid #f1f5f9",
+            borderRadius: 8,
+          }}
+        >
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 13,
+            }}
+          >
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 1,
+              }}
+            >
+              <tr style={{ textAlign: "left", color: "#6b7280", fontSize: 12 }}>
+                <th style={{ padding: "4px 8px" }}>Время</th>
+                <th style={{ padding: "4px 8px" }}>Браузер</th>
+                <th style={{ padding: "4px 8px" }}>Домен</th>
+                <th style={{ padding: "4px 8px" }}>Заголовок / URL</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.id}
+                  style={{
+                    borderTop: "1px solid #f1f5f9",
+                    verticalAlign: "top",
+                  }}
+                >
+                  <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                    {formatTashkent(r.visitedAt, "DD.MM HH:mm:ss")}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>{r.browser}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.domain}</td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <div style={{ fontWeight: 500 }}>{r.title || "—"}</div>
+                    <a
+                      href={r.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: 12, color: "#2563eb" }}
+                    >
+                      {r.url}
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!loading && !error && rows.length > 0 && (
+        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+          Показано {rows.length} записей — прокрутите внутри блока
+        </div>
       )}
     </div>
   );

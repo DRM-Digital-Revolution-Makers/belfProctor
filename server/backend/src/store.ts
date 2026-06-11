@@ -101,23 +101,30 @@ export async function getLatestActivity(limit: number = 30): Promise<any[]> {
 export async function getLatestActivityPerClient(
   maxClients: number = 100,
 ): Promise<any[]> {
-  const clients = await prisma.client.findMany({
-    where: { lastActivity: { not: null } },
-    orderBy: { lastActivity: "desc" },
-    take: maxClients,
-    select: {
-      id: true,
-      lastActivity: true,
-      lastActivityActiveMs: true,
-      lastActivityInactiveMs: true,
-    },
-  });
-  return clients.map((c) => ({
-    clientId: c.id,
-    timestamp: c.lastActivity,
-    activeMilliseconds: c.lastActivityActiveMs,
-    inactiveMilliseconds: c.lastActivityInactiveMs,
-  }));
+  // One row per client with the most recent Activity sample.
+  // Fronted needs `isActive` (boolean) and `_ingestedAt` (server clock) to compute
+  // the green/grey "Активность" badge — see ClientsList.jsx statusFromHeartbeat.
+  type Row = {
+    clientId: string;
+    timestamp: Date;
+    isActive: boolean;
+    activeMilliseconds: number;
+    inactiveMilliseconds: number;
+    _ingestedAt: Date;
+  };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT DISTINCT ON ("clientId")
+      "clientId",
+      "timestamp",
+      "isActive",
+      "activeMilliseconds",
+      "inactiveMilliseconds",
+      "createdAt" AS "_ingestedAt"
+    FROM "Activity"
+    ORDER BY "clientId", "timestamp" DESC
+    LIMIT ${maxClients}
+  `;
+  return rows;
 }
 
 // ---------- Events ----------

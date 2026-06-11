@@ -1,4 +1,11 @@
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+
+// Idempotent — repeated extend() is safe. Done here so any chunk that imports
+// time.js gets dayjs.tz available, regardless of main.jsx load order.
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export const TASHKENT_TZ = "Asia/Tashkent";
 
@@ -9,9 +16,13 @@ export const TASHKENT_TZ = "Asia/Tashkent";
  */
 export function formatTashkent(value, fmt = "DD.MM.YYYY HH:mm:ss") {
   if (value === null || value === undefined || value === "") return "—";
-  const d = dayjs(value);
-  if (!d.isValid()) return "—";
-  return d.tz(TASHKENT_TZ).format(fmt);
+  try {
+    const d = dayjs(value);
+    if (!d.isValid()) return "—";
+    return d.tz(TASHKENT_TZ).format(fmt);
+  } catch {
+    return "—";
+  }
 }
 
 /**

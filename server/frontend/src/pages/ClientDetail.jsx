@@ -30,8 +30,6 @@ import {
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
 import { formatTashkent } from "../utils/time";
-import PcSessionsToday from "../components/PcSessionsToday";
-import BrowserActivityPanel from "../components/BrowserActivityPanel";
 
 /* ============ Design tokens (pixel-perfect Figma) ============ */
 const BP = {
@@ -890,7 +888,7 @@ const ClientDetail = () => {
                   imageFallback={imageFallback}
                   onOpenAllScreenshots={() =>
                     navigate(
-                      `/screenshots?clientId=${encodeURIComponent(id)}`,
+                      `/screenshots?clientId=${encodeURIComponent(id)}&date=${selectedDate.format("YYYY-MM-DD")}`,
                     )
                   }
                   i18n={i18n}
@@ -1069,9 +1067,9 @@ function ThumbnailGrid({
       </div>
     );
   }
-  // Show max 10 (2 rows of 5)
-  const shown = screenshots.slice(0, 10);
-  // Split into chunks of 5
+  // Show up to 30 (6 rows of 5) — enough that "Показать все 118" doesn't feel like a tease.
+  const PREVIEW_LIMIT = 30;
+  const shown = screenshots.slice(0, PREVIEW_LIMIT);
   const rows = [];
   for (let i = 0; i < shown.length; i += 5) rows.push(shown.slice(i, i + 5));
   return (
@@ -1149,10 +1147,7 @@ function ThumbnailGrid({
                   textOverflow: "ellipsis",
                 }}
               >
-                {new Date(s.timestamp).toLocaleTimeString(
-                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  { hour: "2-digit", minute: "2-digit" },
-                )}
+                {formatTashkent(s.timestamp, "HH:mm")}
               </div>
             </div>
           ))}
@@ -1162,7 +1157,7 @@ function ThumbnailGrid({
             ))}
         </div>
       ))}
-      {screenshots.length > 10 && (
+      {screenshots.length > PREVIEW_LIMIT && (
         <div style={{ textAlign: "right", marginTop: 4 }}>
           <button
             type="button"
@@ -1219,14 +1214,6 @@ function DayTab({
           valueColor={BP.red}
           sub={`${inactivePct}% рабочего дня`}
         />
-      </div>
-
-      <div style={{ marginTop: 12 }}>
-        <PcSessionsToday clientId={id} />
-      </div>
-
-      <div style={{ marginTop: 12 }}>
-        <BrowserActivityPanel clientId={id} />
       </div>
 
       {/* Working day card */}
@@ -1396,14 +1383,22 @@ function DayTab({
             />
           </button>
         </div>
-        <ThumbnailGrid
-          screenshots={dailyData.screenshots}
-          getImageUrl={getImageUrl}
-          imageFallback={imageFallback}
-          toggleFavorite={toggleFavorite}
-          onOpenAllScreenshots={onOpenAllScreenshots}
-          i18n={i18n}
-        />
+        <div
+          style={{
+            maxHeight: 540,
+            overflowY: "auto",
+            paddingRight: 4,
+          }}
+        >
+          <ThumbnailGrid
+            screenshots={dailyData.screenshots}
+            getImageUrl={getImageUrl}
+            imageFallback={imageFallback}
+            toggleFavorite={toggleFavorite}
+            onOpenAllScreenshots={onOpenAllScreenshots}
+            i18n={i18n}
+          />
+        </div>
       </div>
     </>
   );
@@ -2186,6 +2181,63 @@ function AppsTab({ clientId, t, i18n }) {
     return type;
   };
 
+  // Collapse consecutive duplicates of the same (eventType, description, processName).
+  // Each row gets `count`, `firstTimestamp`, `lastTimestamp`.
+  const grouped = React.useMemo(() => {
+    if (!items.length) return [];
+    const out = [];
+    let cur = null;
+    for (const it of items) {
+      const key = `${it.eventType}|${it.description || ""}|${it.processName || ""}|${JSON.stringify(it.additionalData || null)}`;
+      if (cur && cur._key === key) {
+        cur.count += 1;
+        cur.lastTimestamp = it.timestamp;
+      } else {
+        if (cur) out.push(cur);
+        cur = {
+          ...it,
+          _key: key,
+          count: 1,
+          firstTimestamp: it.timestamp,
+          lastTimestamp: it.timestamp,
+        };
+      }
+    }
+    if (cur) out.push(cur);
+    return out;
+  }, [items]);
+
+  const eventVisual = (eventType) => {
+    switch (eventType) {
+      case "AppUsage":
+        return { icon: "solar:window-frame-bold-duotone", color: "#2563eb", label: "Приложение" };
+      case "ProcessStarted":
+        return { icon: "solar:play-circle-bold-duotone", color: "#16a34a", label: "Запуск" };
+      case "ProcessStopped":
+        return { icon: "solar:stop-circle-bold-duotone", color: "#64748b", label: "Остановка" };
+      case "USBConnected":
+        return { icon: "solar:usb-bold-duotone", color: "#f97316", label: "USB" };
+      case "USBDisconnected":
+        return { icon: "solar:usb-bold-duotone", color: "#94a3b8", label: "USB откл." };
+      case "FileAccess":
+        return { icon: "solar:document-text-bold-duotone", color: "#a855f7", label: "Файл" };
+      case "PolicyViolation":
+        return { icon: "solar:shield-warning-bold-duotone", color: "#dc2626", label: "Нарушение" };
+      case "SystemError":
+        return { icon: "solar:danger-triangle-bold-duotone", color: "#dc2626", label: "Ошибка" };
+      default:
+        return { icon: "solar:bell-bold-duotone", color: "#64748b", label: eventType || "—" };
+    }
+  };
+
+  const cleanDescription = (text) => {
+    if (!text) return "";
+    return String(text)
+      .replace(/^User opened:\s*/i, "")
+      .replace(/^User launched:\s*/i, "")
+      .replace(/^Process started:\s*/i, "");
+  };
+
   return (
     <>
       <div
@@ -2249,53 +2301,88 @@ function AppsTab({ clientId, t, i18n }) {
           }}
         />
         <Table
-          rowKey={(r) => r.id || `${r.timestamp}_${r.eventType}`}
-          dataSource={items}
+          rowKey={(r) => r._key || r.id || `${r.timestamp}_${r.eventType}`}
+          dataSource={grouped}
           loading={loading}
-          size="middle"
+          size="small"
+          scroll={{ y: 480 }}
           pagination={{
             current: page,
             pageSize,
             total,
             onChange: (p) => setPage(p),
             showSizeChanger: false,
+            size: "small",
           }}
           columns={[
             {
               title: t("common.time"),
-              dataIndex: "timestamp",
-              width: 160,
-              render: (v) => formatTashkent(v),
+              dataIndex: "firstTimestamp",
+              width: 95,
+              render: (v, r) => (
+                <div style={{ fontSize: 12, lineHeight: 1.2 }}>
+                  <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>
+                    {formatTashkent(v, "HH:mm:ss")}
+                  </div>
+                  <div style={{ color: BP.muted, fontSize: 10 }}>
+                    {formatTashkent(v, "DD.MM")}
+                  </div>
+                </div>
+              ),
             },
-            { title: t("common.type"), dataIndex: "eventType", width: 140 },
+            {
+              title: t("common.type"),
+              dataIndex: "eventType",
+              width: 140,
+              render: (et) => {
+                const v = eventVisual(et);
+                return (
+                  <span
+                    title={et}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "2px 8px 2px 6px",
+                      borderRadius: 12,
+                      background: v.color + "1A",
+                      color: v.color,
+                      fontSize: 11,
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                      maxWidth: "100%",
+                    }}
+                  >
+                    <Icon icon={v.icon} width={13} height={13} color={v.color} />
+                    {v.label}
+                  </span>
+                );
+              },
+            },
             {
               title: t("common.description"),
               dataIndex: "description",
+              width: 360,
+              ellipsis: true,
               render: (text, record) => {
-                if (
-                  record.eventType === "USBConnected" &&
-                  record.additionalData
-                ) {
-                  const { Label, Format, TotalSize, DriveType } =
-                    record.additionalData;
+                if (record.eventType === "USBConnected" && record.additionalData) {
+                  const { Label, Format, TotalSize, DriveType } = record.additionalData;
                   return (
                     <div>
-                      <div style={{ fontWeight: 510 }}>
+                      <div style={{ fontWeight: 600 }}>
                         {t("common.usbConnected")}: {record.deviceId}
                       </div>
-                      <div
-                        style={{ fontSize: 12, color: BP.muted }}
-                      >
+                      <div style={{ fontSize: 12, color: BP.muted }}>
                         {[Label, Format, TotalSize, translateDriveType(DriveType)]
                           .filter(Boolean)
-                          .join(" | ")}
+                          .join(" · ")}
                       </div>
                     </div>
                   );
                 }
                 if (record.eventType === "USBDisconnected") {
                   return (
-                    <div style={{ fontWeight: 510 }}>
+                    <div style={{ fontWeight: 600 }}>
                       {t("common.usbDisconnected")}: {record.deviceId}
                     </div>
                   );
@@ -2305,35 +2392,74 @@ function AppsTab({ clientId, t, i18n }) {
                   if (Drive) {
                     return (
                       <div>
-                        <div style={{ fontWeight: 510 }}>
+                        <div style={{ fontWeight: 600 }}>
                           {Action === "Created"
                             ? t("common.fileCopiedToUsb")
                             : Action === "Renamed"
                               ? t("common.fileRenamedOnUsb")
-                              : text}
+                              : cleanDescription(text)}
                         </div>
                         <div style={{ fontSize: 12, color: BP.muted }}>
-                          <div>
-                            {t("common.drive")}: {Drive}
-                          </div>
-                          <div>
-                            {t("common.path")}: {Path}
-                          </div>
+                          {t("common.drive")}: {Drive} · {t("common.path")}: {Path}
                         </div>
                       </div>
                     );
                   }
                 }
-                return text;
+                const clean = cleanDescription(text);
+                return (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                      title={clean || "—"}
+                    >
+                      {clean || "—"}
+                    </div>
+                    {record.count > 1 && (
+                      <span
+                        style={{
+                          background: "#eff6ff",
+                          color: "#2563eb",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: "1px 6px",
+                          borderRadius: 8,
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                        }}
+                        title={`Повторялось ${record.count} раз подряд`}
+                      >
+                        ×{record.count}
+                      </span>
+                    )}
+                  </div>
+                );
               },
             },
             {
               title: t("common.process"),
               dataIndex: "processName",
-              width: 120,
-              render: (n) => (n === "browser" ? "Yandex" : n || "—"),
+              width: 130,
+              render: (n) => (
+                <span style={{ color: BP.muted, fontSize: 12 }}>
+                  {n === "browser" ? "Yandex" : n || "—"}
+                </span>
+              ),
             },
-            { title: t("common.device"), dataIndex: "deviceId", width: 140 },
           ]}
           locale={{ emptyText: t("common.noData") }}
         />
@@ -3099,15 +3225,7 @@ function FilesTab({ clientId, t, i18n }) {
               width: 200,
               render: (val) => {
                 if (!val) return "—";
-                try {
-                  const d = new Date(val);
-                  if (isNaN(d.getTime())) return "—";
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "—";
-                }
+                return formatTashkent(val);
               },
             },
             {
