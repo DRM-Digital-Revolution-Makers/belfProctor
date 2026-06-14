@@ -22,6 +22,8 @@ public class WorkTrackingService : BackgroundService
     private readonly List<IAppAdapter> _adapters;
     private ActiveWorkSession? _current;
     private DateTime _lastSnapshotUtc = DateTime.MinValue;
+    private readonly DateTime _startedAtUtc = DateTime.UtcNow;
+    private const int StartupScreenshotGraceSeconds = 15;
 
     public WorkTrackingService(
         ILogger<WorkTrackingService> logger,
@@ -185,6 +187,10 @@ public class WorkTrackingService : BackgroundService
 
     private async Task CaptureLinkedScreenshotAsync(ActiveWorkSession session, string reason)
     {
+        // Skip screenshots during startup — Windows rapidly shifts focus as the
+        // shell initialises, generating 8-10 spurious captures in the first seconds.
+        if ((DateTime.UtcNow - _startedAtUtc).TotalSeconds < StartupScreenshotGraceSeconds)
+            return;
         try
         {
             var filePath = await _screenshots.CaptureScreenshotToFileAsync();

@@ -10,6 +10,7 @@ import {
 } from "../store";
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -52,7 +53,7 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
+      const now = authoritativeNow();
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
       } else {
@@ -65,10 +66,12 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(json);
-    const now = new Date();
-    const sampleTs =
-      parseClientActivityTimestamp(payload.Timestamp || payload.timestamp) ||
-      now;
+    const now = authoritativeNow();
+    // Authoritative external time replaces any wildly off client timestamp.
+    const rawClientTs = parseClientActivityTimestamp(
+      payload.Timestamp || payload.timestamp,
+    );
+    const sampleTs = reconcileTime(rawClientTs);
     const activeMs = parseInt(
       String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0),
       10,

@@ -28,6 +28,14 @@ jest.mock("../store", () => ({
   saveClient: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Make reconcile() pass client timestamps through unmodified in tests.
+jest.mock("../serverTime", () => ({
+  now: () => new Date("2026-06-11T12:00:00.000Z"),
+  reconcile: (ts: Date | null) => ts ?? new Date("2026-06-11T12:00:00.000Z"),
+  startTimeSync: () => {},
+  getDebugState: () => ({}),
+}));
+
 import pcSessionRouter from "../routes/pcSession";
 
 function buildApp() {

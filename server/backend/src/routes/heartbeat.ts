@@ -10,6 +10,7 @@ import { getSenderClientId } from "../clientId";
 import { consumePendingUninstall } from "../wsHub";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
+import { now as authoritativeNow } from "../serverTime";
 
 const router = Router();
 
@@ -45,7 +46,7 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
+      const now = authoritativeNow();
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
       } else {
@@ -65,7 +66,7 @@ router.post("/", async (req, res) => {
     }
 
     // Auto-register or Update
-    const now = new Date();
+    const now = authoritativeNow();
     if (!client) {
       await saveClient({
         id: clientId,
@@ -106,7 +107,7 @@ router.post("/", async (req, res) => {
 
     await appendHeartbeat({
       clientId,
-      timestamp: new Date(),
+      timestamp: authoritativeNow(),
       status: payload.Status || payload.status || "Online",
       version: payload.Version || payload.version || "",
     });
@@ -145,7 +146,7 @@ router.get("/", async (req, res) => {
 
 router.get("/latest", async (_req, res) => {
   const data = await getLatestHeartbeats();
-  return res.json({ data, serverTime: new Date() });
+  return res.json({ data, serverTime: authoritativeNow() });
 });
 
 export default router;

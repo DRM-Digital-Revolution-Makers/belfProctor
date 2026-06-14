@@ -24,6 +24,7 @@ import workRouter from "./routes/work";
 import pcSessionRouter from "./routes/pcSession";
 import browserActivityRouter from "./routes/browserActivity";
 import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
+import { startTimeSync, getDebugState as getTimeDebugState, now as authoritativeNow } from "./serverTime";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -286,7 +287,7 @@ async function writeCommandIndex(commandId: string, latestPath: string): Promise
     await writeJsonFileAtomic(
       fp,
       JSON.stringify(
-        { commandId, latestPath, updatedAt: new Date().toISOString() },
+        { commandId, latestPath, updatedAt: authoritativeNow().toISOString() },
         null,
         2,
       ),
@@ -307,8 +308,8 @@ app.post(
       if (!client) {
         await saveClient({
           id: clientId,
-          createdAt: new Date(),
-          lastSeen: new Date(),
+          createdAt: authoritativeNow(),
+          lastSeen: authoritativeNow(),
         });
         return res
           .status(400)
@@ -410,6 +411,7 @@ app.get("/api/commands/:id/result", commandResultHandler);
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/api/time", (_req, res) => res.json(getTimeDebugState()));
 
 // Seed default admin if not exists
 async function ensureAdmin() {
@@ -425,6 +427,10 @@ async function ensureAdmin() {
 }
 
 ensureAdmin().catch(console.error);
+
+// Bring up authoritative time sync immediately — every ingest below uses it
+// to stamp data, so we want it warm before the first request lands.
+startTimeSync();
 
 setTimeout(() => {
   (async () => {

@@ -18,6 +18,7 @@ import { getKeysToTry } from "../keyring";
 import { resolveUploadDir } from "../runtimePaths";
 import { prisma } from "../prisma";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 const storage = multer.diskStorage({
@@ -84,7 +85,7 @@ router.post(
           .json({ message: "clientId and screenshot required" });
 
       const safeClientId = clientId;
-      const now = new Date();
+      const now = authoritativeNow();
       let client: any = await getClient(safeClientId);
       if (!client) {
         await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
@@ -96,22 +97,20 @@ router.post(
       const clientDir = path.join(getUploadDir(), "screenshots", safeClientId);
       fs.mkdirSync(clientDir, { recursive: true });
 
-      // Treat the incoming timestamp as absolute truth (Client's Local Time)
-      // If it's "2025-12-19T23:15:00.000" (no Z), new Date() might treat as Local or UTC depending on server env.
-      // To ensure consistency, we force it to be treated as UTC so the numbers are preserved in DB.
-      // DB stores UTC. Frontend sees UTC. "1 Time for Everything".
+      // Reconcile against the authoritative external time (Cloudflare/Google
+      // Date header). If the client's clock is within 5 minutes of real time
+      // we keep its precision (capture moment); otherwise we override with
+      // server-authoritative now() — covers clients with broken Windows TZ.
       let tsToParse = timestampStr;
       if (
         !tsToParse.endsWith("Z") &&
-        !tsToParse.includes("+") &&
-        !tsToParse.includes("-")
+        !/[+-]\d{2}:\d{2}$/.test(tsToParse)
       ) {
         tsToParse += "Z";
       }
       const tsParsed = new Date(tsToParse);
-      const sendTs = isNaN(tsParsed.getTime()) ? new Date() : tsParsed;
-
-      const adjTs = sendTs;
+      const clientTs = isNaN(tsParsed.getTime()) ? null : tsParsed;
+      const adjTs = reconcileTime(clientTs);
       const iso = adjTs.toISOString().replace(/[:]/g, "-");
       const filename = `${safeClientId}_${iso}.jpg`;
       const filepath = path.join(clientDir, filename);
@@ -214,7 +213,7 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
 
     const clientDir = path.join(getUploadDir(), "reports", safeClientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const now2 = new Date();
+    const now2 = authoritativeNow();
     const filename = `${now2.toISOString().replace(/[:]/g, "-")}_${Date.now()}`;
     const filepath = path.join(clientDir, filename);
 
@@ -437,7 +436,7 @@ router.post(
       if (!req.file || !tempPath)
         return res.status(400).json({ message: "clientId and file required" });
 
-      const now = new Date();
+      const now = authoritativeNow();
       let client: any = await getClient(clientId);
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });

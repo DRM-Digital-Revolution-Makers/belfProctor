@@ -350,19 +350,23 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     public async Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null)
     {
+        if (!File.Exists(filePath))
+        {
+            _logger.LogWarning("Screenshot file not found: {FilePath}", filePath);
+            return;
+        }
+
+        // Stamp UTC capture time before any network work so both the try and catch
+        // paths use the same filename — the catch cannot access variables declared
+        // inside the try block, and a 30-second HttpClient timeout would otherwise
+        // shift the pending filename (and server timestamp) by up to 30 seconds.
+        var now = DateTime.UtcNow;
+        var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
+        var destPending = Path.Combine(_pendingScreenshots, sendName);
+
         try
         {
-            if (!File.Exists(filePath))
-            {
-                _logger.LogWarning("Screenshot file not found: {FilePath}", filePath);
-                return;
-            }
-
             bool sent = false;
-            var now = DateTime.UtcNow;
-            // Embed 'Z' in the filename so the pending-flush parser knows the value is UTC.
-            var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
-            var destPending = Path.Combine(_pendingScreenshots, sendName);
 
             using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var streamContent = GetEncryptedStreamContent(fileStream))
@@ -375,7 +379,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 AddScreenshotMetadata(content, metadata);
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
-                
+
                 if (response.IsSuccessStatusCode)
                 {
                     sent = true;
@@ -402,13 +406,10 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending screenshot: {FilePath}", filePath);
-            try 
-            { 
-                var now = DateTime.UtcNow;
-                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
-                var dest = Path.Combine(_pendingScreenshots, sendName);
-                if (File.Exists(filePath)) File.Move(filePath, dest, true);
-                TryWriteScreenshotSidecar(dest, metadata);
+            try
+            {
+                if (File.Exists(filePath)) File.Move(filePath, destPending, true);
+                TryWriteScreenshotSidecar(destPending, metadata);
             } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
         }
@@ -553,17 +554,18 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     public async Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds)
     {
+        var payload = new
+        {
+            ClientId = _settings.ClientId,
+            Timestamp = DateTime.UtcNow,
+            IsActive = isActive,
+            ActiveMilliseconds = activeMilliseconds,
+            InactiveMilliseconds = inactiveMilliseconds
+        };
+        var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc });
+
         try
         {
-            var payload = new
-            {
-                ClientId = _settings.ClientId,
-                Timestamp = DateTime.UtcNow,
-                IsActive = isActive,
-                ActiveMilliseconds = activeMilliseconds,
-                InactiveMilliseconds = inactiveMilliseconds
-            };
-            var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc });
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
@@ -581,7 +583,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending activity");
-            try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { IsActive = isActive, ActiveMilliseconds = activeMilliseconds, InactiveMilliseconds = inactiveMilliseconds })); } catch { }
+            try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
         }
     }
 
@@ -674,31 +676,31 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     public async Task<bool> SendHeartbeatAsync()
     {
+        var heartbeat = new
+        {
+            ClientId = _settings.ClientId,
+            Timestamp = DateTime.UtcNow,
+            Status = "Online",
+            Version = AppVersion,
+            Machine = Environment.MachineName,
+            OS = Environment.OSVersion.ToString(),
+            UptimeSeconds = (int)(DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds,
+            CommandChannel = new
+            {
+                Connected = ConnectivityState.WsConnected,
+                LastChangeUtc = ConnectivityState.WsLastChangeUtc,
+                LastError = ConnectivityState.WsLastError,
+            },
+            Memory = new
+            {
+                WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
+                PrivateMemorySize = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64,
+            }
+        };
+        var json = JsonConvert.SerializeObject(heartbeat);
+
         try
         {
-            var heartbeat = new
-            {
-                ClientId = _settings.ClientId,
-                Timestamp = DateTime.UtcNow,
-                Status = "Online",
-                Version = AppVersion,
-                Machine = Environment.MachineName,
-                OS = Environment.OSVersion.ToString(),
-                UptimeSeconds = (int)(DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds,
-                CommandChannel = new
-                {
-                    Connected = ConnectivityState.WsConnected,
-                    LastChangeUtc = ConnectivityState.WsLastChangeUtc,
-                    LastError = ConnectivityState.WsLastError,
-                },
-                Memory = new
-                {
-                    WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
-                    PrivateMemorySize = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64,
-                }
-            };
-
-            var json = JsonConvert.SerializeObject(heartbeat);
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             
             using var content = new ByteArrayContent(encryptedData);
@@ -739,7 +741,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
-            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.UtcNow, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
+            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
             return false;
         }
     }
@@ -1111,7 +1113,16 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         {
             _logger.LogDebug("Starting FlushPendingAsync");
 
-            foreach (var file in Directory.GetFiles(_pendingScreenshots))
+            // Send pending screenshots with a throttle: max 30 per flush cycle so a
+            // large offline backlog doesn't flood the server on reconnect. Remaining
+            // files stay in the queue and are sent on the next retry tick.
+            const int MaxScreenshotsPerFlush = 30;
+            var screenshotFiles = Directory.GetFiles(_pendingScreenshots)
+                .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f)
+                .Take(MaxScreenshotsPerFlush);
+
+            foreach (var file in screenshotFiles)
             {
                 try
                 {
@@ -1137,12 +1148,14 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         AddScreenshotMetadata(content, metadata);
 
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
-                        
-                        if (resp.IsSuccessStatusCode) 
+
+                        if (resp.IsSuccessStatusCode)
                         {
                             _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
                             File.Delete(file);
                             try { File.Delete(file + ".json"); } catch { }
+                            // Throttle to avoid a burst hitting the server back-to-back.
+                            await Task.Delay(200);
                         }
                         else
                         {

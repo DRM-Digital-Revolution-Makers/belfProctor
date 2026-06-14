@@ -8,6 +8,7 @@ import { makeId } from "../services/id";
 import { resolveProjectFromPath } from "../services/projectResolver";
 import { classifyActivity } from "../services/rulesClassifier";
 import { requireAuth } from "../middleware/auth";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -33,7 +34,7 @@ const VALID_END_REASONS = new Set([
 
 function toDate(value: unknown): Date {
   const parsed = new Date(String(value || ""));
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  return Number.isNaN(parsed.getTime()) ? authoritativeNow() : parsed;
 }
 
 function toBigIntMs(value: unknown): bigint {
@@ -95,7 +96,7 @@ async function markUnknownPath(input: {
   await prisma.unknownProjectPath.upsert({
     where: { path: input.filePath },
     update: {
-      lastSeenAt: new Date(),
+      lastSeenAt: authoritativeNow(),
       seenCount: { increment: 1 },
       clientId: input.clientId,
       processName: input.processName || undefined,
@@ -112,7 +113,8 @@ async function markUnknownPath(input: {
 async function ingestEnvelope(raw: WorkEnvelope, fallbackClientId: string): Promise<void> {
   const payload = raw.payload || raw;
   const clientId = String(raw.clientId || payload.clientId || fallbackClientId);
-  const timestampUtc = toDate(raw.timestampUtc || payload.timestampUtc || payload.timestamp || Date.now());
+  const claimedTs = toDate(raw.timestampUtc || payload.timestampUtc || payload.timestamp || Date.now());
+  const timestampUtc = reconcileTime(claimedTs);
   const sessionId = String(payload.sessionId || payload.id || makeId("work_session"));
   const eventId = String(raw.eventId || payload.eventId || makeId("work_event"));
   const processName = String(payload.processName || "");
@@ -135,7 +137,7 @@ async function ingestEnvelope(raw: WorkEnvelope, fallbackClientId: string): Prom
     payload.endReason || (isEndEvent ? "unknown" : "active"),
   );
 
-  await saveClient({ id: clientId, lastSeen: new Date() });
+  await saveClient({ id: clientId, lastSeen: authoritativeNow() });
 
   const existingEvent = await prisma.workSessionEvent.findUnique({
     where: { eventId },
@@ -224,7 +226,7 @@ router.post("/events", async (req, res) => {
     const clientId = getSenderClientId(req);
     const { payload, usedKey } = await readEncryptedPayload(req, clientId);
     if (usedKey) {
-      await saveClient({ id: clientId, encryptionKey: usedKey, lastSeen: new Date() });
+      await saveClient({ id: clientId, encryptionKey: usedKey, lastSeen: authoritativeNow() });
     }
 
     const items = Array.isArray(payload) ? payload : [payload];

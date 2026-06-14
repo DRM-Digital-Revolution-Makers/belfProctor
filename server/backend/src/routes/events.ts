@@ -10,6 +10,7 @@ import {
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -56,7 +57,7 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
+      const now = authoritativeNow();
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
       } else {
@@ -69,7 +70,7 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(decryptedJson);
-    const now = new Date();
+    const now = authoritativeNow();
     if (!client) {
       await saveClient({
         id: clientId,
@@ -87,7 +88,9 @@ router.post("/", async (req, res) => {
       const rawType = p.EventType ?? p.eventType;
       const eventType =
         typeof rawType === "number" ? EVENT_TYPE_MAP[rawType] : rawType;
-      const timestamp = new Date(p.Timestamp || p.timestamp || Date.now());
+      const rawTs = p.Timestamp || p.timestamp;
+      const clientTs = rawTs ? new Date(rawTs) : null;
+      const timestamp = reconcileTime(clientTs && !isNaN(clientTs.getTime()) ? clientTs : null);
       const processName = p.ProcessName || p.processName;
 
       // Update stats only for foreground AppUsage so Top-apps reflect

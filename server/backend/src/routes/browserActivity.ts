@@ -5,6 +5,7 @@ import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
 import { requireAuth } from "../middleware/auth";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -62,7 +63,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const now = new Date();
+    const now = authoritativeNow();
     if (!usedKey) {
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
@@ -96,8 +97,10 @@ router.post("/", async (req, res) => {
       .map((v) => {
         const url = String(v.Url || v.url || "").trim();
         if (!url) return null;
-        const visitedAt = toDate(v.VisitedAtUtc || v.visitedAtUtc);
-        if (!visitedAt) return null;
+        const visitedAtRaw = toDate(v.VisitedAtUtc || v.visitedAtUtc);
+        if (!visitedAtRaw) return null;
+        // Reconcile so a client with skewed clock can't poison the timeline.
+        const visitedAt = reconcileTime(visitedAtRaw);
         const browser = String(v.Browser || v.browser || "unknown").toLowerCase();
         const profile = String(v.Profile || v.profile || "").trim() || null;
         const title = String(v.Title || v.title || "").trim() || null;

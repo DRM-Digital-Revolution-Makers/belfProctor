@@ -6,6 +6,7 @@ import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 import { requireAuth } from "../middleware/auth";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -46,7 +47,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const now = new Date();
+    const now = authoritativeNow();
     if (!usedKey) {
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
@@ -72,7 +73,9 @@ router.post("/", async (req, res) => {
     const payload = JSON.parse(json);
     const kind = String(payload.Kind || payload.kind || "").toLowerCase();
     const bootId = String(payload.BootId || payload.bootId || "").trim();
-    const ts = parseTimestamp(payload.TimestampUtc || payload.timestampUtc, now);
+    // Reconcile against authoritative time so a client with broken Windows TZ
+    // can't backdate/forwarddate its Boot/Shutdown.
+    const ts = reconcileTime(parseTimestamp(payload.TimestampUtc || payload.timestampUtc, now));
 
     if (!bootId) {
       return res.status(400).json({ message: "bootId required" });
