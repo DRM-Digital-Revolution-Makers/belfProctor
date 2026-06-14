@@ -17,25 +17,20 @@ public class WorkTrackingService : BackgroundService
     private readonly ILogger<WorkTrackingService> _logger;
     private readonly ProctorSettings _settings;
     private readonly IDataTransmissionService _transmission;
-    private readonly IScreenshotService _screenshots;
     private readonly IActivityMonitorService _activity;
     private readonly List<IAppAdapter> _adapters;
     private ActiveWorkSession? _current;
     private DateTime _lastSnapshotUtc = DateTime.MinValue;
-    private readonly DateTime _startedAtUtc = DateTime.UtcNow;
-    private const int StartupScreenshotGraceSeconds = 15;
 
     public WorkTrackingService(
         ILogger<WorkTrackingService> logger,
         IOptions<ProctorSettings> settings,
         IDataTransmissionService transmission,
-        IScreenshotService screenshots,
         IActivityMonitorService activity)
     {
         _logger = logger;
         _settings = settings.Value;
         _transmission = transmission;
-        _screenshots = screenshots;
         _activity = activity;
         _adapters = new List<IAppAdapter>
         {
@@ -74,7 +69,7 @@ public class WorkTrackingService : BackgroundService
     {
         if (_current != null)
         {
-            await EndCurrentAsync("shutdown", captureScreenshot: true);
+            await EndCurrentAsync("shutdown");
         }
         await base.StopAsync(cancellationToken);
     }
@@ -86,7 +81,7 @@ public class WorkTrackingService : BackgroundService
         {
             if (_current != null && DateTime.UtcNow - _current.LastSeenUtc > TimeSpan.FromSeconds(30))
             {
-                await EndCurrentAsync("timeout", captureScreenshot: false);
+                await EndCurrentAsync("timeout");
             }
             return;
         }
@@ -97,12 +92,11 @@ public class WorkTrackingService : BackgroundService
         {
             if (_current != null)
             {
-                await EndCurrentAsync("switch", captureScreenshot: true);
+                await EndCurrentAsync("switch");
             }
             _current = new ActiveWorkSession(candidate, now);
             _lastSnapshotUtc = now;
             await SendEventAsync(_current, "start");
-            await CaptureLinkedScreenshotAsync(_current, "work_start");
             return;
         }
 
@@ -137,16 +131,12 @@ public class WorkTrackingService : BackgroundService
         return new GenericForegroundAdapter().Resolve(snapshot);
     }
 
-    private async Task EndCurrentAsync(string reason, bool captureScreenshot)
+    private async Task EndCurrentAsync(string reason)
     {
         var session = _current;
         if (session == null) return;
         session.EndedAtUtc = DateTime.UtcNow;
         session.EndReason = reason;
-        if (captureScreenshot)
-        {
-            await CaptureLinkedScreenshotAsync(session, "work_end");
-        }
         await SendEventAsync(session, "end");
         _current = null;
     }
@@ -183,30 +173,6 @@ public class WorkTrackingService : BackgroundService
             Payload = payload,
         };
         await _transmission.SendWorkEventsAsync(new[] { envelope });
-    }
-
-    private async Task CaptureLinkedScreenshotAsync(ActiveWorkSession session, string reason)
-    {
-        // Skip screenshots during startup — Windows rapidly shifts focus as the
-        // shell initialises, generating 8-10 spurious captures in the first seconds.
-        if ((DateTime.UtcNow - _startedAtUtc).TotalSeconds < StartupScreenshotGraceSeconds)
-            return;
-        try
-        {
-            var filePath = await _screenshots.CaptureScreenshotToFileAsync();
-            await _transmission.SendScreenshotAsync(filePath, new WorkScreenshotMetadata
-            {
-                CaptureReason = reason,
-                LinkedSessionId = session.SessionId,
-                ProcessName = session.Candidate.ProcessName,
-                FilePath = session.Candidate.FilePath,
-                ProjectName = session.Candidate.ProjectName,
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to capture work screenshot");
-        }
     }
 
     private static string? SafeDirectoryName(string? filePath)
