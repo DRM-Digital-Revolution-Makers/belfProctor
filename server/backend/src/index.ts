@@ -45,6 +45,7 @@ import {
   registerStreamViewer,
 } from "./wsHub";
 import { runRetentionOnce } from "./retention";
+import { indexExistingReports } from "./services/reportStore";
 import { withLock } from "./locks";
 import { initServerLogToStorage } from "./serverLog";
 import { config } from "./config";
@@ -528,6 +529,17 @@ function scheduleBackgroundJobs(): void {
         }
       } catch (e) {
         console.warn("[Backfill] sweep failed:", e);
+      }
+
+      // Index any report files that predate DB-backed reports so they appear
+      // in the admin UI and are subject to retention.
+      try {
+        const indexed = await indexExistingReports(UPLOAD_DIR);
+        if (indexed > 0) {
+          console.log(`[Reports] Backfilled ${indexed} report file(s) into the DB.`);
+        }
+      } catch (e) {
+        console.error("[Reports] Backfill failed:", e);
       }
 
       try {

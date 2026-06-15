@@ -17,6 +17,12 @@ import { withLock } from "../locks";
 import { getKeysToTry } from "../keyring";
 import { resolveUploadDir } from "../runtimePaths";
 import { resolveWithinDir, safeFileName } from "../util/safePath";
+import { createRecordOrUnlinkFile } from "../util/dbConsistency";
+import {
+  listReports,
+  reportsRootDir,
+  reportJsonToCsv,
+} from "../services/reportStore";
 import { prisma } from "../prisma";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
@@ -135,36 +141,44 @@ router.post(
         );
         return res.status(400).json({ message: "Decryption failed" });
       }
-      const existing = await getClient(safeClientId);
-      if (!existing || existing.encryptionKey !== usedKey) {
-        await saveClient({
-          id: safeClientId,
-          encryptionKey: usedKey,
-          lastSeen: now,
-        });
-      } else {
-        await saveClient({ id: safeClientId, lastSeen: now });
-      }
-
       const rec = {
         id: `${safeClientId}_${Date.now()}`,
         filename,
         path: filepath,
         timestamp: adjTs,
       };
-      await ensurePrismaClient(safeClientId, usedKey);
-      await prisma.screenshot.create({
-        data: {
-          clientId: safeClientId,
-          timestamp: adjTs,
-          filename,
-          path: filepath,
-          captureReason: String(req.body.captureReason || "").trim() || undefined,
-          linkedSessionId: String(req.body.linkedSessionId || "").trim() || undefined,
-          processName: String(req.body.processName || "").trim() || undefined,
-          filePath: String(req.body.filePath || "").trim() || undefined,
-          projectName: String(req.body.projectName || "").trim() || undefined,
-        },
+
+      // The .jpg is already on disk. Persist the accompanying DB rows with
+      // compensation: if any write fails (e.g. the DB is down) the file is
+      // unlinked so we never leave an orphan that no listing or retention
+      // sweep can ever see.
+      await createRecordOrUnlinkFile(filepath, async () => {
+        const existing = await getClient(safeClientId);
+        if (!existing || existing.encryptionKey !== usedKey) {
+          await saveClient({
+            id: safeClientId,
+            encryptionKey: usedKey,
+            lastSeen: now,
+          });
+        } else {
+          await saveClient({ id: safeClientId, lastSeen: now });
+        }
+        await ensurePrismaClient(safeClientId, usedKey);
+        await prisma.screenshot.create({
+          data: {
+            clientId: safeClientId,
+            timestamp: adjTs,
+            filename,
+            path: filepath,
+            captureReason:
+              String(req.body.captureReason || "").trim() || undefined,
+            linkedSessionId:
+              String(req.body.linkedSessionId || "").trim() || undefined,
+            processName: String(req.body.processName || "").trim() || undefined,
+            filePath: String(req.body.filePath || "").trim() || undefined,
+            projectName: String(req.body.projectName || "").trim() || undefined,
+          },
+        });
       });
 
       res.json({
@@ -194,12 +208,14 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
       normalizeClientId(String((req as any).body?.clientId || "")) ||
       normalizeClientId(String(req.headers["x-client-id"] || "")) ||
       getSenderClientId(req);
-    const timestampStr = new Date().toISOString();
     if (!req.file || !tempPath)
       return res.status(400).json({ message: "clientId and report required" });
 
     const safeClientId = clientId;
-    const now = new Date();
+    // Stamp with the authoritative server time (consistent with screenshots and
+    // commands) rather than raw new Date() — fixes report timestamp drift on
+    // hosts with a skewed clock [B-M1].
+    const now = authoritativeNow();
     let client: any = await getClient(safeClientId);
     if (!client) {
       await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
@@ -214,31 +230,37 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
 
     const clientDir = path.join(getUploadDir(), "reports", safeClientId);
     fs.mkdirSync(clientDir, { recursive: true });
-    const now2 = authoritativeNow();
-    const filename = `${now2.toISOString().replace(/[:]/g, "-")}_${Date.now()}`;
+    const iso = now.toISOString().replace(/[:]/g, "-");
+    const filename = `report_${iso}_${Date.now()}.json`;
     const filepath = path.join(clientDir, filename);
 
     await decryptFileStream(tempPath, filepath, client.encryptionKey);
-    const existing = await getClient(safeClientId);
-    if (!existing || existing.encryptionKey !== client.encryptionKey) {
-      await saveClient({
-        id: safeClientId,
-        encryptionKey: client.encryptionKey,
-        lastSeen: now,
+
+    // The report file is on disk; persist the DB row with compensation so a DB
+    // failure never leaves an orphan file [B-C2].
+    const created = await createRecordOrUnlinkFile(filepath, async () => {
+      const existing = await getClient(safeClientId);
+      if (!existing || existing.encryptionKey !== client.encryptionKey) {
+        await saveClient({
+          id: safeClientId,
+          encryptionKey: client.encryptionKey,
+          lastSeen: now,
+        });
+      } else {
+        await saveClient({ id: safeClientId, lastSeen: now });
+      }
+      await ensurePrismaClient(safeClientId, client.encryptionKey);
+      return prisma.report.create({
+        data: {
+          clientId: safeClientId,
+          filename,
+          path: filepath,
+          timestamp: now,
+        },
       });
-    } else {
-      await saveClient({ id: safeClientId, lastSeen: now });
-    }
+    });
 
-    const rec = {
-      id: `${safeClientId}_${Date.now()}`,
-      filename,
-      path: filepath,
-      timestamp: new Date(timestampStr),
-    };
-    // No prisma.report.create call here as we are file-based
-
-    res.json({ id: rec.id });
+    res.json({ id: created.id, filename, timestamp: now.toISOString() });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to ingest report" });
@@ -367,7 +389,28 @@ router.get("/screenshots", requireAuth, async (req, res) => {
 });
 
 router.get("/reports", requireAuth, async (req, res) => {
-  return res.json({ data: [], total: 0 });
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(
+      200,
+      Math.max(1, parseInt(String(req.query.pageSize || "20"), 10) || 20),
+    );
+    const clientId = String(req.query.clientId || "").trim() || undefined;
+
+    const dateStr = String(req.query.date || "").trim();
+    let from: Date | undefined;
+    let to: Date | undefined;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      from = startOfTashkentDay(new Date(`${dateStr}T12:00:00Z`));
+      to = endOfTashkentDay(new Date(`${dateStr}T12:00:00Z`));
+    }
+
+    const result = await listReports({ clientId, from, to, page, pageSize });
+    return res.json(result);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Failed to list reports" });
+  }
 });
 
 // Secure file serving
@@ -420,12 +463,66 @@ router.get("/screenshots/:filename/file", requireAuth, async (req, res) => {
 });
 
 router.get("/reports/:id/file", requireAuth, async (req, res) => {
-  return res.status(404).json({ message: "Not found" });
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ message: "Invalid report id" });
+    }
+    const report = await prisma.report.findUnique({ where: { id } });
+    if (!report) return res.status(404).json({ message: "Report not found" });
+
+    // Defense in depth: the stored path must resolve inside the reports root.
+    const safePath = resolveWithinDir(
+      reportsRootDir(getUploadDir()),
+      report.clientId,
+      report.filename,
+    );
+    if (!safePath || !fs.existsSync(safePath)) {
+      return res.status(404).json({ message: "Report file missing" });
+    }
+
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${report.filename}"`,
+    );
+    res.sendFile(safePath);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to serve report" });
+  }
 });
 
 // Reports CSV export
 router.get("/reports/:id/csv", requireAuth, async (req, res) => {
-  return res.status(404).json({ message: "Not found" });
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ message: "Invalid report id" });
+    }
+    const report = await prisma.report.findUnique({ where: { id } });
+    if (!report) return res.status(404).json({ message: "Report not found" });
+
+    const safePath = resolveWithinDir(
+      reportsRootDir(getUploadDir()),
+      report.clientId,
+      report.filename,
+    );
+    if (!safePath || !fs.existsSync(safePath)) {
+      return res.status(404).json({ message: "Report file missing" });
+    }
+
+    const content = await fs.promises.readFile(safePath, "utf-8");
+    const csv = reportJsonToCsv(content);
+    const csvName = report.filename.replace(/\.json$/i, "") + ".csv";
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${csvName}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to export report CSV" });
+  }
 });
 
 // Command result file upload (encrypted)
