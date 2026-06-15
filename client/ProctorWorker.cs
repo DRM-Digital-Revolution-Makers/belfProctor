@@ -80,20 +80,27 @@ public class ProctorWorker : BackgroundService
         await base.StartAsync(cancellationToken);
     }
 
+    private const int MaxStartupJitterMs = 30000;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var screenshotLoop = RunScreenshotLoop(stoppingToken);
+        // Stagger startup so a fleet of PCs powering on together (e.g. at 08:00)
+        // does not hit the server in one synchronized burst. Spread the first
+        // tick of each periodic task across a random window.
+        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, MaxStartupJitterMs));
+
+        var screenshotLoop = RunScreenshotLoop(stoppingToken, jitter);
 
         // Heartbeat with adaptive interval
-        _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
-        
+        _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, jitter, Timeout.InfiniteTimeSpan);
+
         // Activity reporting (every 1 minute)
-        _activityReportTimer = new Timer(async _ => await SendActivitySnapshot(), null, 
-            TimeSpan.Zero, TimeSpan.FromMinutes(1));
+        _activityReportTimer = new Timer(async _ => await SendActivitySnapshot(), null,
+            jitter, TimeSpan.FromMinutes(1));
 
         var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(policyInterval));
+            jitter + TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(policyInterval));
 
         try
         {
@@ -109,13 +116,19 @@ public class ProctorWorker : BackgroundService
         }
     }
 
-    private async Task RunScreenshotLoop(CancellationToken ct)
+    private async Task RunScreenshotLoop(CancellationToken ct, TimeSpan startupJitter)
     {
         // Enforce a floor of 5 minutes. Values < 300 000 ms (e.g. a stale 10 000 saved
         // to AppData by a previous setIntervals command) would otherwise cause a burst
         // of screenshots every few seconds right after startup.
         var interval = _settings.ScreenshotIntervalMs >= 300000 ? _settings.ScreenshotIntervalMs : 300000;
         var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(interval));
+        // Stagger the first (heaviest) capture across the startup window too.
+        if (startupJitter > TimeSpan.Zero)
+        {
+            try { await Task.Delay(startupJitter, ct); }
+            catch (OperationCanceledException) { return; }
+        }
         // Немедленный снимок при старте
         await TakeScreenshot();
         while (await timer.WaitForNextTickAsync(ct))
