@@ -79,7 +79,24 @@ export default function ScreenshotsList() {
   const sentinelRef = React.useRef(null);
   const fetchRef = React.useRef(null);
 
+  // Track every object URL we create so they can be freed — otherwise an
+  // infinite scroll over hundreds of screenshots leaks that many blobs [F-C2].
+  const objectUrlsRef = React.useRef(new Set());
+  const trackObjectUrl = React.useCallback((url) => {
+    objectUrlsRef.current.add(url);
+    return url;
+  }, []);
+  const revokeAllObjectUrls = React.useCallback(() => {
+    for (const u of objectUrlsRef.current) {
+      try { URL.revokeObjectURL(u); } catch { /* already revoked */ }
+    }
+    objectUrlsRef.current.clear();
+  }, []);
+
   React.useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+
+  /* Free all object URLs on unmount to prevent a blob memory leak [F-C2]. */
+  React.useEffect(() => () => revokeAllObjectUrls(), [revokeAllObjectUrls]);
 
   /* Load clients */
   React.useEffect(() => {
@@ -147,6 +164,11 @@ export default function ScreenshotsList() {
   /* Reset and reload when filters change */
   React.useEffect(() => {
     pageRef.current = 1;
+    // The old list is being discarded — free its blobs and drop cached urls
+    // so they are re-fetched fresh for the new filter set [F-C2].
+    revokeAllObjectUrls();
+    setThumbUrls({});
+    setPreviewUrl(null);
     setItems([]);
     setTotal(0);
     setSelected(null);
@@ -181,7 +203,7 @@ export default function ScreenshotsList() {
         .then((r) => (r.ok ? r.blob() : null))
         .then((blob) => {
           if (cancelled || !blob) return;
-          const objUrl = URL.createObjectURL(blob);
+          const objUrl = trackObjectUrl(URL.createObjectURL(blob));
           setThumbUrls((prev) => ({ ...prev, [it.id]: objUrl }));
         })
         .catch(() => {});
@@ -204,7 +226,7 @@ export default function ScreenshotsList() {
         .then((r) => (r.ok ? r.blob() : null))
         .then((blob) => {
           if (!blob) return;
-          const objUrl = URL.createObjectURL(blob);
+          const objUrl = trackObjectUrl(URL.createObjectURL(blob));
           setPreviewUrl(objUrl);
         })
         .catch(() => {});
@@ -236,9 +258,14 @@ export default function ScreenshotsList() {
   const openFile = async (id) => {
     const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
     const res = await authFetch(url, { cache: "no-store" });
-    if (!res.ok) return;
+    if (!res.ok) {
+      message.error(t("common.requestError"));
+      return;
+    }
     const blob = await res.blob();
-    window.open(URL.createObjectURL(blob), "_blank");
+    // The opened tab needs the URL, so we can't revoke it immediately; track it
+    // and free it on unmount instead of leaking it forever [F-C2].
+    window.open(trackObjectUrl(URL.createObjectURL(blob)), "_blank");
   };
 
   const downloadFile = async (id, filename) => {

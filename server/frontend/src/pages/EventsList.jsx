@@ -602,7 +602,11 @@ export default function EventsList() {
                 <div
                   style={{ cursor: "pointer" }}
                   onClick={() => {
-                    setBrowserClient(monitoringRows[0]?.clientId || null);
+                    // Don't open the browser-history modal with no client — it
+                    // would just 400 and show an empty panel [F-M4].
+                    const cid = monitoringRows[0]?.clientId || null;
+                    if (!cid) return;
+                    setBrowserClient(cid);
                     setBrowserHistoryOpen(true);
                   }}
                 >
