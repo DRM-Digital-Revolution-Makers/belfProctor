@@ -16,6 +16,7 @@ import { getSenderClientId, normalizeClientId } from "../clientId";
 import { withLock } from "../locks";
 import { getKeysToTry } from "../keyring";
 import { resolveUploadDir } from "../runtimePaths";
+import { resolveWithinDir, safeFileName } from "../util/safePath";
 import { prisma } from "../prisma";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
@@ -372,15 +373,19 @@ router.get("/reports", requireAuth, async (req, res) => {
 // Secure file serving
 router.get("/screenshots/:filename/file", requireAuth, async (req, res) => {
   try {
-    const filename = req.params.filename;
+    // Reject anything that is not a bare image file name. This alone defeats
+    // path traversal; resolveWithinDir below is defense-in-depth.
+    const filename = safeFileName(req.params.filename, /\.(jpe?g|png)$/i);
+    if (!filename) {
+      return res.status(400).json({ message: "Invalid filename" });
+    }
     const screenshotsDir = path.join(getUploadDir(), "screenshots");
     const clientIdMatch = filename.match(/^(.+)_\d{4}-\d{2}-\d{2}T/);
     const candidatePaths: string[] = [];
 
     if (clientIdMatch?.[1]) {
-      candidatePaths.push(
-        path.join(screenshotsDir, clientIdMatch[1], filename),
-      );
+      const direct = resolveWithinDir(screenshotsDir, clientIdMatch[1], filename);
+      if (direct) candidatePaths.push(direct);
     }
 
     if (fs.existsSync(screenshotsDir)) {
@@ -388,8 +393,12 @@ router.get("/screenshots/:filename/file", requireAuth, async (req, res) => {
         withFileTypes: true,
       })) {
         if (!dirent.isDirectory()) continue;
-        const candidate = path.join(screenshotsDir, dirent.name, filename);
-        if (!candidatePaths.includes(candidate)) {
+        const candidate = resolveWithinDir(
+          screenshotsDir,
+          dirent.name,
+          filename,
+        );
+        if (candidate && !candidatePaths.includes(candidate)) {
           candidatePaths.push(candidate);
         }
       }
