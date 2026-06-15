@@ -1,16 +1,23 @@
 import { prisma } from "../prisma";
+import { approximateBootAt } from "../services/pcSessionHelpers";
 
 const GAP_MINUTES = 10;
 const TICK_INTERVAL_MS = 60_000;
 
 /**
  * Closes a PcSession when a client stops sending heartbeats for >= GAP_MINUTES.
- * - If there's an open `explicit` boot, we close it as "explicit_with_gap_close" so
- *   the explicit bootAt is preserved.
- * - If there's no open session at all, we synthesize one entirely from the heartbeat
+ * - If there's an open `explicit` boot, we close it as "explicit_with_gap_close"
+ *   so the explicit bootAt is preserved.
+ * - If there's no open session at all, we synthesize one from the heartbeat
  *   pattern: this covers older clients that don't emit Boot/Shutdown.
+ *
+ * The synthesize branch is idempotent: a gap is keyed by its shutdownAt (the
+ * client's lastHeartbeat), so a permanently-offline client cannot accumulate a
+ * duplicate synthetic session on every tick.
  */
-export async function detectHeartbeatGapsOnce(now: Date = new Date()): Promise<number> {
+export async function detectHeartbeatGapsOnce(
+  now: Date = new Date(),
+): Promise<number> {
   const cutoff = new Date(now.getTime() - GAP_MINUTES * 60_000);
   const staleClients = await prisma.client.findMany({
     where: {
@@ -43,11 +50,19 @@ export async function detectHeartbeatGapsOnce(now: Date = new Date()): Promise<n
       continue;
     }
 
-    // No open session — synthesize. bootAt is approximate, shutdownAt is the last heartbeat.
+    // No open session — synthesize, but only once per gap. A session whose
+    // shutdownAt already equals this lastHeartbeat means we recorded this gap on
+    // an earlier tick; skip it so we don't create duplicates every minute.
+    const alreadyRecorded = await prisma.pcSession.findFirst({
+      where: { clientId: c.id, shutdownAt: c.lastHeartbeat },
+      select: { id: true },
+    });
+    if (alreadyRecorded) continue;
+
     await prisma.pcSession.create({
       data: {
         clientId: c.id,
-        bootAt: new Date(c.lastHeartbeat.getTime() - 60_000),
+        bootAt: await approximateBootAt(c.id, c.lastHeartbeat),
         shutdownAt: c.lastHeartbeat,
         source: "heartbeat_gap",
       },
@@ -58,13 +73,22 @@ export async function detectHeartbeatGapsOnce(now: Date = new Date()): Promise<n
 }
 
 let timer: NodeJS.Timeout | null = null;
+let running = false;
 
 export function startHeartbeatGapDetector(): void {
   if (timer) return;
   timer = setInterval(() => {
-    detectHeartbeatGapsOnce().catch((e) => {
-      console.error("[heartbeatGap] detector failed", e);
-    });
+    // Single-flight: if a previous tick is still running (slow DB, large backlog)
+    // skip this one rather than overlap and race on the same open sessions.
+    if (running) return;
+    running = true;
+    detectHeartbeatGapsOnce()
+      .catch((e) => {
+        console.error("[heartbeatGap] detector failed", e);
+      })
+      .finally(() => {
+        running = false;
+      });
   }, TICK_INTERVAL_MS);
   // Don't keep the event loop alive just for this — process exits cleanly on signal.
   if (typeof timer.unref === "function") timer.unref();

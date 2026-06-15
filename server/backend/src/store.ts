@@ -45,6 +45,26 @@ function endOfDay(date: Date): Date {
   return endOfTashkentDay(date);
 }
 
+/**
+ * UTC instants bounding a calendar month in Tashkent time. TimesheetDay.date is
+ * stored as startOfTashkentDay(sample) and Activity is queried by UTC timestamp,
+ * so a month window must be expressed in Tashkent terms — a plain
+ * Date.UTC(year, month, ...) boundary is offset by 5 hours and would drop the
+ * 1st of the month while pulling in the 1st of the next month [B-M11].
+ */
+export function tashkentMonthBounds(
+  year: number,
+  month: number,
+): { startOfMonth: Date; endOfMonth: Date } {
+  // Noon UTC keeps the calendar date unambiguous under the +5 offset.
+  const firstDay = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0));
+  const lastDay = new Date(Date.UTC(year, month, 0, 12, 0, 0));
+  return {
+    startOfMonth: startOfTashkentDay(firstDay),
+    endOfMonth: endOfTashkentDay(lastDay),
+  };
+}
+
 function activityDelta(
   curr: ActivityRow,
   prev: ActivityRow | null,
@@ -52,6 +72,10 @@ function activityDelta(
   if (!prev) return { activeMs: 0, inactiveMs: 0 };
   const dActive = curr.activeMilliseconds - prev.activeMilliseconds;
   const dInactive = curr.inactiveMilliseconds - prev.inactiveMilliseconds;
+  // The client reports a cumulative-since-start counter. A negative delta means
+  // it restarted and reset to zero, so the current value IS the activity since
+  // the restart — adding it (not a negative number, and not double-counting the
+  // already-recorded pre-restart total) is correct.
   return {
     activeMs: dActive >= 0 ? dActive : curr.activeMilliseconds,
     inactiveMs: dInactive >= 0 ? dInactive : curr.inactiveMilliseconds,
@@ -683,8 +707,7 @@ export async function backfillTimesheetFromActivity(
 
   const year = Number(match[1]);
   const month = Number(match[2]);
-  const startOfMonth = new Date(Date.UTC(year, month - 1, 1));
-  const endOfMonth = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const { startOfMonth, endOfMonth } = tashkentMonthBounds(year, month);
 
   const rows = await streamTimesheetForClient(id, startOfMonth, endOfMonth);
 
@@ -723,8 +746,7 @@ export async function getTimesheetDataForMonth(monthStr: string): Promise<
   if (!match) return [];
   const year = Number(match[1]);
   const month = Number(match[2]);
-  const startOfMonth = new Date(Date.UTC(year, month - 1, 1));
-  const endOfMonth = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const { startOfMonth, endOfMonth } = tashkentMonthBounds(year, month);
 
   const rows = await prisma.timesheetDay.findMany({
     where: { date: { gte: startOfMonth, lte: endOfMonth } },

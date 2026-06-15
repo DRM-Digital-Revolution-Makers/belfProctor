@@ -4,6 +4,7 @@ import { getClient, saveClient } from "../store";
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
+import { approximateBootAt } from "../services/pcSessionHelpers";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 import { requireAuth } from "../middleware/auth";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
@@ -107,11 +108,13 @@ router.post("/", async (req, res) => {
         }
         return res.json({ ok: true });
       }
-      // Shutdown arrived without matching Boot — record both ends so we don't lose the signal.
+      // Shutdown arrived without a matching Boot — record it, but approximate
+      // bootAt from heartbeat history instead of using shutdownAt (which would
+      // create a misleading zero-duration session) [B-M2].
       await prisma.pcSession.create({
         data: {
           clientId,
-          bootAt: ts,
+          bootAt: await approximateBootAt(clientId, ts),
           shutdownAt: ts,
           source: "explicit",
           bootId,

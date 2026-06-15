@@ -214,11 +214,6 @@ function pendingUninstallPath(clientId: string): string {
   return path.join(PENDING_UNINSTALL_DIR, `${clientId}.json`);
 }
 
-async function hasPendingUninstall(clientId: string): Promise<boolean> {
-  const fp = pendingUninstallPath(clientId);
-  return fs.existsSync(fp);
-}
-
 async function clearPendingUninstall(clientId: string): Promise<void> {
   const fp = pendingUninstallPath(clientId);
   if (fs.existsSync(fp)) {
@@ -226,31 +221,11 @@ async function clearPendingUninstall(clientId: string): Promise<void> {
   }
 }
 
-export async function consumePendingUninstall(clientId: string): Promise<{
-  id: string;
-  payload: any;
-} | null> {
-  await ensurePendingDir();
-  const fp = pendingUninstallPath(clientId);
-  if (!fs.existsSync(fp)) return null;
-  try {
-    const content = await fsPromises.readFile(fp, "utf-8");
-    const rec = JSON.parse(content);
-    await clearPendingUninstall(clientId);
-    return { id: String(rec?.id || ""), payload: rec?.payload ?? {} };
-  } catch {
-    try {
-      await clearPendingUninstall(clientId);
-    } catch {}
-    return null;
-  }
-}
-
-export async function requestClientUninstall(
+async function persistPendingUninstall(
   clientId: string,
-  payload: any = {},
-): Promise<{ queued: boolean; sent: boolean; commandId: string | null }> {
-  const id = makeId();
+  id: string,
+  payload: any,
+): Promise<void> {
   await ensurePendingDir();
   await fsPromises.writeFile(
     pendingUninstallPath(clientId),
@@ -262,6 +237,52 @@ export async function requestClientUninstall(
     }),
     "utf-8",
   );
+}
+
+export async function consumePendingUninstall(clientId: string): Promise<{
+  id: string;
+  payload: any;
+} | null> {
+  await ensurePendingDir();
+  const fp = pendingUninstallPath(clientId);
+  // Atomically CLAIM the record by renaming it. rename() is atomic, so when two
+  // consumers race (e.g. a heartbeat and a WebSocket reconnect of the same
+  // client) only one rename succeeds; the loser gets ENOENT and returns null.
+  // This guarantees the uninstall command is delivered exactly once [B-M5].
+  const claimed = `${fp}.claim_${process.pid}_${Date.now()}_${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fsPromises.rename(fp, claimed);
+  } catch {
+    return null; // not present, or already claimed by a concurrent consumer
+  }
+  try {
+    const content = await fsPromises.readFile(claimed, "utf-8");
+    const rec = JSON.parse(content);
+    return { id: String(rec?.id || ""), payload: rec?.payload ?? {} };
+  } catch {
+    return null;
+  } finally {
+    await fsPromises.unlink(claimed).catch(() => undefined);
+  }
+}
+
+/** Re-queue an uninstall that was claimed but could not be delivered. */
+export async function requeuePendingUninstall(
+  clientId: string,
+  id: string,
+  payload: any,
+): Promise<void> {
+  await persistPendingUninstall(clientId, id, payload);
+}
+
+export async function requestClientUninstall(
+  clientId: string,
+  payload: any = {},
+): Promise<{ queued: boolean; sent: boolean; commandId: string | null }> {
+  const id = makeId();
+  await persistPendingUninstall(clientId, id, payload);
 
   const sent = sendCommandToClient(clientId, "uninstall", { ...payload, id });
   if (sent) {
@@ -384,25 +405,32 @@ export function registerClientSocket(
     serverAddrByClient.set(clientId, cleaned);
   }
   (async () => {
-    if (await hasPendingUninstall(clientId)) {
-      try {
-        const content = await fsPromises.readFile(
-          pendingUninstallPath(clientId),
-          "utf-8",
-        );
-        const rec = JSON.parse(content);
-        const cmd = {
-          id: rec?.id || makeId(),
-          type: "uninstall",
-          payload: rec?.payload ?? {},
-        };
-        if (socket.readyState === 1) {
-          socket.send(JSON.stringify(cmd));
-        }
-      } finally {
+    // Claim the uninstall atomically so the heartbeat path can't deliver the
+    // same command concurrently [B-M5]. If we fail to push it (socket already
+    // gone), re-queue so a later heartbeat/reconnect retries.
+    const uninstall = await consumePendingUninstall(clientId);
+    if (uninstall && uninstall.id) {
+      let delivered = false;
+      if (socket.readyState === 1) {
         try {
-          await clearPendingUninstall(clientId);
-        } catch {}
+          socket.send(
+            JSON.stringify({
+              id: uninstall.id,
+              type: "uninstall",
+              payload: uninstall.payload ?? {},
+            }),
+          );
+          delivered = true;
+        } catch {
+          delivered = false;
+        }
+      }
+      if (!delivered) {
+        await requeuePendingUninstall(
+          clientId,
+          uninstall.id,
+          uninstall.payload,
+        ).catch(() => undefined);
       }
     }
 
