@@ -56,7 +56,7 @@ export default function ScreenshotsList() {
 
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
-  const [page, setPage] = React.useState(1);
+  const [loading, setLoading] = React.useState(false);
   const [clients, setClients] = React.useState([]);
   const [filters, setFilters] = React.useState({
     clientId: clientFromUrl || null,
@@ -70,6 +70,16 @@ export default function ScreenshotsList() {
   const [previewUrl, setPreviewUrl] = React.useState(null);
 
   const pageSize = 50;
+  const hasMore = items.length < total;
+
+  // Refs to avoid stale closures in IntersectionObserver
+  const loadingRef = React.useRef(false);
+  const pageRef = React.useRef(1);
+  const hasMoreRef = React.useRef(false);
+  const sentinelRef = React.useRef(null);
+  const fetchRef = React.useRef(null);
+
+  React.useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
   /* Load clients */
   React.useEffect(() => {
@@ -79,48 +89,87 @@ export default function ScreenshotsList() {
       .catch(() => setClients([]));
   }, [API_URL]);
 
-  /* Load screenshots */
-  const load = React.useCallback(() => {
-    const params = new URLSearchParams({
-      page: String(page),
-      pageSize: String(pageSize),
-      ts: String(Date.now()),
-    });
-    if (filters.clientId) params.append("clientId", filters.clientId);
-    if (filters.category) params.append("category", filters.category);
-    if (filters.isFavorite) params.append("isFavorite", "true");
-    if (filters.date) params.append("date", filters.date);
+  /* Fetch a page and optionally append to existing list */
+  const fetchPage = React.useCallback(
+    async (page, append) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          pageSize: String(pageSize),
+          ts: String(Date.now()),
+        });
+        if (filters.clientId) params.append("clientId", filters.clientId);
+        if (filters.category) params.append("category", filters.category);
+        if (filters.isFavorite) params.append("isFavorite", "true");
+        if (filters.date) params.append("date", filters.date);
 
-    authFetch(`${API_URL}/screenshots?${params.toString()}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (!json) return;
+        const r = await authFetch(`${API_URL}/screenshots?${params}`, {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const json = await r.json();
         let data = json.data || [];
         if (filters.sort === "asc") {
           data = [...data].sort(
-            (a, b) =>
-              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           );
         } else {
           data = [...data].sort(
-            (a, b) =>
-              new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
           );
         }
-        setItems(data);
         setTotal(json.total || 0);
-        if (data.length && (!selected || !data.find((d) => d.id === selected.id))) {
-          setSelected(data[0]);
+        if (append) {
+          setItems((prev) => {
+            const existing = new Set(prev.map((i) => i.id));
+            return [...prev, ...data.filter((d) => !existing.has(d.id))];
+          });
+        } else {
+          setItems(data);
+          if (data.length) setSelected(data[0]);
         }
-      })
-      .catch(() => {});
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [API_URL, filters, page]);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [API_URL, filters],
+  );
+
+  // Keep fetchRef current so the observer callback always uses latest version
+  React.useEffect(() => { fetchRef.current = fetchPage; }, [fetchPage]);
+
+  /* Reset and reload when filters change */
   React.useEffect(() => {
-    load();
-  }, [load]);
+    pageRef.current = 1;
+    setItems([]);
+    setTotal(0);
+    setSelected(null);
+    fetchPage(1, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, API_URL]);
+
+  /* Infinite scroll — sentinel triggers next page load */
+  React.useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loadingRef.current && hasMoreRef.current) {
+          pageRef.current += 1;
+          fetchRef.current(pageRef.current, true);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []); // created once — uses refs internally
 
   /* Lazy-load thumbnail urls */
   React.useEffect(() => {
@@ -137,10 +186,8 @@ export default function ScreenshotsList() {
         })
         .catch(() => {});
     });
-    return () => {
-      cancelled = true;
-    };
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, API_URL]);
 
   /* Load full preview for selected */
@@ -258,7 +305,7 @@ export default function ScreenshotsList() {
             flex: 1,
           }}
         >
-          {/* Header — pixel-perfect Figma layout_RCEI91 */}
+          {/* Header */}
           <div
             style={{
               display: "flex",
@@ -322,7 +369,7 @@ export default function ScreenshotsList() {
               </span>
             </div>
 
-            {/* Right side: small ArrowButton (Figma Frame 56) */}
+            {/* Right side: menu */}
             <Dropdown
               trigger={["click"]}
               menu={{
@@ -344,8 +391,6 @@ export default function ScreenshotsList() {
                       onClick: () => {
                         setFilters((f) => ({ ...f, clientId: c.id }));
                         setSearchParams({ clientId: c.id });
-                        setSelected(null);
-                        setPage(1);
                       },
                     })),
                   },
@@ -639,7 +684,7 @@ export default function ScreenshotsList() {
                 </Dropdown>
                 <div style={{ flex: 1 }} />
                 <span style={{ color: BP.light, fontSize: 13 }}>
-                  Всего: {total}
+                  {items.length} / {total}
                 </span>
               </div>
 
@@ -652,7 +697,7 @@ export default function ScreenshotsList() {
                 }}
               />
 
-              {/* Thumbnails grid */}
+              {/* Thumbnails grid with infinite scroll */}
               <div
                 style={{
                   flex: 1,
@@ -663,7 +708,7 @@ export default function ScreenshotsList() {
                   background: BP.white,
                 }}
               >
-                {items.length === 0 ? (
+                {items.length === 0 && !loading ? (
                   <div style={{ padding: 32, textAlign: "center" }}>
                     <Empty description={t("common.noData")} />
                   </div>
@@ -764,19 +809,21 @@ export default function ScreenshotsList() {
                   </div>
                 )}
 
-                {total > items.length && (
+                {/* Sentinel — IntersectionObserver watches this to trigger next page */}
+                <div ref={sentinelRef} style={{ height: 1 }} />
+
+                {/* Loading indicator shown while fetching next page */}
+                {loading && (
                   <div
                     style={{
                       textAlign: "center",
                       padding: "16px 0 8px",
+                      color: BP.light,
+                      fontFamily: BP.font,
+                      fontSize: 13,
                     }}
                   >
-                    <Button
-                      onClick={() => setPage((p) => p + 1)}
-                      style={{ borderRadius: 30 }}
-                    >
-                      Загрузить ещё ({total - items.length})
-                    </Button>
+                    Загрузка...
                   </div>
                 )}
               </div>
