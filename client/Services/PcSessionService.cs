@@ -97,17 +97,26 @@ public class PcSessionService : IHostedService
         catch { }
     }
 
-    private async void OnHeartbeatSucceeded()
+    // The HeartbeatSucceeded event is an Action (void), so the handler must be
+    // void. Rather than `async void` (whose exceptions escape to the process and
+    // can crash the service), the handler launches a self-contained Task that
+    // handles ALL of its own exceptions — so the discarded task can never fault.
+    private void OnHeartbeatSucceeded()
     {
-        bool needSend;
-        lock (_stateLock)
-        {
-            needSend = !_bootSent;
-        }
-        if (!needSend) return;
+        _ = SendBootEventAsync();
+    }
 
+    private async Task SendBootEventAsync()
+    {
         try
         {
+            bool needSend;
+            lock (_stateLock)
+            {
+                needSend = !_bootSent;
+            }
+            if (!needSend) return;
+
             await _transmission.SendPcSessionEventAsync("Boot", _bootAtUtc, _bootId);
             lock (_stateLock)
             {
@@ -124,12 +133,17 @@ public class PcSessionService : IHostedService
 
     private void OnSessionEnding(object? sender, SessionEndingEventArgs e)
     {
-        // Synchronous: SessionEnding fires moments before OS termination.
-        // Block up to 3 seconds so the encrypted POST has a chance to land.
+        // Synchronous: SessionEnding fires moments before OS termination, so we
+        // must block briefly to let the encrypted POST land. Running the async
+        // work via Task.Run moves it onto the thread pool (no captured
+        // SynchronizationContext), so its continuations don't need the
+        // SessionEnding thread we are about to block — which is what would
+        // otherwise deadlock a plain task.Wait() here [C-C2].
         try
         {
-            var task = _transmission.SendPcSessionEventAsync("Shutdown", DateTime.UtcNow, _bootId);
-            task.Wait(TimeSpan.FromSeconds(3));
+            Task.Run(() =>
+                    _transmission.SendPcSessionEventAsync("Shutdown", DateTime.UtcNow, _bootId))
+                .Wait(TimeSpan.FromSeconds(3));
         }
         catch (Exception ex)
         {

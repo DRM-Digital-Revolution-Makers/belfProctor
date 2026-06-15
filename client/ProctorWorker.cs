@@ -268,12 +268,35 @@ public class ProctorWorker : BackgroundService
         var isActive = _activityMonitorService.IsUserActive;
         var ms = (long)_activityMonitorService.ActiveElapsed.TotalMilliseconds;
         var ims = (long)_activityMonitorService.InactiveElapsed.TotalMilliseconds;
-        try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
-        catch { }
+        try
+        {
+            await _dataTransmissionService.SendActivityAsync(isActive, ms, ims);
+        }
+        catch (Exception ex)
+        {
+            // Transient — the next snapshot retries. Log (not silent) at debug
+            // so it's diagnosable without spamming on every network blip.
+            _logger.LogDebug(ex, "Failed to send activity snapshot");
+        }
     }
 
     private void OnSystemEventOccurred(object? sender, SystemEvent e)
     {
-        _dataTransmissionService.SendSystemEventAsync(e);
+        // Event handler is void; launch the send as a self-contained Task that
+        // logs its own failures, so a transmission error can't become an
+        // unobserved exception or silently drop the event [C-C5].
+        _ = SendSystemEventSafeAsync(e);
+    }
+
+    private async Task SendSystemEventSafeAsync(SystemEvent e)
+    {
+        try
+        {
+            await _dataTransmissionService.SendSystemEventAsync(e);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send system event {EventType}", e.EventType);
+        }
     }
 }

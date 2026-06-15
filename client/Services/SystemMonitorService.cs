@@ -227,7 +227,12 @@ public class SystemMonitorService : ISystemMonitorService
 
     private async Task MonitorUsbFileActivity()
     {
-        while (!_cancellationTokenSource?.Token.IsCancellationRequested ?? false)
+        // Capture the token once. The old condition
+        // `!_cts?.Token.IsCancellationRequested ?? false` relied on subtle
+        // operator precedence and evaluated to false (loop never runs) if the
+        // CTS were ever null — a fragile pattern we replace with an explicit one [C-C4].
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
@@ -240,7 +245,7 @@ public class SystemMonitorService : ISystemMonitorService
                     ScanUsbDrive(drive);
                 }
 
-                await Task.Delay(15000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(15000, token);
             }
             catch (OperationCanceledException)
             {
@@ -249,7 +254,7 @@ public class SystemMonitorService : ISystemMonitorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in USB file monitoring");
-                await Task.Delay(30000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(30000, token);
             }
         }
     }
@@ -367,14 +372,13 @@ public class SystemMonitorService : ISystemMonitorService
 
     private async Task MonitorNetworkActivity()
     {
-        var lastNetworkCheck = DateTime.UtcNow;
-        
-        while (!_cancellationTokenSource?.Token.IsCancellationRequested ?? false)
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
                 await CheckNetworkConnections();
-                await Task.Delay(5000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(5000, token);
             }
             catch (OperationCanceledException)
             {
@@ -383,7 +387,7 @@ public class SystemMonitorService : ISystemMonitorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in network monitoring");
-                await Task.Delay(10000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(10000, token);
             }
         }
     }
@@ -601,7 +605,8 @@ public class SystemMonitorService : ISystemMonitorService
     private async Task MonitorActiveWindow()
     {
         string? lastTitle = null;
-        while (!_cancellationTokenSource?.IsCancellationRequested ?? false)
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
@@ -649,7 +654,7 @@ public class SystemMonitorService : ISystemMonitorService
                         }
                     }
                 }
-                await Task.Delay(1000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(1000, token);
             }
             catch (Exception)
             {
