@@ -400,6 +400,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 try { Directory.CreateDirectory(_pendingScreenshots); } catch { }
                 try { if (File.Exists(filePath)) File.Move(filePath, destPending, true); } catch { }
                 TryWriteScreenshotSidecar(destPending, metadata);
+                TrimPendingDirectory(_pendingScreenshots, "*.jpg", 5);
                 _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
             }
         }
@@ -410,6 +411,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 if (File.Exists(filePath)) File.Move(filePath, destPending, true);
                 TryWriteScreenshotSidecar(destPending, metadata);
+                TrimPendingDirectory(_pendingScreenshots, "*.jpg", 5);
             } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
         }
@@ -1113,10 +1115,20 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         {
             _logger.LogDebug("Starting FlushPendingAsync");
 
-            // Send pending screenshots with a throttle: max 30 per flush cycle so a
-            // large offline backlog doesn't flood the server on reconnect. Remaining
-            // files stay in the queue and are sent on the next retry tick.
-            const int MaxScreenshotsPerFlush = 30;
+            // Trim any large backlog that may have accumulated from older builds
+            // (e.g. WorkTrackingService taking screenshots on every window switch).
+            // Keep only the 3 most recent .jpg files; delete everything else.
+            TrimPendingDirectory(_pendingScreenshots, "*.jpg", 3);
+            // Remove orphaned .json sidecars whose matching .jpg was just deleted.
+            foreach (var sidecar in Directory.GetFiles(_pendingScreenshots, "*.json"))
+            {
+                var jpg = sidecar.Substring(0, sidecar.Length - 5); // strip ".json"
+                if (!File.Exists(jpg)) try { File.Delete(sidecar); } catch { }
+            }
+
+            // Send 1 pending screenshot per flush cycle. The retry timer fires every
+            // minute, so catch-up is at most 3 screenshots over 3 minutes — no burst.
+            const int MaxScreenshotsPerFlush = 1;
             var screenshotFiles = Directory.GetFiles(_pendingScreenshots)
                 .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(f => f)
@@ -1131,9 +1143,6 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     using (var content = new MultipartFormDataContent())
                     {
                         var sendName = Path.GetFileName(file);
-                        // Filename was stamped with DateTime.UtcNow at capture time, so parsing it
-                        // gives us back the original UTC. GetCreationTimeUtc is the safe fallback —
-                        // GetCreationTime returns Local, which would later be misread as UTC.
                         var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTimeUtc(file);
                         var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
                             ? timestamp
@@ -1142,7 +1151,6 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
                         content.Add(streamContent, "screenshot", uploadName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        // Explicit 'Z' suffix so the server doesn't have to guess.
                         content.Add(new StringContent(utcTimestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         var metadata = TryReadScreenshotSidecar(file);
                         AddScreenshotMetadata(content, metadata);
@@ -1154,12 +1162,10 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                             _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
                             File.Delete(file);
                             try { File.Delete(file + ".json"); } catch { }
-                            // Throttle to avoid a burst hitting the server back-to-back.
-                            await Task.Delay(200);
                         }
                         else
                         {
-                             _logger.LogWarning("Failed to send pending screenshot {FileName}. Status: {Status}", sendName, resp.StatusCode);
+                            _logger.LogWarning("Failed to send pending screenshot {FileName}. Status: {Status}", sendName, resp.StatusCode);
                         }
                     }
                 }

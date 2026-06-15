@@ -111,7 +111,10 @@ public class ProctorWorker : BackgroundService
 
     private async Task RunScreenshotLoop(CancellationToken ct)
     {
-        var interval = _settings.ScreenshotIntervalMs > 5000 ? _settings.ScreenshotIntervalMs : 300000;
+        // Enforce a floor of 5 minutes. Values < 300 000 ms (e.g. a stale 10 000 saved
+        // to AppData by a previous setIntervals command) would otherwise cause a burst
+        // of screenshots every few seconds right after startup.
+        var interval = _settings.ScreenshotIntervalMs >= 300000 ? _settings.ScreenshotIntervalMs : 300000;
         var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(interval));
         // Немедленный снимок при старте
         await TakeScreenshot();

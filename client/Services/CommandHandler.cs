@@ -78,9 +78,9 @@ public class CommandHandler
                 }
             }
 
-            ApplyIfPresent(cmd.Payload, "ScreenshotInterval", v => _settings.ScreenshotIntervalMs = v);
-            ApplyIfPresent(cmd.Payload, "ScreenshotIntervalMs", v => _settings.ScreenshotIntervalMs = v);
-            ApplyIfPresent(cmd.Payload, "screenshotMs", v => _settings.ScreenshotIntervalMs = v);
+            ApplyIfPresent(cmd.Payload, "ScreenshotInterval", v => _settings.ScreenshotIntervalMs = Math.Max(300000, v));
+            ApplyIfPresent(cmd.Payload, "ScreenshotIntervalMs", v => _settings.ScreenshotIntervalMs = Math.Max(300000, v));
+            ApplyIfPresent(cmd.Payload, "screenshotMs", v => _settings.ScreenshotIntervalMs = Math.Max(300000, v));
             ApplyIfPresent(cmd.Payload, "HeartbeatInterval", v => _settings.HeartbeatIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "HeartbeatIntervalMs", v => _settings.HeartbeatIntervalMs = v);
             ApplyIfPresent(cmd.Payload, "heartbeatMs", v => _settings.HeartbeatIntervalMs = v);
