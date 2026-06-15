@@ -141,6 +141,10 @@ public class StreamingService : IDisposable
 
     public void Dispose()
     {
-        try { StopAsync().GetAwaiter().GetResult(); } catch { }
+        // Dispose must not throw. Run StopAsync on the thread pool (no captured
+        // SynchronizationContext) so this synchronous wait can't deadlock when
+        // Dispose is called from a context-bound thread [C-M5].
+        try { Task.Run(() => StopAsync()).GetAwaiter().GetResult(); }
+        catch { /* swallow by Dispose contract */ }
     }
 }
