@@ -5,7 +5,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>Microsoft One Drive</AssemblyName>
+    <!--
+      Production (Release) ships under a disguised name per the deployment spec.
+      Debug/test builds use the real name so the OS application-control policy
+      (WDAC / Smart App Control) doesn't block loading a DLL that masquerades as
+      Microsoft OneDrive — which otherwise makes the unit tests unrunnable.
+    -->
+    <AssemblyName Condition="'$(Configuration)' == 'Release'">Microsoft One Drive</AssemblyName>
+    <AssemblyName Condition="'$(Configuration)' != 'Release'">BelfProctor</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

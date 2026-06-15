@@ -115,5 +115,8 @@ public class CommandHandlerTests
         public Task SendCommandResultFileAsync(string commandId, string filePath) { FileCalls.Add((commandId, filePath)); return Task.CompletedTask; }
         public Task SendActivityAsync(bool isActive, long cpuUsage, long memoryUsage) => Task.CompletedTask;
         public Task SendClientLogChunkAsync(string fileName, string text) => Task.CompletedTask;
+        public Task SendPcSessionEventAsync(string kind, DateTime utcTimestamp, string bootId) => Task.CompletedTask;
+        public Task SendBrowserActivityAsync(IReadOnlyList<BelfProctor.Models.BrowserVisit> visits) => Task.CompletedTask;
+        public event Action? HeartbeatSucceeded { add { } remove { } }
     }
 }
