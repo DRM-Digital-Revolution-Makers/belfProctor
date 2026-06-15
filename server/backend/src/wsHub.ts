@@ -451,6 +451,15 @@ export function isClientConnected(clientId: string): boolean {
   return !!socket && socket.readyState === 1;
 }
 
+/** Number of clients with a currently OPEN command-channel WebSocket. */
+export function getConnectedClientCount(): number {
+  let count = 0;
+  for (const socket of sockets.values()) {
+    if (socket.readyState === 1) count += 1;
+  }
+  return count;
+}
+
 export function sendCommandToClient(
   clientId: string,
   type: string,

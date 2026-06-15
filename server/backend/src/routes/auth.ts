@@ -2,9 +2,10 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { getUser } from "../store";
+import { config } from "../config";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "devsecret";
+const JWT_SECRET = config.jwtSecret;
 
 router.post("/login", async (req, res) => {
   const { email, password } = req.body as { email: string; password: string };
