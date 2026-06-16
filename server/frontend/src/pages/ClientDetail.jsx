@@ -1818,9 +1818,58 @@ function MetricTable({ icon, title, rows, nameKey, emptyText }) {
 
 function LiveViewPanel({ clientId, apiUrl }) {
   const canvasRef = React.useRef(null);
+  const fullscreenCanvasRef = React.useRef(null);
   const wsRef = React.useRef(null);
   const [status, setStatus] = React.useState("stopped");
   const [hasFrame, setHasFrame] = React.useState(false);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+
+  const drawFrame = React.useCallback((image) => {
+    [canvasRef.current, fullscreenCanvasRef.current].forEach((canvas) => {
+      if (!canvas) return;
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext("2d");
+      ctx?.drawImage(image, 0, 0);
+    });
+  }, []);
+
+  const openFullscreen = React.useCallback(() => {
+    const source = canvasRef.current;
+    const target = fullscreenCanvasRef.current;
+    if (source && target && source.width && source.height) {
+      target.width = source.width;
+      target.height = source.height;
+      target.getContext("2d")?.drawImage(source, 0, 0);
+    }
+    setIsFullscreen(true);
+  }, []);
+
+  const closeFullscreen = React.useCallback(() => {
+    setIsFullscreen(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") closeFullscreen();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeFullscreen, isFullscreen]);
+
+  React.useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const source = canvasRef.current;
+      const target = fullscreenCanvasRef.current;
+      if (!source || !target || !source.width || !source.height) return;
+      target.width = source.width;
+      target.height = source.height;
+      target.getContext("2d")?.drawImage(source, 0, 0);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isFullscreen]);
 
   const stop = React.useCallback(() => {
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -1828,6 +1877,7 @@ function LiveViewPanel({ clientId, apiUrl }) {
     }
     wsRef.current = null;
     setHasFrame(false);
+    setIsFullscreen(false);
     setStatus("stopped");
   }, []);
 
@@ -1860,18 +1910,13 @@ function LiveViewPanel({ clientId, apiUrl }) {
       const url = URL.createObjectURL(blob);
       const image = new window.Image();
       image.onload = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        canvas.width = image.width;
-        canvas.height = image.height;
-        const ctx = canvas.getContext("2d");
-        ctx?.drawImage(image, 0, 0);
+        drawFrame(image);
         setHasFrame(true);
         URL.revokeObjectURL(url);
       };
       image.src = url;
     };
-  }, [apiUrl, clientId, stop]);
+  }, [apiUrl, clientId, drawFrame, stop]);
 
   const statusLabel = {
     connecting: "Подключение",
@@ -1947,6 +1992,13 @@ function LiveViewPanel({ clientId, apiUrl }) {
           ) : (
             <Button className="bp-primary-action" type="primary" onClick={start} icon={<Icon icon="solar:play-bold" />}>Запустить</Button>
           )}
+          <Button
+            className="bp-ghost-action"
+            onClick={openFullscreen}
+            disabled={!hasFrame}
+            icon={<Icon icon="solar:maximize-square-bold" />}
+            title="Fullscreen"
+          />
         </div>
       </div>
       <div
@@ -2010,6 +2062,68 @@ function LiveViewPanel({ clientId, apiUrl }) {
           </div>
         )}
       </div>
+      {isFullscreen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            background: "#000",
+            display: "grid",
+            gridTemplateRows: "auto 1fr",
+          }}
+        >
+          <div
+            style={{
+              height: 56,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 18px",
+              background: "rgba(0,0,0,0.72)",
+              color: BP.white,
+              fontFamily: BP.font,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <Icon icon="solar:monitor-bold-duotone" width={20} height={20} />
+              <span style={{ fontSize: 15, fontWeight: 510, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {clientId}
+              </span>
+            </div>
+            <Button
+              type="text"
+              onClick={closeFullscreen}
+              icon={<Icon icon="solar:minimize-square-bold" width={20} height={20} />}
+              style={{ color: BP.white }}
+              title="Exit fullscreen"
+            />
+          </div>
+          <div
+            onDoubleClick={closeFullscreen}
+            style={{
+              minHeight: 0,
+              display: "grid",
+              placeItems: "center",
+              padding: 12,
+            }}
+          >
+            <canvas
+              ref={fullscreenCanvasRef}
+              style={{
+                width: "100%",
+                height: "100%",
+                maxWidth: "100%",
+                maxHeight: "100%",
+                objectFit: "contain",
+                display: "block",
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
