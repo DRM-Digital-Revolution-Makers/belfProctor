@@ -5,13 +5,8 @@ import fs from "fs";
 import os from "os";
 import { decryptAes256CbcPrefixedIv, decryptFileStream } from "../encryption";
 import { requireAuth } from "../middleware/auth";
-import {
-  getClient,
-  getClients,
-  saveClient,
-  getFavorites,
-  setFavorite,
-} from "../store";
+import { getClient, saveClient, setFavorite } from "../store";
+import { Prisma } from "@prisma/client";
 import { getSenderClientId, normalizeClientId } from "../clientId";
 import { withLock } from "../locks";
 import { getKeysToTry } from "../keyring";
@@ -286,102 +281,75 @@ router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
   }
 });
 
-// Listings for admin
+// Listings for admin — served from the indexed Screenshot table (not a disk
+// scan, which did a statSync per file and degraded badly past ~10k files).
 router.get("/screenshots", requireAuth, async (req, res) => {
   try {
-    const screenshotsDir = path.join(getUploadDir(), "screenshots");
-    if (!fs.existsSync(screenshotsDir)) {
-      return res.json({ data: [], total: 0 });
+    const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(
+      200,
+      Math.max(1, parseInt(String(req.query.pageSize || "20"), 10) || 20),
+    );
+
+    const where: Prisma.ScreenshotWhereInput = {};
+
+    const filterClient = String(req.query.clientId || "").trim();
+    if (filterClient) where.clientId = filterClient;
+
+    if (req.query.isFavorite === "true") where.isFavorite = true;
+
+    const dateStr = String(req.query.date || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const from = startOfTashkentDay(new Date(`${dateStr}T12:00:00Z`));
+      const to = endOfTashkentDay(new Date(`${dateStr}T12:00:00Z`));
+      where.timestamp = { gte: from, lte: to };
     }
 
-    const favorites = new Set(await getFavorites());
-    let allFiles: any[] = [];
-    let clientDirs = fs.readdirSync(screenshotsDir);
-
+    // Category filter → restrict to clients in that category.
     const filterCategory = String(req.query.category || "").trim();
     if (filterCategory) {
-      const clients = await getClients();
-      const allowed = new Set(
-        clients
-          .filter((c) => String(c?.category || "") === filterCategory)
-          .map((c) => c.id),
-      );
-      clientDirs = clientDirs.filter((id) => allowed.has(id));
-    }
-
-    // If a specific Tashkent day is requested, read the full set for that window.
-    // Otherwise apply a soft cap so the global overview doesn't load tens of thousands.
-    const dateStr = String(req.query.date || "").trim();
-    const dateMatch = /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
-    const dayFrom = dateMatch
-      ? startOfTashkentDay(new Date(`${dateStr}T12:00:00Z`))
-      : null;
-    const dayTo = dateMatch
-      ? endOfTashkentDay(new Date(`${dateStr}T12:00:00Z`))
-      : null;
-    const maxPerClient = dayFrom ? Infinity : 200;
-    for (const clientId of clientDirs) {
-      const clientDir = path.join(screenshotsDir, clientId);
-      if (!fs.statSync(clientDir).isDirectory()) continue;
-
-      const files = fs.readdirSync(clientDir);
-      const sorted = files
-        .filter((f) => f.endsWith(".jpg") || f.endsWith(".png"))
-        .map((f) => ({
-          f,
-          mtime: fs.statSync(path.join(clientDir, f)).mtime.getTime(),
-        }))
-        .sort((a, b) => b.mtime - a.mtime)
-        .slice(0, Number.isFinite(maxPerClient) ? maxPerClient : files.length);
-      for (const { f, mtime } of sorted) {
-        let timestamp: Date;
-        const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
-        if (match) {
-          const datePart = match[1].substring(0, 10);
-          const timePart = match[1].substring(11).replace(/-/g, ":");
-          const d = new Date(`${datePart}T${timePart}`);
-          timestamp = !isNaN(d.getTime()) ? d : new Date(mtime);
-        } else {
-          timestamp = new Date(mtime);
+      const clients = await prisma.client.findMany({
+        where: { category: filterCategory },
+        select: { id: true },
+      });
+      const ids = clients.map((c) => c.id);
+      if (typeof where.clientId === "string") {
+        if (!ids.includes(where.clientId)) {
+          return res.json({ data: [], total: 0 });
         }
-        if (dayFrom && dayTo) {
-          if (timestamp < dayFrom || timestamp > dayTo) continue;
-        }
-        allFiles.push({
-          id: f,
-          clientId,
-          filename: f,
-          path: path.join(clientDir, f),
-          timestamp,
-          createdAt: timestamp,
-          isFavorite: favorites.has(f),
-        });
+      } else {
+        where.clientId = { in: ids };
       }
     }
 
-    // Sort desc
-    allFiles.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    const [rows, total] = await Promise.all([
+      prisma.screenshot.findMany({
+        where,
+        orderBy: { timestamp: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          clientId: true,
+          filename: true,
+          path: true,
+          timestamp: true,
+          isFavorite: true,
+        },
+      }),
+      prisma.screenshot.count({ where }),
+    ]);
 
-    // Pagination
-    const page = parseInt(req.query.page as string) || 1;
-    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const data = rows.map((r) => ({
+      id: r.filename,
+      clientId: r.clientId,
+      filename: r.filename,
+      path: r.path,
+      timestamp: r.timestamp,
+      createdAt: r.timestamp,
+      isFavorite: r.isFavorite,
+    }));
 
-    // Filter by clientId if needed
-    const filterClient = req.query.clientId as string;
-    if (filterClient) {
-      allFiles = allFiles.filter((f) => f.clientId === filterClient);
-    }
-
-    // Filter by isFavorite
-    if (req.query.isFavorite === "true") {
-      allFiles = allFiles.filter((f) => f.isFavorite);
-    }
-
-    const total = allFiles.length;
-    const start = (page - 1) * pageSize;
-    const slice = allFiles.slice(start, start + pageSize);
-
-    return res.json({ data: slice, total });
+    return res.json({ data, total });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ message: "Failed to list screenshots" });
