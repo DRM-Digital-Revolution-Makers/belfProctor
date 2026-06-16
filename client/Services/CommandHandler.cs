@@ -338,10 +338,29 @@ public class CommandHandler
         {
             if (string.IsNullOrEmpty(basePath)) continue;
             var canon = Path.GetFullPath(basePath);
-            if (resolved.Equals(canon, StringComparison.OrdinalIgnoreCase) || resolved.StartsWith(canon + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (IsPathInsideBase(resolved, canon))
                 return resolved;
         }
         return null;
+    }
+
+    private static bool IsPathInsideBase(string resolvedPath, string basePath)
+    {
+        var canonBase = Path.GetFullPath(basePath);
+        var canonResolved = Path.GetFullPath(resolvedPath);
+
+        if (canonResolved.Equals(canonBase, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var root = Path.GetPathRoot(canonBase);
+        var prefix = canonBase;
+        if (!string.Equals(canonBase, root, StringComparison.OrdinalIgnoreCase))
+        {
+            prefix = canonBase.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+        }
+
+        return canonResolved.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private void SaveSettingsToAppData()

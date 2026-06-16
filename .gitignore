@@ -66,3 +66,4 @@ pnpm-debug.log*
 # Large binaries (exceed GitHub 100MB limit)
 client/deploy-pkg/*.exe
 client/bootstrap-pkg/*.exe
+.codex-tools/
