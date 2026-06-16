@@ -26,7 +26,8 @@ public class WorkerSystemTests
             LogPath = logs,
             ReportsPath = reports,
             ClientId = "test",
-            ServerUrl = "http://localhost"
+            ServerUrl = "http://localhost",
+            MaxStartupJitterMs = 0 // fire timers immediately so the 500ms wait is deterministic
         });
 
         var screenshotStub = new ScreenshotStub();
@@ -98,6 +99,9 @@ public class WorkerSystemTests
         public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
         public Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds) => Task.CompletedTask;
         public Task SendClientLogChunkAsync(string fileName, string text) => Task.CompletedTask;
+        public Task SendPcSessionEventAsync(string kind, DateTime utcTimestamp, string bootId) => Task.CompletedTask;
+        public Task SendBrowserActivityAsync(IReadOnlyList<BelfProctor.Models.BrowserVisit> visits) => Task.CompletedTask;
+        public event Action? HeartbeatSucceeded { add { } remove { } }
         public void Dispose() { }
     }
 

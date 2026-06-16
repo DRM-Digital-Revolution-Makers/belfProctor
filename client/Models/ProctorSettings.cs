@@ -22,6 +22,7 @@ public class ProctorSettings
     public int HeartbeatIntervalMs { get; set; } = 60000; // мс
     public int PolicyUpdateIntervalMs { get; set; } = 300000; // мс
     public int DirectoryListingIntervalMs { get; set; } = 600000; // мс
+    public int MaxStartupJitterMs { get; set; } = 30000; // мс, разброс старта таймеров чтобы 60 ПК не синхронизировались (0 = немедленно)
     public int InactivityThresholdMinutes { get; set; } = 3; // минуты, через сколько считать пользователя неактивным
     public List<string> DirectoryRoots { get; set; } = new();
     public string AdminPasswordHash { get; set; } = string.Empty;

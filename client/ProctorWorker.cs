@@ -80,14 +80,14 @@ public class ProctorWorker : BackgroundService
         await base.StartAsync(cancellationToken);
     }
 
-    private const int MaxStartupJitterMs = 30000;
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Stagger startup so a fleet of PCs powering on together (e.g. at 08:00)
         // does not hit the server in one synchronized burst. Spread the first
-        // tick of each periodic task across a random window.
-        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, MaxStartupJitterMs));
+        // tick of each periodic task across a random window. Configurable via
+        // MaxStartupJitterMs (set to 0 to fire immediately — used by tests).
+        var jitterMaxMs = Math.Max(0, _settings.MaxStartupJitterMs);
+        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, jitterMaxMs + 1));
 
         var screenshotLoop = RunScreenshotLoop(stoppingToken, jitter);
 
@@ -100,7 +100,7 @@ public class ProctorWorker : BackgroundService
 
         var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            jitter + TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(policyInterval));
+            jitter, TimeSpan.FromMilliseconds(policyInterval));
 
         try
         {
