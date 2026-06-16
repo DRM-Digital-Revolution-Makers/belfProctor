@@ -40,7 +40,9 @@ CREATE INDEX "BrowserActivity_clientId_visitedAt_idx" ON "BrowserActivity"("clie
 CREATE INDEX "BrowserActivity_clientId_domain_idx" ON "BrowserActivity"("clientId", "domain");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "BrowserActivity_clientId_browser_profile_url_visitedAt_key" ON "BrowserActivity"("clientId", "browser", "profile", "url", "visitedAt");
+-- Dedup on md5(url): raw Chromium URLs can exceed Postgres' 2704-byte btree
+-- index row limit, so the unique index is on the hash, not the raw url.
+CREATE UNIQUE INDEX "BrowserActivity_dedup_md5_url_idx" ON "BrowserActivity"("clientId", "browser", "profile", md5("url"), "visitedAt");
 
 -- AddForeignKey
 ALTER TABLE "PcSession" ADD CONSTRAINT "PcSession_clientId_fkey" FOREIGN KEY ("clientId") REFERENCES "Client"("id") ON DELETE CASCADE ON UPDATE CASCADE;
