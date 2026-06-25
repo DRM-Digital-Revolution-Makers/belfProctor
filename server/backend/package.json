@@ -11,6 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "migrate:storage": "node dist/scripts/migrate-to-postgres.js",
+    "backfill:timesheet": "ts-node src/scripts/backfill-timesheet.ts",
     "test": "jest"
   },
   "engines": {

@@ -178,9 +178,9 @@ export function registerStreamViewer(
 
   if (!alreadyTracked) {
     const commandId = sendCommandToClient(id, "stream.start", {
-      width: 1280,
-      fps: 10,
-      quality: 50,
+      width: 1920,
+      fps: 12,
+      quality: 80,
     });
     appendStreamAudit({
       clientId: id,

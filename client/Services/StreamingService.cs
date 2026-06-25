@@ -30,7 +30,7 @@ public class StreamingService : IDisposable
         }
     }
 
-    public Task StartAsync(int width = 1280, int fps = 10, int quality = 50)
+    public Task StartAsync(int width = 1920, int fps = 12, int quality = 80)
     {
         if (!_settings.Features.LiveView) return Task.CompletedTask;
 
@@ -69,7 +69,7 @@ public class StreamingService : IDisposable
     {
         width = Math.Clamp(width, 320, 1920);
         fps = Math.Clamp(fps, 1, 15);
-        quality = Math.Clamp(quality, 20, 85);
+        quality = Math.Clamp(quality, 20, 95);
 
         using var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
@@ -119,7 +119,10 @@ public class StreamingService : IDisposable
         using var scaled = new Bitmap(width, height);
         using (var graphics = Graphics.FromImage(scaled))
         {
-            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Low;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
             graphics.DrawImage(source, 0, 0, width, height);
         }
 

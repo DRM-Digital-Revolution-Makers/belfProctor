@@ -1818,68 +1818,136 @@ function MetricTable({ icon, title, rows, nameKey, emptyText }) {
 
 function LiveViewPanel({ clientId, apiUrl }) {
   const canvasRef = React.useRef(null);
-  const fullscreenCanvasRef = React.useRef(null);
+  const stageRef = React.useRef(null);
   const wsRef = React.useRef(null);
+  const recorderRef = React.useRef(null);
+  const recordedChunksRef = React.useRef([]);
+  const recordTimerRef = React.useRef(null);
+  const recordStartRef = React.useRef(0);
   const [status, setStatus] = React.useState("stopped");
   const [hasFrame, setHasFrame] = React.useState(false);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [recordSeconds, setRecordSeconds] = React.useState(0);
 
   const drawFrame = React.useCallback((image) => {
-    [canvasRef.current, fullscreenCanvasRef.current].forEach((canvas) => {
-      if (!canvas) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== image.width || canvas.height !== image.height) {
       canvas.width = image.width;
       canvas.height = image.height;
-      const ctx = canvas.getContext("2d");
-      ctx?.drawImage(image, 0, 0);
-    });
-  }, []);
-
-  const openFullscreen = React.useCallback(() => {
-    const source = canvasRef.current;
-    const target = fullscreenCanvasRef.current;
-    if (source && target && source.width && source.height) {
-      target.width = source.width;
-      target.height = source.height;
-      target.getContext("2d")?.drawImage(source, 0, 0);
     }
-    setIsFullscreen(true);
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(image, 0, 0);
+    }
   }, []);
 
-  const closeFullscreen = React.useCallback(() => {
-    setIsFullscreen(false);
+  /* ---- Native fullscreen (like video players) ---- */
+  const toggleFullscreen = React.useCallback(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      (el.requestFullscreen?.() || Promise.reject()).catch(() => {
+        // Fallback for browsers without the standard API
+        if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      });
+    }
   }, []);
 
   React.useEffect(() => {
-    if (!isFullscreen) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") closeFullscreen();
+    const onChange = () => setIsFullscreen(document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  /* ---- Recording (MediaRecorder over canvas.captureStream) ---- */
+  const stopRecording = React.useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }, []);
+
+  const startRecording = React.useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.captureStream || typeof window.MediaRecorder === "undefined") {
+      message.error("Запись не поддерживается этим браузером");
+      return;
+    }
+    let stream;
+    try {
+      stream = canvas.captureStream(15);
+    } catch {
+      message.error("Не удалось захватить экран для записи");
+      return;
+    }
+    const mimeCandidates = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+    const mimeType =
+      mimeCandidates.find((m) => window.MediaRecorder.isTypeSupported?.(m)) || "";
+    let recorder;
+    try {
+      recorder = new window.MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch {
+      message.error("Не удалось начать запись");
+      return;
+    }
+    recordedChunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeFullscreen, isFullscreen]);
-
-  React.useEffect(() => {
-    if (!isFullscreen) return undefined;
-    const frame = window.requestAnimationFrame(() => {
-      const source = canvasRef.current;
-      const target = fullscreenCanvasRef.current;
-      if (!source || !target || !source.width || !source.height) return;
-      target.width = source.width;
-      target.height = source.height;
-      target.getContext("2d")?.drawImage(source, 0, 0);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [isFullscreen]);
+    recorder.onstop = () => {
+      if (recordTimerRef.current) {
+        clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      setIsRecording(false);
+      setRecordSeconds(0);
+      const chunks = recordedChunksRef.current;
+      recordedChunksRef.current = [];
+      if (!chunks.length) {
+        message.warning("Запись пустая — кадры не поступали");
+        return;
+      }
+      const blob = new Blob(chunks, { type: chunks[0].type || "video/webm" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ts = dayjs().format("YYYY-MM-DD_HH-mm-ss");
+      a.href = url;
+      a.download = `screen_${clientId}_${ts}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success("Запись сохранена в загрузки");
+    };
+    recorderRef.current = recorder;
+    recorder.start(1000);
+    recordStartRef.current = Date.now();
+    setIsRecording(true);
+    setRecordSeconds(0);
+    recordTimerRef.current = setInterval(() => {
+      setRecordSeconds(Math.floor((Date.now() - recordStartRef.current) / 1000));
+    }, 1000);
+  }, [clientId]);
 
   const stop = React.useCallback(() => {
+    stopRecording();
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
       wsRef.current.close();
     }
     wsRef.current = null;
     setHasFrame(false);
-    setIsFullscreen(false);
     setStatus("stopped");
-  }, []);
+  }, [stopRecording]);
 
   React.useEffect(() => stop, [stop]);
 
@@ -1987,45 +2055,122 @@ function LiveViewPanel({ clientId, apiUrl }) {
             />
             {statusLabel}
           </span>
+          {isRecording && (
+            <span
+              className="bp-status-pill"
+              style={{ color: BP.red, background: "rgba(220,38,38,0.1)" }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: BP.red,
+                  display: "inline-block",
+                  animation: "bp-live-pulse 1.2s ease infinite",
+                }}
+              />
+              REC {formatRecordTime(recordSeconds)}
+            </span>
+          )}
           {status === "live" || status === "connecting" ? (
             <Button className="bp-ghost-action" onClick={stop} icon={<Icon icon="solar:stop-bold" />}>Остановить</Button>
           ) : (
             <Button className="bp-primary-action" type="primary" onClick={start} icon={<Icon icon="solar:play-bold" />}>Запустить</Button>
           )}
+          {isRecording ? (
+            <Button
+              className="bp-ghost-action"
+              onClick={stopRecording}
+              icon={<Icon icon="solar:stop-circle-bold" />}
+              title="Остановить запись"
+            >
+              Стоп запись
+            </Button>
+          ) : (
+            <Button
+              className="bp-ghost-action"
+              onClick={startRecording}
+              disabled={!hasFrame}
+              icon={<Icon icon="solar:record-circle-bold" color={BP.red} />}
+              title="Записать трансляцию"
+            >
+              Запись
+            </Button>
+          )}
           <Button
             className="bp-ghost-action"
-            onClick={openFullscreen}
+            onClick={toggleFullscreen}
             disabled={!hasFrame}
-            icon={<Icon icon="solar:maximize-square-bold" />}
-            title="Fullscreen"
+            icon={<Icon icon={isFullscreen ? "solar:minimize-square-bold" : "solar:maximize-square-bold"} />}
+            title="Во весь экран"
           />
         </div>
       </div>
       <div
-        style={{
-          position: "relative",
-          height: hasFrame ? "auto" : 240,
-          minHeight: hasFrame ? 220 : 240,
-          maxHeight: hasFrame ? 520 : 260,
-          background: BP.surface,
-          borderRadius: 12,
-          overflow: "hidden",
-          border: `1px solid ${BP.stroke}`,
-          display: "grid",
-          placeItems: "center",
-        }}
+        ref={stageRef}
+        style={
+          isFullscreen
+            ? {
+                position: "relative",
+                width: "100vw",
+                height: "100vh",
+                background: "#000",
+                overflow: "hidden",
+                display: "grid",
+                placeItems: "center",
+              }
+            : {
+                position: "relative",
+                height: hasFrame ? "auto" : 240,
+                minHeight: hasFrame ? 220 : 240,
+                maxHeight: hasFrame ? 520 : 260,
+                background: BP.surface,
+                borderRadius: 12,
+                overflow: "hidden",
+                border: `1px solid ${BP.stroke}`,
+                display: "grid",
+                placeItems: "center",
+              }
+        }
       >
         <canvas
           ref={canvasRef}
-          style={{
-            width: "100%",
-            height: hasFrame ? "auto" : "100%",
-            minHeight: hasFrame ? 220 : "100%",
-            maxHeight: hasFrame ? 520 : "100%",
-            objectFit: "contain",
-            display: "block",
-          }}
+          onDoubleClick={toggleFullscreen}
+          style={
+            isFullscreen
+              ? {
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  display: "block",
+                }
+              : {
+                  width: "100%",
+                  height: hasFrame ? "auto" : "100%",
+                  minHeight: hasFrame ? 220 : "100%",
+                  maxHeight: hasFrame ? 520 : "100%",
+                  objectFit: "contain",
+                  display: "block",
+                  cursor: hasFrame ? "zoom-in" : "default",
+                }
+          }
         />
+        {isFullscreen && (
+          <Button
+            type="text"
+            onClick={toggleFullscreen}
+            icon={<Icon icon="solar:minimize-square-bold" width={22} height={22} />}
+            title="Выйти из полноэкранного режима"
+            style={{
+              position: "absolute",
+              top: 16,
+              right: 16,
+              color: BP.white,
+              background: "rgba(0,0,0,0.45)",
+            }}
+          />
+        )}
         {!hasFrame && (
           <div
             style={{
@@ -2062,70 +2207,15 @@ function LiveViewPanel({ clientId, apiUrl }) {
           </div>
         )}
       </div>
-      {isFullscreen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 3000,
-            background: "#000",
-            display: "grid",
-            gridTemplateRows: "auto 1fr",
-          }}
-        >
-          <div
-            style={{
-              height: 56,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "0 18px",
-              background: "rgba(0,0,0,0.72)",
-              color: BP.white,
-              fontFamily: BP.font,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-              <Icon icon="solar:monitor-bold-duotone" width={20} height={20} />
-              <span style={{ fontSize: 15, fontWeight: 510, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {clientId}
-              </span>
-            </div>
-            <Button
-              type="text"
-              onClick={closeFullscreen}
-              icon={<Icon icon="solar:minimize-square-bold" width={20} height={20} />}
-              style={{ color: BP.white }}
-              title="Exit fullscreen"
-            />
-          </div>
-          <div
-            onDoubleClick={closeFullscreen}
-            style={{
-              minHeight: 0,
-              display: "grid",
-              placeItems: "center",
-              padding: 12,
-            }}
-          >
-            <canvas
-              ref={fullscreenCanvasRef}
-              style={{
-                width: "100%",
-                height: "100%",
-                maxWidth: "100%",
-                maxHeight: "100%",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
+}
+
+function formatRecordTime(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
 function WorkEmptyState({ icon, title, description }) {

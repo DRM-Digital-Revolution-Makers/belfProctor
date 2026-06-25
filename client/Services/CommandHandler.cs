@@ -96,9 +96,9 @@ public class CommandHandler
 
         if (cmd.Type == "stream.start" || cmd.Type == "start_stream")
         {
-            var width = GetInt(cmd.Payload, "width", 1280);
-            var fps = GetInt(cmd.Payload, "fps", 10);
-            var quality = GetInt(cmd.Payload, "quality", 50);
+            var width = GetInt(cmd.Payload, "width", 1920);
+            var fps = GetInt(cmd.Payload, "fps", 12);
+            var quality = GetInt(cmd.Payload, "quality", 80);
             await _streaming.StartAsync(width, fps, quality);
             var ok = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new { ok = true, status = "stream_started" }));
             await _transmission.SendCommandResultJsonAsync(cmd.Id, ok);

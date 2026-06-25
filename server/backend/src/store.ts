@@ -82,6 +82,26 @@ function activityDelta(
   };
 }
 
+/**
+ * A sample pair can't represent more active+idle time than the wall-clock gap
+ * between the two samples. The client counter is a stopwatch running since the
+ * process started (not since midnight) and samples are mostly sent on state
+ * changes, so a long silent idle, a client restart, or two stations sharing one
+ * clientId can make the cumulative counter jump by many hours at once. Capping
+ * each delta to the elapsed gap stops that jump from inflating a day. Shared by
+ * the live ingest and the backfill recompute so both produce identical numbers.
+ */
+function capDeltaToGap(
+  addActive: number,
+  addInactive: number,
+  gapMs: number,
+): { addActive: number; addInactive: number } {
+  const gap = Math.max(0, gapMs);
+  const a = addActive > gap ? gap : addActive;
+  const i = a + addInactive > gap ? gap - a : addInactive;
+  return { addActive: a, addInactive: i < 0 ? 0 : i };
+}
+
 // ---------- Activity ----------
 
 export async function appendActivity(data: {
@@ -567,9 +587,15 @@ export async function streamTimesheetForClient(
     }
     st.lastTs = t;
     if (prev && dayKey(prev.timestamp) === currDay) {
-      const { activeMs: addA, inactiveMs: addI } = activityDelta(curr, prev);
-      st.activeMs += addA;
-      st.inactiveMs += addI;
+      const raw = activityDelta(curr, prev);
+      const gapMs = curr.timestamp.getTime() - prev.timestamp.getTime();
+      const { addActive, addInactive } = capDeltaToGap(
+        raw.activeMs,
+        raw.inactiveMs,
+        gapMs,
+      );
+      st.activeMs += addActive;
+      st.inactiveMs += addInactive;
     }
     prev = curr;
   }
@@ -622,8 +648,13 @@ export async function ingestActivityToTimesheetAndClient(
     ) {
       const dA = activeMilliseconds - existingClient.lastActivityActiveMs;
       const dI = inactiveMilliseconds - existingClient.lastActivityInactiveMs;
-      addActive = dA >= 0 ? dA : activeMilliseconds;
-      addInactive = dI >= 0 ? dI : inactiveMilliseconds;
+      const gapMs =
+        sampleTimestamp.getTime() - existingClient.lastActivity.getTime();
+      ({ addActive, addInactive } = capDeltaToGap(
+        dA >= 0 ? dA : activeMilliseconds,
+        dI >= 0 ? dI : inactiveMilliseconds,
+        gapMs,
+      ));
     }
 
     const date = startOfDay(sampleTimestamp);
@@ -641,10 +672,14 @@ export async function ingestActivityToTimesheetAndClient(
       existingDay?.endTime && existingDay.endTime >= sampleTimestamp
         ? existingDay.endTime
         : sampleTimestamp;
-    const activeMs =
-      (existingDay?.activeMs ?? BigInt(0)) + BigInt(addActive);
-    const presenceMs =
+    // Clamp the day total to 24h, mirroring streamTimesheetForClient (the
+    // backfill path), so the live and recomputed numbers can never diverge.
+    const ONE_DAY = BigInt(ONE_DAY_MS);
+    let activeMs = (existingDay?.activeMs ?? BigInt(0)) + BigInt(addActive);
+    let presenceMs =
       (existingDay?.presenceMs ?? BigInt(0)) + BigInt(addActive + addInactive);
+    if (activeMs > ONE_DAY) activeMs = ONE_DAY;
+    if (presenceMs > ONE_DAY) presenceMs = ONE_DAY;
 
     const clientUpdate: Prisma.ClientUpdateInput = {
       lastSeen: now,
