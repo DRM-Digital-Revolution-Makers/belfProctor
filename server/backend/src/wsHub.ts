@@ -42,42 +42,55 @@ export function getServerAddrForClient(clientId: string): string | null {
   return `http://${ip}:${SERVER_PORT}`;
 }
 
+/** Returns true for IPs that are not reachable from outside the local host/container.
+ * Catches loopback (127.x, ::1) and Docker/VM bridge networks (172.16-31.x, 10.x). */
+function isInternalOnly(addr: string): boolean {
+  if (!addr) return true;
+  if (isLoopback(addr)) return true;
+  // Docker bridge networks: 172.16.0.0/12
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(addr)) return true;
+  // Private 10.x ranges used by container runtimes
+  if (/^10\./.test(addr)) return true;
+  return false;
+}
+
 /** Build a URL that the given client can use to download something from us.
  * Strategy:
- *   1. The IP this client used to reach us via WS (most reliable).
- *   2. PUBLIC_BASE_URL env (optional override).
- *   3. The IP the admin's HTTP request came in on (req.socket.localAddress) —
- *      works if admin & client are on the same LAN segment.
- *   4. First non-loopback IPv4 from OS network interfaces. */
+ *   1. PUBLIC_BASE_URL env — explicit override, always wins (required in Docker).
+ *   2. The IP this client used to reach us via WS, if it's a routable LAN address.
+ *   3. The IP the admin's HTTP request came in on (req.socket.localAddress).
+ *   4. First non-internal IPv4 from OS network interfaces. */
 export function resolveClientDownloadBase(
   clientId: string,
   adminLocalAddr?: string,
 ): string {
-  // 1. Per-client WS address — auto-detected
-  const wsAddr = serverAddrByClient.get(clientId);
-  if (wsAddr && !isLoopback(wsAddr)) {
-    return `http://${wsAddr}:${SERVER_PORT}`;
-  }
-
-  // 2. Env override
+  // 1. Explicit env override — must be first so Docker deployments work correctly.
+  //    Inside a container req.socket.localAddress is the bridge-network IP (172.x),
+  //    which is not reachable from the student LAN. PUBLIC_BASE_URL bypasses that.
   const envBase = process.env.PUBLIC_BASE_URL?.trim();
   if (envBase) return envBase.replace(/\/+$/, "");
 
+  // 2. Per-client WS address — only use if it's a real LAN IP (not a container bridge)
+  const wsAddr = serverAddrByClient.get(clientId);
+  if (wsAddr && !isInternalOnly(wsAddr)) {
+    return `http://${wsAddr}:${SERVER_PORT}`;
+  }
+
   // 3. Admin's request landed on this server IP
   const adminIp = cleanIp(adminLocalAddr);
-  if (adminIp && !isLoopback(adminIp)) {
+  if (adminIp && !isInternalOnly(adminIp)) {
     return `http://${adminIp}:${SERVER_PORT}`;
   }
   if (adminIp && isLoopback(adminIp)) {
     return `http://127.0.0.1:${SERVER_PORT}`;
   }
 
-  // 4. Pick first non-loopback IPv4 from OS interfaces
+  // 4. Pick first routable IPv4 from OS interfaces
   const os = require("os");
   const ifs = os.networkInterfaces();
   for (const name of Object.keys(ifs)) {
     for (const ni of ifs[name] || []) {
-      if (ni.family === "IPv4" && !ni.internal && ni.address) {
+      if (ni.family === "IPv4" && !ni.internal && !isInternalOnly(ni.address)) {
         return `http://${ni.address}:${SERVER_PORT}`;
       }
     }

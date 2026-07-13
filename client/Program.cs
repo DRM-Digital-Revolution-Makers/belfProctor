@@ -320,6 +320,16 @@ public class Program
                 $"}}\r\n",
                 Encoding.UTF8);
 
+            // VBS-launcher запускает PowerShell со скрытым окном (window style 0).
+            // Запускать powershell.exe напрямую через schtasks нельзя: conhost создаёт
+            // консольное окно ДО обработки -WindowStyle Hidden, и оно мелькает каждые 3 мин.
+            // wscript.exe + Run(..., 0) создаёт процесс уже скрытым — ничего не вспыхивает.
+            var watchdogVbs = Path.Combine(watchdogDir, "watchdog.vbs");
+            File.WriteAllText(watchdogVbs,
+                "CreateObject(\"Wscript.Shell\").Run \"powershell.exe -NoProfile -NonInteractive " +
+                "-ExecutionPolicy Bypass -WindowStyle Hidden -File \"\"" + watchdogScript + "\"\"\", 0, False\r\n",
+                Encoding.ASCII);
+
             const string taskName = "BelfProctor";
             var xml = $@"<?xml version=""1.0"" encoding=""UTF-16""?>
 <Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
@@ -341,8 +351,8 @@ public class Program
   </Settings>
   <Actions Context=""Author"">
     <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{watchdogScript}""</Arguments>
+      <Command>wscript.exe</Command>
+      <Arguments>""{watchdogVbs}""</Arguments>
     </Exec>
   </Actions>
 </Task>";

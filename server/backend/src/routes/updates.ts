@@ -432,28 +432,43 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
 // GET /api/updates/:version/file  (client)
 // Auth: X-Client-Id header → must be a known client.
 router.get("/:version/file", async (req, res) => {
-  const version = String(req.params.version || "").trim();
-  if (!isValidVersion(version)) {
-    return res.status(400).json({ message: "invalid version" });
+  try {
+    const version = String(req.params.version || "").trim();
+    if (!isValidVersion(version)) {
+      return res.status(400).json({ message: "invalid version" });
+    }
+    const clientId = String(req.headers["x-client-id"] || "").trim();
+    if (!clientId) {
+      return res.status(401).json({ message: "client id required" });
+    }
+    const client = await getClient(clientId);
+    if (!client) {
+      console.error(`[updates] download rejected: unknown client "${clientId}"`);
+      return res.status(403).json({ message: "unknown client" });
+    }
+    const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
+    if (!fs.existsSync(exePath)) {
+      console.error(`[updates] download rejected: file not found at ${exePath}`);
+      return res.status(404).json({ message: "not found" });
+    }
+    const stat = fs.statSync(exePath);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="BelfProctor.exe"`);
+    res.setHeader("Content-Length", stat.size);
+    return res.sendFile(exePath, (err) => {
+      if (err && !res.headersSent) {
+        console.error("[updates] sendFile error:", err);
+        res.status(500).json({ message: "file send failed" });
+      } else if (err) {
+        console.error("[updates] sendFile error (headers already sent):", err);
+      }
+    });
+  } catch (e) {
+    console.error("[updates] file download handler error:", e);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: "internal error" });
+    }
   }
-  const clientId = String(req.headers["x-client-id"] || "").trim();
-  if (!clientId) {
-    return res.status(401).json({ message: "client id required" });
-  }
-  const client = await getClient(clientId);
-  if (!client) {
-    return res.status(403).json({ message: "unknown client" });
-  }
-  const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
-  if (!fs.existsSync(exePath)) {
-    return res.status(404).json({ message: "not found" });
-  }
-  res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="BelfProctor.exe"`,
-  );
-  return res.sendFile(exePath);
 });
 
 // GET /api/updates/connectivity  (admin)

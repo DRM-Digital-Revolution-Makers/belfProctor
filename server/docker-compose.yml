@@ -50,6 +50,7 @@ services:
       FEATURE_LIVE_VIEW: ${FEATURE_LIVE_VIEW:-true}
       FEATURE_RULES_CLASSIFIER: ${FEATURE_RULES_CLASSIFIER:-true}
       LIVE_VIEW_MAX_STREAMS: ${LIVE_VIEW_MAX_STREAMS:-10}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     volumes:
       - ./backend/storage:/app/storage
     ports:

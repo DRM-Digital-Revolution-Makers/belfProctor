@@ -450,6 +450,7 @@ function formatDeploymentStatus(status, detail) {
   if (value === "confirmed") return { text: "Обновление подтверждено", color: BP.green };
   if (value === "already_up_to_date") return { text: "Актуальная версия", color: BP.green };
   if (value === "sha_mismatch") return { text: "Ошибка: не совпал SHA-256", color: "#DC2626" };
+  if (value === "failed") return { text: `Ошибка${suffix}`, color: "#DC2626" };
   if (value.startsWith("error")) return { text: `Ошибка: ${value}${suffix}`, color: "#DC2626" };
   return { text: `${value}${suffix}`, color: BP.muted };
 }
@@ -1042,7 +1043,7 @@ function AgentsTab({ clients }) {
                 } else if (s === "already_up_to_date") {
                   statusText = "✓ актуальная";
                   statusColor = BP.green;
-                } else if (s.startsWith("error") || s === "sha_mismatch") {
+                } else if (s.startsWith("error") || s === "sha_mismatch" || s === "failed") {
                   const formatted = formatDeploymentStatus(s, dep.lastDetail);
                   statusText = formatted.text;
                   statusColor = formatted.color;
