@@ -3,6 +3,7 @@ import { withLock } from "./locks";
 import {
   endOfTashkentDay,
   startOfTashkentDay,
+  tashkentDateOnly,
   tashkentDayKey,
   tashkentHourOf,
 } from "./tz";
@@ -323,6 +324,159 @@ export async function streamAppCounts(
   return grouped
     .filter((g) => g.processName)
     .map((g) => ({ name: g.processName as string, count: g._count.processName }));
+}
+
+// Consecutive AppUsage samples arrive densely (often sub-second) while the
+// user is active, so a gap between two samples is a decent proxy for how long
+// the earlier sample's app stayed in the foreground - except when the agent
+// was offline/the PC was locked, which shows up as a large gap. Cap each
+// inter-sample gap so a long absence isn't misattributed as active app time.
+const APP_USAGE_MAX_GAP_MS = 60_000;
+
+type AppUsageRow = {
+  timestamp: Date;
+  processName: string | null;
+  additionalData: Prisma.JsonValue;
+};
+
+function appUsageWindowTitle(row: AppUsageRow): string | null {
+  const data = row.additionalData as any;
+  const title = data && typeof data === "object" ? data.WindowTitle : null;
+  return typeof title === "string" && title.trim() ? title.trim() : null;
+}
+
+/**
+ * Reconstructs per-app / per-window-title active time for a client's day from
+ * the Event(eventType=AppUsage) sample stream - WorkSession is a separate,
+ * unpopulated pipeline on this deployment (client never sends filePath/
+ * windowTitle/projectName for it), so this is the only source with real data
+ * for "which app, which file, how long".
+ */
+export async function computeAppUsageWorkSummary(
+  clientId: string,
+  start: Date,
+  end: Date,
+): Promise<{
+  totals: { activeMs: number; sessionsCount: number };
+  apps: { processName: string; activeMs: number; sessionsCount: number }[];
+  files: {
+    processName: string;
+    windowTitle: string | null;
+    activeMs: number;
+    sessionsCount: number;
+  }[];
+  sessions: {
+    id: string;
+    startedAt: Date;
+    endedAt: Date;
+    processName: string;
+    windowTitle: string | null;
+    activeMs: number;
+  }[];
+}> {
+  const rows: AppUsageRow[] = await prisma.event.findMany({
+    where: {
+      clientId,
+      eventType: SystemEventType.AppUsage,
+      timestamp: { gte: start, lte: end },
+    },
+    orderBy: { timestamp: "asc" },
+    select: { timestamp: true, processName: true, additionalData: true },
+    take: 200_000,
+  });
+
+  const apps = new Map<string, { processName: string; activeMs: number; sessionsCount: number }>();
+  const files = new Map<
+    string,
+    { processName: string; windowTitle: string | null; activeMs: number; sessionsCount: number }
+  >();
+  const sessions: {
+    id: string;
+    startedAt: Date;
+    endedAt: Date;
+    processName: string;
+    windowTitle: string | null;
+    activeMs: number;
+  }[] = [];
+
+  let totalActiveMs = 0;
+  let current: {
+    processName: string;
+    windowTitle: string | null;
+    startedAt: Date;
+    endedAt: Date;
+    activeMs: number;
+  } | null = null;
+
+  const flushCurrent = () => {
+    if (!current) return;
+    sessions.push({
+      id: `${current.startedAt.getTime()}-${current.processName}`,
+      startedAt: current.startedAt,
+      endedAt: current.endedAt,
+      processName: current.processName,
+      windowTitle: current.windowTitle,
+      activeMs: current.activeMs,
+    });
+    const app = apps.get(current.processName) || {
+      processName: current.processName,
+      activeMs: 0,
+      sessionsCount: 0,
+    };
+    app.activeMs += current.activeMs;
+    app.sessionsCount += 1;
+    apps.set(current.processName, app);
+
+    const fileKey = `${current.processName} ${current.windowTitle || ""}`;
+    const file = files.get(fileKey) || {
+      processName: current.processName,
+      windowTitle: current.windowTitle,
+      activeMs: 0,
+      sessionsCount: 0,
+    };
+    file.activeMs += current.activeMs;
+    file.sessionsCount += 1;
+    files.set(fileKey, file);
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const processName = row.processName || "unknown";
+    const windowTitle = appUsageWindowTitle(row);
+    const sameAsCurrent =
+      current && current.processName === processName && current.windowTitle === windowTitle;
+
+    if (!sameAsCurrent) {
+      flushCurrent();
+      current = {
+        processName,
+        windowTitle,
+        startedAt: row.timestamp,
+        endedAt: row.timestamp,
+        activeMs: 0,
+      };
+    }
+
+    const next = rows[i + 1];
+    if (next && current) {
+      const gapMs = next.timestamp.getTime() - row.timestamp.getTime();
+      const cappedGapMs = Math.max(0, Math.min(gapMs, APP_USAGE_MAX_GAP_MS));
+      current.activeMs += cappedGapMs;
+      current.endedAt = next.timestamp;
+      totalActiveMs += cappedGapMs;
+    }
+  }
+  flushCurrent();
+
+  sessions.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  const byActiveMs = (a: { activeMs: number }, b: { activeMs: number }) => b.activeMs - a.activeMs;
+
+  return {
+    totals: { activeMs: totalActiveMs, sessionsCount: sessions.length },
+    apps: Array.from(apps.values()).sort(byActiveMs),
+    files: Array.from(files.values()).sort(byActiveMs),
+    sessions,
+  };
 }
 
 // ---------- Clients ----------
@@ -657,7 +811,10 @@ export async function ingestActivityToTimesheetAndClient(
       ));
     }
 
-    const date = startOfDay(sampleTimestamp);
+    // TimesheetDay.date is @db.Date - use tashkentDateOnly, not startOfDay()
+    // (== startOfTashkentDay()), which returns an instant that truncates to
+    // the *previous* UTC calendar day for a @db.Date column [B-TSD1].
+    const date = tashkentDateOnly(sampleTimestamp);
 
     const existingDay = await prisma.timesheetDay.findUnique({
       where: { clientId_date: { clientId: id, date } },
@@ -757,7 +914,11 @@ export async function backfillTimesheetFromActivity(
     await prisma.timesheetDay.createMany({
       data: rows.map((r) => ({
         clientId: id,
-        date: startOfDay(new Date(r.date)),
+        // r.date is a "YYYY-MM-DD" Tashkent day key; parse directly as UTC
+        // midnight so the @db.Date column's UTC calendar date matches it.
+        // startOfDay()/startOfTashkentDay() is wrong here - see
+        // tashkentDateOnly()'s doc comment [B-TSD1].
+        date: new Date(`${r.date}T00:00:00.000Z`),
         startTime: new Date(r.startTime),
         endTime: new Date(r.endTime),
         activeMs: BigInt(r.activeMs),

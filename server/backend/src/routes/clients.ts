@@ -12,6 +12,7 @@ import {
   streamDailyActivitySummary,
   streamMonthlyActivitySummary,
   streamAppCounts,
+  computeAppUsageWorkSummary,
   getTimesheetDataForMonth,
   getUser,
 } from "../store";
@@ -33,44 +34,6 @@ const router = Router();
 function dateRangeFromDay(dateStr: string): { start: Date; end: Date } {
   const anchor = new Date(`${dateStr}T12:00:00Z`);
   return { start: startOfTashkentDay(anchor), end: endOfTashkentDay(anchor) };
-}
-
-function toNumberMs(value: unknown): number {
-  return Number(value || 0);
-}
-
-function addMetric(
-  map: Map<string, any>,
-  key: string | null | undefined,
-  session: any,
-  labelKey: string,
-): void {
-  const normalized = String(key || "").trim();
-  if (!normalized) return;
-  const current =
-    map.get(normalized) ||
-    {
-      [labelKey]: normalized,
-      openedMs: 0,
-      focusedMs: 0,
-      activeFocusedMs: 0,
-      sessionsCount: 0,
-    };
-  current.openedMs += toNumberMs(session.openedMs);
-  current.focusedMs += toNumberMs(session.focusedMs);
-  current.activeFocusedMs += toNumberMs(session.activeFocusedMs);
-  current.sessionsCount += 1;
-  map.set(normalized, current);
-}
-
-function serializeWorkSession(session: any, screenshotsBySession?: Map<string, any[]>): any {
-  return {
-    ...session,
-    openedMs: toNumberMs(session.openedMs),
-    focusedMs: toNumberMs(session.focusedMs),
-    activeFocusedMs: toNumberMs(session.activeFocusedMs),
-    screenshots: screenshotsBySession?.get(session.id) || [],
-  };
 }
 
 function parseScreenshotTimestamp(
@@ -157,6 +120,11 @@ router.get("/categories", requireAuth, async (_req, res) => {
   }
 });
 
+// NOTE: WorkSession/WorkSessionEvent are populated by a client pipeline this
+// deployment's agent never actually sends (processName is always "unknown",
+// filePath/windowTitle/projectName are always empty) - these two routes
+// instead reconstruct app/window usage from Event(eventType=AppUsage), which
+// the agent does send richly. See computeAppUsageWorkSummary in ../store.
 router.get("/:id/work-summary", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -165,45 +133,18 @@ router.get("/:id/work-summary", requireAuth, async (req, res) => {
     const dateStr =
       String(req.query.date || "").trim() || tashkentDayKey(new Date());
     const { start, end } = dateRangeFromDay(dateStr);
-    const sessions = await prisma.workSession.findMany({
-      where: { clientId: id, startedAt: { gte: start, lte: end } },
-      orderBy: { startedAt: "desc" },
-      take: 2000,
-    });
+    const summary = await computeAppUsageWorkSummary(id, start, end);
     const screenshots = await prisma.screenshot.findMany({
-      where: {
-        clientId: id,
-        timestamp: { gte: start, lte: end },
-        captureReason: { in: ["work_start", "work_switch", "work_end"] },
-      },
+      where: { clientId: id, timestamp: { gte: start, lte: end } },
       orderBy: { timestamp: "desc" },
-      take: 500,
+      take: 60,
     });
 
-    const totals = { openedMs: 0, focusedMs: 0, activeFocusedMs: 0 };
-    const projects = new Map<string, any>();
-    const files = new Map<string, any>();
-    const folders = new Map<string, any>();
-    const apps = new Map<string, any>();
-
-    for (const session of sessions) {
-      totals.openedMs += toNumberMs(session.openedMs);
-      totals.focusedMs += toNumberMs(session.focusedMs);
-      totals.activeFocusedMs += toNumberMs(session.activeFocusedMs);
-      addMetric(projects, session.projectName || "unknown/external", session, "projectName");
-      addMetric(files, session.filePath, session, "filePath");
-      addMetric(folders, session.folderPath, session, "folderPath");
-      addMetric(apps, session.processName, session, "processName");
-    }
-
-    const byActive = (a: any, b: any) => b.activeFocusedMs - a.activeFocusedMs;
     return res.json({
       date: dateStr,
-      totals,
-      projects: Array.from(projects.values()).sort(byActive),
-      files: Array.from(files.values()).sort(byActive),
-      folders: Array.from(folders.values()).sort(byActive),
-      apps: Array.from(apps.values()).sort(byActive),
+      totals: summary.totals,
+      apps: summary.apps,
+      files: summary.files,
       screenshots: screenshots.map((s: any) => ({
         ...s,
         url: `/api/screenshots/${s.filename}/file`,
@@ -222,32 +163,8 @@ router.get("/:id/work-sessions", requireAuth, async (req, res) => {
       ? new Date(String(req.query.from))
       : new Date(Date.now() - 24 * 60 * 60 * 1000);
     const to = req.query.to ? new Date(String(req.query.to)) : new Date();
-    const sessions = await prisma.workSession.findMany({
-      where: { clientId: id, startedAt: { gte: from, lte: to } },
-      orderBy: { startedAt: "desc" },
-      take: 1000,
-    });
-    const sessionIds = sessions.map((s: any) => s.id);
-    const screenshots =
-      sessionIds.length > 0
-        ? await prisma.screenshot.findMany({
-            where: { linkedSessionId: { in: sessionIds } },
-            orderBy: { timestamp: "asc" },
-          })
-        : [];
-    const screenshotsBySession = new Map<string, any[]>();
-    for (const shot of screenshots) {
-      const sid = String(shot.linkedSessionId || "");
-      if (!sid) continue;
-      const arr = screenshotsBySession.get(sid) || [];
-      arr.push({ ...shot, url: `/api/screenshots/${shot.filename}/file` });
-      screenshotsBySession.set(sid, arr);
-    }
-
-    const data = sessions.map((session: any) =>
-      serializeWorkSession(session, screenshotsBySession),
-    );
-    res.json({ data, total: data.length });
+    const summary = await computeAppUsageWorkSummary(id, from, to);
+    res.json({ data: summary.sessions, total: summary.sessions.length });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: "Failed to get work sessions" });

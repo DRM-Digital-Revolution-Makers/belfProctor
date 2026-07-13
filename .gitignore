@@ -18,6 +18,9 @@ logs/
 # Environment files (keep examples)
 .env
 .env.*
+
+# Postgres backups (large, contains production data)
+server/backup/
 !.env.example
 !**/.env.example
 

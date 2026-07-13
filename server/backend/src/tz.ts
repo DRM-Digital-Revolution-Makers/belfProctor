@@ -19,6 +19,22 @@ export function startOfTashkentDay(d: Date): Date {
 }
 
 /**
+ * A Date whose UTC calendar date equals the Tashkent calendar date of `d`.
+ *
+ * Only use this for `@db.Date` (date-only, no time/tz) Prisma columns.
+ * startOfTashkentDay() is wrong for those: it returns the UTC *instant* for
+ * Tashkent midnight, which for UTC+5 always falls at 19:00 the *previous*
+ * UTC calendar day (e.g. Tashkent 2026-07-13 00:00 == 2026-07-12T19:00:00Z).
+ * A `@db.Date` column stores the UTC calendar date of whatever Date object
+ * it's given, so writing startOfTashkentDay() there silently records the
+ * *previous* day, every single time, for every row [B-TSD1].
+ */
+export function tashkentDateOnly(d: Date): Date {
+  const dayKey = tashkentDayKey(d);
+  return new Date(`${dayKey}T00:00:00.000Z`);
+}
+
+/**
  * The UTC instant corresponding to 23:59:59.999 in Tashkent on the given day.
  */
 export function endOfTashkentDay(d: Date): Date {

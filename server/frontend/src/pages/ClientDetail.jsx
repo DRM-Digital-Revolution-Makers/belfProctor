@@ -1572,21 +1572,15 @@ function WorkTab({ clientId, date, getImageUrl }) {
   }, [load]);
 
   const totals = summary?.totals || {};
-  const projects = summary?.projects || [];
   const files = summary?.files || [];
-  const folders = summary?.folders || [];
   const apps = summary?.apps || [];
   const screenshots = Array.isArray(summary?.screenshots) ? summary.screenshots : [];
   const sessionColumns = [
-    { title: "Начало", dataIndex: "startedAt", render: fmtWorkDateTime, width: 150 },
+    { title: "Начало", dataIndex: "startedAt", render: fmtWorkDateTime, width: 130 },
+    { title: "Окончание", dataIndex: "endedAt", render: fmtWorkDateTime, width: 130 },
     { title: "Приложение", dataIndex: "processName", render: renderWorkApp, width: 150 },
-    { title: "Проект", dataIndex: "projectName", render: renderProjectName, width: 180 },
-    { title: "Файл", dataIndex: "filePath", render: renderWorkPath, ellipsis: true },
-    { title: "Открыто", dataIndex: "openedMs", render: formatWorkDuration, width: 110 },
-    { title: "Фокус", dataIndex: "focusedMs", render: formatWorkDuration, width: 120 },
-    { title: "Активно", dataIndex: "activeFocusedMs", render: formatWorkDuration, width: 120 },
-    { title: "Точность", dataIndex: "confidence", render: renderConfidence, width: 130 },
-    { title: "Завершение", dataIndex: "endReason", render: renderEndReason, width: 130 },
+    { title: "Файл / окно", dataIndex: "windowTitle", render: renderWorkPath, ellipsis: true },
+    { title: "Время", dataIndex: "activeMs", render: formatWorkDuration, width: 110 },
   ];
 
   return (
@@ -1606,10 +1600,10 @@ function WorkTab({ clientId, date, getImageUrl }) {
       >
         <div>
           <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510, color: BP.text }}>
-            Работа с проектами и файлами
+            Работа с приложениями и файлами
           </div>
           <div style={{ fontFamily: BP.font, fontSize: 13, color: BP.muted, marginTop: 3 }}>
-            Данные за {date.format("DD.MM.YYYY")}: приложения, пути, проекты и связанные скриншоты.
+            Данные за {date.format("DD.MM.YYYY")}: время оценено по частоте переключения активного окна, приложения, файлы/окна и скриншоты за день.
           </div>
         </div>
         <button
@@ -1648,9 +1642,7 @@ function WorkTab({ clientId, date, getImageUrl }) {
           gap: 12,
         }}
       >
-        <MetricBox icon="solar:folder-open-bold-duotone" label="Открыто" value={formatWorkDuration(totals.openedMs)} />
-        <MetricBox icon="solar:eye-bold-duotone" label="В фокусе" value={formatWorkDuration(totals.focusedMs)} />
-        <MetricBox icon="solar:user-check-bold-duotone" label="Активно в фокусе" value={formatWorkDuration(totals.activeFocusedMs)} />
+        <MetricBox icon="solar:user-check-bold-duotone" label="Активное время (оценка)" value={formatWorkDuration(totals.activeMs)} />
         <MetricBox icon="solar:clock-circle-bold-duotone" label="Сессии" value={String(sessions.length)} />
       </div>
 
@@ -1667,15 +1659,13 @@ function WorkTab({ clientId, date, getImageUrl }) {
         <>
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              display: "flex",
+              flexDirection: "column",
               gap: 12,
             }}
           >
-            <MetricTable icon="solar:case-round-bold-duotone" title="Проекты" rows={projects} nameKey="projectName" emptyText="За день проекты не определены" />
-            <MetricTable icon="solar:document-text-bold-duotone" title="Файлы" rows={files} nameKey="filePath" emptyText="Файлы пока не зафиксированы" />
-            <MetricTable icon="solar:folder-bold-duotone" title="Папки" rows={folders} nameKey="folderPath" emptyText="Папки пока не зафиксированы" />
             <MetricTable icon="solar:widget-5-bold-duotone" title="Приложения" rows={apps} nameKey="processName" emptyText="Активность приложений пока пустая" />
+            <MetricTable icon="solar:document-text-bold-duotone" title="Файлы / окна" rows={files} nameKey="windowTitle" emptyText="Файлы пока не зафиксированы" />
           </div>
 
           <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
@@ -1783,7 +1773,7 @@ function MetricBox({ icon, label, value }) {
 
 function MetricTable({ icon, title, rows, nameKey, emptyText }) {
   const data = (rows || []).slice(0, 8).map((row, idx) => ({ ...row, key: `${title}_${idx}` }));
-  const isPath = nameKey === "filePath" || nameKey === "folderPath";
+  const isPath = nameKey === "filePath" || nameKey === "folderPath" || nameKey === "windowTitle";
   return (
     <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
       <div style={{ padding: "11px 12px", fontFamily: BP.font, fontSize: 15, fontWeight: 510, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1801,7 +1791,7 @@ function MetricTable({ icon, title, rows, nameKey, emptyText }) {
             ellipsis: true,
             render: (v) => (isPath ? renderWorkPath(v) : renderProjectName(v)),
           },
-          { title: "Активно", dataIndex: "activeFocusedMs", render: formatWorkDuration, width: 105 },
+          { title: "Активно", dataIndex: "activeMs", render: formatWorkDuration, width: 105 },
         ]}
         locale={{
           emptyText: (
@@ -2257,31 +2247,6 @@ function renderWorkApp(value) {
   );
 }
 
-function renderConfidence(value) {
-  const normalized = String(value || "low").toLowerCase();
-  const map = {
-    high: { label: "Высокая", color: BP.green, bg: "rgba(38,126,38,0.1)" },
-    medium: { label: "Средняя", color: "#B45309", bg: "rgba(245,158,11,0.13)" },
-    low: { label: "Низкая", color: BP.muted, bg: BP.surface },
-  };
-  const item = map[normalized] || map.low;
-  return (
-    <span className="bp-status-pill" style={{ color: item.color, background: item.bg }}>
-      {item.label}
-    </span>
-  );
-}
-
-function renderEndReason(value) {
-  const map = {
-    timeout: "Таймаут",
-    app_closed: "Приложение закрыто",
-    process_exit: "Процесс завершён",
-    switched: "Переключение",
-    manual: "Вручную",
-  };
-  return <span style={{ color: BP.muted }}>{map[value] || value || "—"}</span>;
-}
 
 function formatWorkDuration(ms) {
   const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
