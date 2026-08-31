@@ -110,24 +110,26 @@ public class CommandChannelWorker : BackgroundService
         }
     }
 
-    public static string BuildWsUrl(string serverUrl, string clientId)
+    public static string BuildWsUrl(string serverUrl, string clientId, string encryptionKey)
     {
         var uri = new Uri(serverUrl);
         var scheme = uri.Scheme == "https" ? "wss" : "ws";
         var host = uri.Host;
         var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
-        return $"{scheme}://{host}:{port}/ws?clientId={Uri.EscapeDataString(clientId)}";
+        return $"{scheme}://{host}:{port}/ws?{WebSocketAuth.CreateQuery(clientId, encryptionKey)}";
     }
 
     private async Task<(ClientWebSocket ws, Uri connectedUri)> ConnectAsync(CancellationToken ct)
     {
-        foreach (var candidate in BuildWsCandidates(_settings.ServerUrl, _settings.ClientId))
+        foreach (var candidate in BuildWsCandidates(_settings.ServerUrl, _settings.ClientId, _settings.EncryptionKey))
         {
             var ws = new ClientWebSocket();
             ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
             try
             {
-                _logger.LogInformation("Connecting to command channel: {Url}", candidate);
+                _logger.LogInformation(
+                    "Connecting to command channel: {Endpoint}",
+                    candidate.GetLeftPart(UriPartial.Path));
                 await ws.ConnectAsync(candidate, ct);
                 if (ws.State == WebSocketState.Open)
                 {
@@ -143,20 +145,20 @@ public class CommandChannelWorker : BackgroundService
         throw new Exception("Command channel connection failed (no candidates succeeded)");
     }
 
-    private static IEnumerable<Uri> BuildWsCandidates(string serverUrl, string clientId)
+    private static IEnumerable<Uri> BuildWsCandidates(string serverUrl, string clientId, string encryptionKey)
     {
-        var escapedId = Uri.EscapeDataString(clientId ?? string.Empty);
+        var query = WebSocketAuth.CreateQuery(clientId ?? string.Empty, encryptionKey);
 
         if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
         {
             var scheme = uri.Scheme == "https" ? "wss" : "ws";
             var host = uri.Host;
             var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
-            yield return new Uri($"{scheme}://{host}:{port}/ws?clientId={escapedId}");
+            yield return new Uri($"{scheme}://{host}:{port}/ws?{query}");
 
             if (uri.IsDefaultPort)
             {
-                yield return new Uri($"{scheme}://{host}:8080/ws?clientId={escapedId}");
+                yield return new Uri($"{scheme}://{host}:8080/ws?{query}");
             }
         }
         else
@@ -164,11 +166,11 @@ public class CommandChannelWorker : BackgroundService
             var raw = serverUrl?.Trim() ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(raw))
             {
-                yield return new Uri($"ws://{raw}:8080/ws?clientId={escapedId}");
+                yield return new Uri($"ws://{raw}:8080/ws?{query}");
             }
         }
 
-        yield return new Uri($"ws://localhost:8080/ws?clientId={escapedId}");
-        yield return new Uri($"ws://127.0.0.1:8080/ws?clientId={escapedId}");
+        yield return new Uri($"ws://localhost:8080/ws?{query}");
+        yield return new Uri($"ws://127.0.0.1:8080/ws?{query}");
     }
 }

@@ -12,6 +12,7 @@ import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
 import { now as authoritativeNow } from "../serverTime";
 import { config } from "../config";
+import { requireAuth } from "../middleware/auth";
 
 const router = Router();
 
@@ -148,12 +149,12 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const data = await getLatestHeartbeats();
   return res.json({ data, total: data.length });
 });
 
-router.get("/latest", async (_req, res) => {
+router.get("/latest", requireAuth, async (_req, res) => {
   const data = await getLatestHeartbeats();
   return res.json({ data, serverTime: authoritativeNow() });
 });

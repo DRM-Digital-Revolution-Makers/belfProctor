@@ -73,7 +73,7 @@ public class StreamingService : IDisposable
 
         using var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
-        var uri = BuildStreamUri(_settings.ServerUrl, _settings.ClientId);
+        var uri = BuildStreamUri(_settings.ServerUrl, _settings.ClientId, _settings.EncryptionKey);
         await ws.ConnectAsync(uri, ct);
         _logger.LogInformation("Live View stream connected: {Uri}", uri);
 
@@ -86,16 +86,17 @@ public class StreamingService : IDisposable
         }
     }
 
-    private static Uri BuildStreamUri(string serverUrl, string clientId)
+    internal static Uri BuildStreamUri(string serverUrl, string clientId, string encryptionKey)
     {
+        var query = WebSocketAuth.CreateQuery(clientId, encryptionKey);
         if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
         {
-            return new Uri($"ws://localhost:8080/ws/stream?clientId={Uri.EscapeDataString(clientId)}");
+            return new Uri($"ws://localhost:8080/ws/stream?{query}");
         }
 
         var scheme = uri.Scheme == "https" ? "wss" : "ws";
         var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
-        return new Uri($"{scheme}://{uri.Host}:{port}/ws/stream?clientId={Uri.EscapeDataString(clientId)}");
+        return new Uri($"{scheme}://{uri.Host}:{port}/ws/stream?{query}");
     }
 
     private static ArraySegment<byte> CaptureFrame(int targetWidth, int quality)

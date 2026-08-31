@@ -27,6 +27,22 @@ export function endOfTashkentDay(d: Date): Date {
 }
 
 /**
+ * Bucket value for the Postgres `DATE` column (`TimesheetDay.date`).
+ *
+ * Prisma binds a JS Date to `@db.Date` by taking the UTC year/month/day. If we
+ * passed `startOfTashkentDay(d)` here, that UTC instant lands at 19:00 of the
+ * PREVIOUS UTC calendar day, so Postgres stored every row under day-1 (a
+ * Monday Tashkent sample landed in the Sunday bucket and shifted the entire
+ * column in the timesheet export by one day) [B-D1].
+ *
+ * Returning a UTC midnight whose UTC date already equals the Tashkent calendar
+ * date makes Prisma's UTC-component serialization a no-op.
+ */
+export function dateBucketForTashkent(d: Date): Date {
+  return new Date(`${tashkentDayKey(d)}T00:00:00.000Z`);
+}
+
+/**
  * Hour-of-day (0..23) in Tashkent time. Use this for hourly bucketing.
  */
 export function tashkentHourOf(d: Date): number {

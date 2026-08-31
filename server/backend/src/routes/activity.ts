@@ -11,6 +11,7 @@ import {
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
+import { requireAuth } from "../middleware/auth";
 
 const router = Router();
 
@@ -108,12 +109,12 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const data = await getLatestActivity(100);
   return res.json({ data, total: data.length });
 });
 
-router.get("/latest", async (req, res) => {
+router.get("/latest", requireAuth, async (req, res) => {
   const q: any = (req as any).query || {};
   const global = String(q.global || "") === "1";
 

@@ -10,7 +10,6 @@ module.exports = {
       {
         tsconfig: "<rootDir>/tsconfig.test.json",
         diagnostics: false,
-        isolatedModules: true,
       },
     ],
   },

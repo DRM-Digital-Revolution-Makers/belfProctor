@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "express-async-errors";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -9,6 +10,8 @@ import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
+import { verifyAgentWsSignature } from "./wsAuth";
+import { getKeysToTry } from "./keyring";
 import { IncomingMessage } from "http";
 
 import authRouter from "./routes/auth";
@@ -26,6 +29,7 @@ import browserActivityRouter from "./routes/browserActivity";
 import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
 import { startTimeSync, getDebugState as getTimeDebugState, now as authoritativeNow } from "./serverTime";
 import { requireAuth } from "./middleware/auth";
+import { jsonErrorHandler } from "./middleware/error";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
 import {
@@ -567,13 +571,20 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
     perMessageDeflate: false,
     maxPayload: 2 * 1024 * 1024,
   });
-  wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
+  wss.on("connection", async (socket: WebSocket, req: IncomingMessage) => {
     try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     if (url.pathname === "/ws/stream") {
       const streamClientId = String(url.searchParams.get("clientId") || "").trim();
-      if (!streamClientId) {
-        socket.close();
+      const client = streamClientId ? await getClient(streamClientId) : null;
+      const authenticated = verifyAgentWsSignature({
+        clientId: streamClientId,
+        timestamp: String(url.searchParams.get("ts") || ""),
+        signature: String(url.searchParams.get("sig") || ""),
+        secrets: getKeysToTry(client?.encryptionKey),
+      });
+      if (!authenticated) {
+        socket.close(1008, "Unauthorized");
         return;
       }
       registerStreamSource(streamClientId, socket);
@@ -601,10 +612,21 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
       return;
     }
 
+    if (url.pathname !== "/ws") {
+      socket.close(1008, "Unsupported WebSocket path");
+      return;
+    }
     const rawId = url.searchParams.get("clientId") || "";
     const clientId = rawId.trim();
-    if (!clientId) {
-      socket.close();
+    const client = clientId ? await getClient(clientId) : null;
+    const authenticated = verifyAgentWsSignature({
+      clientId,
+      timestamp: String(url.searchParams.get("ts") || ""),
+      signature: String(url.searchParams.get("sig") || ""),
+      secrets: getKeysToTry(client?.encryptionKey),
+    });
+    if (!authenticated) {
+      socket.close(1008, "Unauthorized");
       return;
     }
     // The IP this client used to reach the server — used to build
@@ -687,6 +709,12 @@ app.post(
     return { path: req.body.path };
   }),
 );
+
+// Express 4 does not natively forward rejected async route promises. The
+// express-async-errors patch above routes them here so a transient DB/filesystem
+// failure produces a bounded JSON 500 response instead of an unhandled
+// rejection that can destabilize the process.
+app.use(jsonErrorHandler);
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 

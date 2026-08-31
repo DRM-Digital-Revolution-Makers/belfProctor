@@ -11,6 +11,7 @@ import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { prisma } from "../prisma";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
+import { requireAuth } from "../middleware/auth";
 
 const router = Router();
 
@@ -134,7 +135,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/stats", async (req, res) => {
+router.get("/stats", requireAuth, async (req, res) => {
   // Return aggregated app stats
   // In NO_DB mode, read from apps.json
   const stats = await getAppStats();
@@ -143,7 +144,7 @@ router.get("/stats", async (req, res) => {
   return res.json(stats);
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const { page = "1", pageSize = "20", clientId } = req.query as any;
   const p = Math.max(1, parseInt(page, 10) || 1);
   const ps = Math.min(parseInt(pageSize, 10) || 20, 50);

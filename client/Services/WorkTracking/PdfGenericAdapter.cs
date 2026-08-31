@@ -23,8 +23,8 @@ public class PdfGenericAdapter : IAppAdapter
         return new WorkArtifactCandidate
         {
             Adapter = Name,
-            ProcessName = snapshot.ProcessName,
-            WindowTitle = snapshot.WindowTitle,
+            ProcessName = snapshot.ProcessName ?? string.Empty,
+            WindowTitle = snapshot.WindowTitle ?? string.Empty,
             FilePath = match.Success ? match.Value : null,
             Confidence = match.Success ? "medium" : "low",
         };

@@ -15,7 +15,7 @@ import { formatTashkent } from "../utils/time";
 // Removed charts and flyonui helpers
 
 export default function ActivityDetail() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { clientId } = useParams();
   const API_URL =
     import.meta.env.VITE_API_URL ||

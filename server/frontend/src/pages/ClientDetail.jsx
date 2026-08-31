@@ -912,11 +912,11 @@ const ClientDetail = () => {
               ))}
 
             {activeTab === "apps" && (
-              <AppsTab clientId={id} t={t} i18n={i18n} />
+              <AppsTab clientId={id} t={t} />
             )}
 
             {activeTab === "files" && (
-              <FilesTab clientId={id} t={t} i18n={i18n} />
+              <FilesTab clientId={id} t={t} />
             )}
 
             {activeTab === "work" && (
@@ -1058,7 +1058,6 @@ function ThumbnailGrid({
   imageFallback,
   toggleFavorite,
   onOpenAllScreenshots,
-  i18n,
 }) {
   if (!screenshots || screenshots.length === 0) {
     return (
@@ -2296,7 +2295,7 @@ function fmtWorkDateTime(value) {
   return parsed.isValid() ? parsed.format("DD.MM HH:mm") : "—";
 }
 
-function AppsTab({ clientId, t, i18n }) {
+function AppsTab({ clientId, t }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;
@@ -2523,7 +2522,7 @@ function AppsTab({ clientId, t, i18n }) {
               title: t("common.time"),
               dataIndex: "firstTimestamp",
               width: 95,
-              render: (v, r) => (
+              render: (v) => (
                 <div style={{ fontSize: 12, lineHeight: 1.2 }}>
                   <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>
                     {formatTashkent(v, "HH:mm:ss")}
@@ -2735,7 +2734,7 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function FilesTab({ clientId, t, i18n }) {
+function FilesTab({ clientId, t }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
     `http://${window.location.hostname}:8080/api`;

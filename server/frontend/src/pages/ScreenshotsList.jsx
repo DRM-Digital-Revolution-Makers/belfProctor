@@ -231,7 +231,7 @@ export default function ScreenshotsList() {
         })
         .catch(() => {});
     }
-  }, [selected, thumbUrls, API_URL]);
+  }, [selected, thumbUrls, API_URL, trackObjectUrl]);
 
   const toggleFavorite = async (id, currentStatus) => {
     const newStatus = !currentStatus;

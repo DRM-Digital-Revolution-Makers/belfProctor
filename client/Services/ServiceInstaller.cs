@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Security.Principal;
 using Microsoft.Extensions.Logging;
 
@@ -148,9 +147,14 @@ public static class ServiceInstaller
             var exe = installedExePath;
             if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
             {
-                using var current = Process.GetCurrentProcess();
-                exe = current.MainModule?.FileName
-                    ?? Assembly.GetEntryAssembly()?.Location;
+                // Environment.ProcessPath remains valid for a single-file app;
+                // Assembly.Location is intentionally empty in that deployment.
+                exe = Environment.ProcessPath;
+                if (string.IsNullOrWhiteSpace(exe))
+                {
+                    using var current = Process.GetCurrentProcess();
+                    exe = current.MainModule?.FileName;
+                }
             }
             if (string.IsNullOrWhiteSpace(exe)) return false;
 

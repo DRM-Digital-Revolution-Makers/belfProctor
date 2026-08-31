@@ -47,7 +47,10 @@ public class SettingsForm : Form
     {
         _configuration = configuration;
         _settings = settings;
-        _configPaths = configPaths;
+        _configPaths = configPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path!)
+            .ToArray();
         Width = 800;
         Height = 850;
         Text = "BelfProctor Settings";

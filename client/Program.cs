@@ -128,7 +128,7 @@ public class Program
             try { File.AppendAllText(Path.Combine(localAppData, "startup_log.txt"), $"{DateTime.Now}: AutoStart={isAutoStart}, NeedsConfig={needsConfig}, ClientId={clientIdStr}\n"); } catch { }
 
             // Sanitize numeric values that may be stored as "300000.0" strings
-            var overrides = new Dictionary<string, string>();
+            var overrides = new Dictionary<string, string?>();
             void SanitizeInt(string name, int fallback)
             {
                 var raw = section[name];

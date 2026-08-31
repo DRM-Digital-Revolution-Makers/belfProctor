@@ -37,7 +37,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.EventLog" Version="8.0.0" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.30" />
   </ItemGroup>
 
   <ItemGroup>
@@ -86,6 +86,7 @@
     <Compile Include="Services\BrowserActivityService.cs" />
     <Compile Include="Services\RollingFileLoggerProvider.cs" />
     <Compile Include="Services\WorkTracking\*.cs" />
+    <Compile Include="Services\WebSocketAuth.cs" />
     <Compile Include="UI\SettingsForm.cs" />
   </ItemGroup>
 

@@ -310,7 +310,7 @@ function ProfilePillButton({ onClick, label }) {
 /* ============ Page ============ */
 
 export default function EventsList() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const API_URL =
     import.meta.env.VITE_API_URL ||

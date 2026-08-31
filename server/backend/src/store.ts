@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, Role, SystemEventType } from "@prisma/client";
 import { withLock } from "./locks";
 import {
+  dateBucketForTashkent,
   endOfTashkentDay,
   startOfTashkentDay,
   tashkentDayKey,
@@ -37,20 +38,11 @@ function dayKey(d: Date): string {
   return tashkentDayKey(d);
 }
 
-function startOfDay(date: Date): Date {
-  return startOfTashkentDay(date);
-}
-
-function endOfDay(date: Date): Date {
-  return endOfTashkentDay(date);
-}
-
 /**
- * UTC instants bounding a calendar month in Tashkent time. TimesheetDay.date is
- * stored as startOfTashkentDay(sample) and Activity is queried by UTC timestamp,
- * so a month window must be expressed in Tashkent terms — a plain
- * Date.UTC(year, month, ...) boundary is offset by 5 hours and would drop the
- * 1st of the month while pulling in the 1st of the next month [B-M11].
+ * UTC instants bounding a calendar month in Tashkent time, used for Activity
+ * timestamp ranges (Activity.timestamp is a `timestamptz`). For TimesheetDay
+ * date-column ranges use `tashkentMonthDateBucketBounds` instead — see
+ * `dateBucketForTashkent` in tz.ts for the Prisma DATE-binding quirk [B-D1].
  */
 export function tashkentMonthBounds(
   year: number,
@@ -62,6 +54,23 @@ export function tashkentMonthBounds(
   return {
     startOfMonth: startOfTashkentDay(firstDay),
     endOfMonth: endOfTashkentDay(lastDay),
+  };
+}
+
+/**
+ * gte/lte bounds for `TimesheetDay.date` (`@db.Date`) covering a Tashkent
+ * calendar month. Both ends are UTC midnight on the same UTC calendar day as
+ * the Tashkent day — matching the bucket format `dateBucketForTashkent`
+ * writes.
+ */
+export function tashkentMonthDateBucketBounds(
+  year: number,
+  month: number,
+): { startDate: Date; endDate: Date } {
+  const lastDom = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return {
+    startDate: new Date(Date.UTC(year, month - 1, 1)),
+    endDate: new Date(Date.UTC(year, month - 1, lastDom)),
   };
 }
 
@@ -657,7 +666,7 @@ export async function ingestActivityToTimesheetAndClient(
       ));
     }
 
-    const date = startOfDay(sampleTimestamp);
+    const date = dateBucketForTashkent(sampleTimestamp);
 
     const existingDay = await prisma.timesheetDay.findUnique({
       where: { clientId_date: { clientId: id, date } },
@@ -743,6 +752,7 @@ export async function backfillTimesheetFromActivity(
   const year = Number(match[1]);
   const month = Number(match[2]);
   const { startOfMonth, endOfMonth } = tashkentMonthBounds(year, month);
+  const { startDate, endDate } = tashkentMonthDateBucketBounds(year, month);
 
   const rows = await streamTimesheetForClient(id, startOfMonth, endOfMonth);
 
@@ -750,14 +760,14 @@ export async function backfillTimesheetFromActivity(
     await prisma.timesheetDay.deleteMany({
       where: {
         clientId: id,
-        date: { gte: startOfMonth, lte: endOfMonth },
+        date: { gte: startDate, lte: endDate },
       },
     });
     if (rows.length === 0) return;
     await prisma.timesheetDay.createMany({
       data: rows.map((r) => ({
         clientId: id,
-        date: startOfDay(new Date(r.date)),
+        date: dateBucketForTashkent(new Date(r.date)),
         startTime: new Date(r.startTime),
         endTime: new Date(r.endTime),
         activeMs: BigInt(r.activeMs),
@@ -781,10 +791,10 @@ export async function getTimesheetDataForMonth(monthStr: string): Promise<
   if (!match) return [];
   const year = Number(match[1]);
   const month = Number(match[2]);
-  const { startOfMonth, endOfMonth } = tashkentMonthBounds(year, month);
+  const { startDate, endDate } = tashkentMonthDateBucketBounds(year, month);
 
   const rows = await prisma.timesheetDay.findMany({
-    where: { date: { gte: startOfMonth, lte: endOfMonth } },
+    where: { date: { gte: startDate, lte: endDate } },
     orderBy: [{ clientId: "asc" }, { date: "asc" }],
   });
 
