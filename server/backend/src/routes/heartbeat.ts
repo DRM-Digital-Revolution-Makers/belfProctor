@@ -9,6 +9,10 @@ import {
 import { getSenderClientId } from "../clientId";
 import { consumePendingUninstall } from "../wsHub";
 import { getKeysToTry } from "../keyring";
+import { prisma } from "../prisma";
+import { now as authoritativeNow } from "../serverTime";
+import { config } from "../config";
+import { requireAuth } from "../middleware/auth";
 
 const router = Router();
 
@@ -44,12 +48,6 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       console.error(
         `[Heartbeat] Failed to decrypt heartbeat for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -57,14 +55,14 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(decryptedJson);
-    if (process.env.NODE_ENV !== "production") {
+    if (!config.isProduction) {
       console.log(
         `[Heartbeat] Successfully decrypted for ${clientId}. Payload size: ${decryptedJson.length}`,
       );
     }
 
     // Auto-register or Update
-    const now = new Date();
+    const now = authoritativeNow();
     if (!client) {
       await saveClient({
         id: clientId,
@@ -76,7 +74,7 @@ router.post("/", async (req, res) => {
         lastHeartbeat: now, // Explicitly set lastHeartbeat
         createdAt: now,
       });
-      if (process.env.NODE_ENV !== "production") {
+      if (!config.isProduction) {
         console.log(`Auto-registered new client: ${clientId}`);
       }
     } else {
@@ -92,7 +90,7 @@ router.post("/", async (req, res) => {
 
       // If we used a key different from what was stored, update it!
       if (client.encryptionKey !== usedKey) {
-        if (process.env.NODE_ENV !== "production") {
+        if (!config.isProduction) {
           console.log(
             `Updating encryption key for client ${clientId} (Recovered via fallback)`,
           );
@@ -105,12 +103,33 @@ router.post("/", async (req, res) => {
 
     await appendHeartbeat({
       clientId,
-      timestamp: new Date(),
+      timestamp: authoritativeNow(),
       status: payload.Status || payload.status || "Online",
       version: payload.Version || payload.version || "",
     });
+    const heartbeatVersion = String(payload.Version || payload.version || "").trim();
+    if (heartbeatVersion) {
+      // Confirm an in-flight update once the client reports the new version.
+      // Log failures rather than swallowing them so a deployment can't silently
+      // stay stuck in "installing" forever [B-C4].
+      try {
+        await prisma.updateDeployment.updateMany({
+          where: {
+            clientId,
+            version: heartbeatVersion,
+            status: { in: ["sent", "downloading", "verifying", "installing", "restarted"] },
+          },
+          data: { status: "confirmed", detail: "confirmed_by_heartbeat" },
+        });
+      } catch (e) {
+        console.error(
+          `[Heartbeat] Failed to confirm deployment for ${clientId} v${heartbeatVersion}:`,
+          e,
+        );
+      }
+    }
     const ms = Date.now() - t0;
-    if (ms > 100 && process.env.NODE_ENV === "production") {
+    if (ms > 100 && config.isProduction) {
       console.warn(`[Heartbeat] Slow request ${clientId}: ${ms}ms`);
     }
     const uninstall = await consumePendingUninstall(clientId);
@@ -124,14 +143,14 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const data = await getLatestHeartbeats();
   return res.json({ data, total: data.length });
 });
 
-router.get("/latest", async (_req, res) => {
+router.get("/latest", requireAuth, async (_req, res) => {
   const data = await getLatestHeartbeats();
-  return res.json({ data, serverTime: new Date() });
+  return res.json({ data, serverTime: authoritativeNow() });
 });
 
 export default router;

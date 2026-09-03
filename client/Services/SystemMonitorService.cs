@@ -112,7 +112,7 @@ public class SystemMonitorService : ISystemMonitorService
 
     public Task<List<SystemEvent>> GetRecentEventsAsync(TimeSpan timeSpan)
     {
-        var cutoffTime = DateTime.Now - timeSpan;
+        var cutoffTime = DateTime.UtcNow - timeSpan;
         
         lock (_eventsLock)
         {
@@ -168,7 +168,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                                             var systemEvent = new SystemEvent
                                             {
-                                                Timestamp = DateTime.Now,
+                                                Timestamp = DateTime.UtcNow,
                                                 EventType = SystemEventType.ProcessStarted,
                                                 Description = $"Process started: {p.ProcessName}",
                                                 ProcessName = p.ProcessName,
@@ -227,7 +227,12 @@ public class SystemMonitorService : ISystemMonitorService
 
     private async Task MonitorUsbFileActivity()
     {
-        while (!_cancellationTokenSource?.Token.IsCancellationRequested ?? false)
+        // Capture the token once. The old condition
+        // `!_cts?.Token.IsCancellationRequested ?? false` relied on subtle
+        // operator precedence and evaluated to false (loop never runs) if the
+        // CTS were ever null — a fragile pattern we replace with an explicit one [C-C4].
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
@@ -240,7 +245,7 @@ public class SystemMonitorService : ISystemMonitorService
                     ScanUsbDrive(drive);
                 }
 
-                await Task.Delay(15000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(15000, token);
             }
             catch (OperationCanceledException)
             {
@@ -249,7 +254,7 @@ public class SystemMonitorService : ISystemMonitorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in USB file monitoring");
-                await Task.Delay(30000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(30000, token);
             }
         }
     }
@@ -325,7 +330,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 var systemEvent = new SystemEvent
                 {
-                    Timestamp = DateTime.Now,
+                    Timestamp = DateTime.UtcNow,
                     EventType = SystemEventType.FileAccess,
                     Description = "File created on USB device",
                     DeviceId = root,
@@ -345,7 +350,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 var systemEvent = new SystemEvent
                 {
-                    Timestamp = DateTime.Now,
+                    Timestamp = DateTime.UtcNow,
                     EventType = SystemEventType.FileAccess,
                     Description = "File modified on USB device",
                     DeviceId = root,
@@ -367,14 +372,13 @@ public class SystemMonitorService : ISystemMonitorService
 
     private async Task MonitorNetworkActivity()
     {
-        var lastNetworkCheck = DateTime.Now;
-        
-        while (!_cancellationTokenSource?.Token.IsCancellationRequested ?? false)
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
                 await CheckNetworkConnections();
-                await Task.Delay(5000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(5000, token);
             }
             catch (OperationCanceledException)
             {
@@ -383,7 +387,7 @@ public class SystemMonitorService : ISystemMonitorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in network monitoring");
-                await Task.Delay(10000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(10000, token);
             }
         }
     }
@@ -431,7 +435,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.ProcessStarted,
                 Description = $"Process started: {processName}",
                 ProcessName = processName,
@@ -461,7 +465,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.ProcessStopped,
                 Description = $"Process stopped: {processName}",
                 ProcessName = processName,
@@ -499,7 +503,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.USBConnected,
                 Description = $"USB device connected: {driveName}",
                 DeviceId = driveName
@@ -538,7 +542,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                     var systemEvent = new SystemEvent
                     {
-                        Timestamp = DateTime.Now,
+                        Timestamp = DateTime.UtcNow,
                         EventType = SystemEventType.NetworkConnection,
                         Description = $"Network connection established",
                         NetworkAddress = remoteAddress,
@@ -591,7 +595,7 @@ public class SystemMonitorService : ISystemMonitorService
         {
             var recentSimilar = _recentEvents
                 .Where(e => e.EventType == newEvent.EventType && 
-                        e.Timestamp > DateTime.Now.AddMinutes(-1))
+                        e.Timestamp > DateTime.UtcNow.AddMinutes(-1))
                 .Any(e => e.NetworkAddress == newEvent.NetworkAddress);
             
             return recentSimilar;
@@ -601,7 +605,8 @@ public class SystemMonitorService : ISystemMonitorService
     private async Task MonitorActiveWindow()
     {
         string? lastTitle = null;
-        while (!_cancellationTokenSource?.IsCancellationRequested ?? false)
+        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        while (!token.IsCancellationRequested)
         {
             try
             {
@@ -636,7 +641,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                                 var systemEvent = new SystemEvent
                                 {
-                                    Timestamp = DateTime.Now,
+                                    Timestamp = DateTime.UtcNow,
                                     EventType = SystemEventType.AppUsage,
                                     Description = $"User opened: {title}",
                                     ProcessName = processName,
@@ -649,7 +654,7 @@ public class SystemMonitorService : ISystemMonitorService
                         }
                     }
                 }
-                await Task.Delay(1000, _cancellationTokenSource?.Token ?? CancellationToken.None);
+                await Task.Delay(1000, token);
             }
             catch (Exception)
             {

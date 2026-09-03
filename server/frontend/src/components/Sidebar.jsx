@@ -48,16 +48,54 @@ function NavItem({ to, icon, label, active, collapsed }) {
   return content;
 }
 
+function MobileNavItem({ to, icon, label, active }) {
+  return (
+    <Tooltip title={label} placement="bottom">
+      <Link
+        to={to}
+        aria-label={label}
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: 14,
+          display: "inline-grid",
+          placeItems: "center",
+          color: active ? "var(--bp-accent-strong)" : "var(--bp-text-muted)",
+          background: active ? "rgba(38,126,38,0.1)" : "transparent",
+          textDecoration: "none",
+          flex: "0 0 auto",
+        }}
+      >
+        <Icon icon={icon} width={24} height={24} />
+      </Link>
+    </Tooltip>
+  );
+}
+
 export default function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const [collapsed, setCollapsed] = React.useState(
     () => localStorage.getItem(COLLAPSED_KEY) === "1",
   );
+  const [isNarrow, setIsNarrow] = React.useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 900px)").matches
+      : false,
+  );
 
   React.useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
   }, [collapsed]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mq = window.matchMedia("(max-width: 900px)");
+    const onChange = () => setIsNarrow(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
 
   const path = location.pathname;
   const isHome = path === "/" || path.startsWith("/events");
@@ -68,6 +106,46 @@ export default function Sidebar() {
     path.startsWith("/timesheet") ||
     path.startsWith("/activity");
   const isSettings = path.startsWith("/settings");
+
+  if (isNarrow) {
+    return (
+      <nav className="bp-mobile-nav" aria-label="Основная навигация">
+        <Link
+          to="/"
+          className="bp-sidebar-logo"
+          style={{ color: "inherit", textDecoration: "none" }}
+        >
+          BelfProctor
+        </Link>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <MobileNavItem
+            to="/"
+            icon="solar:home-bold-duotone"
+            label={t("nav.home")}
+            active={isHome}
+          />
+          <MobileNavItem
+            to="/clients"
+            icon="solar:users-group-two-rounded-bold-duotone"
+            label={t("nav.clients")}
+            active={isClients}
+          />
+          <MobileNavItem
+            to="/report"
+            icon="solar:document-bold-duotone"
+            label={t("nav.report")}
+            active={isReport}
+          />
+          <MobileNavItem
+            to="/settings"
+            icon="solar:settings-bold-duotone"
+            label={t("nav.settings")}
+            active={isSettings}
+          />
+        </div>
+      </nav>
+    );
+  }
 
   return (
     <Layout.Sider

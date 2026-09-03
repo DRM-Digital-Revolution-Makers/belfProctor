@@ -11,14 +11,15 @@ import {
 import { useTranslation } from "react-i18next";
 import { authFetch } from "../dataProvider.js";
 import { useParams } from "react-router-dom";
+import { formatTashkent } from "../utils/time";
 // Removed charts and flyonui helpers
 
 export default function ActivityDetail() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { clientId } = useParams();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
   const [shots, setShots] = React.useState([]);
   const [usbEvents, setUsbEvents] = React.useState([]);
   const [currentPath, setCurrentPath] = React.useState("");
@@ -26,9 +27,6 @@ export default function ActivityDetail() {
   const [dirLoading, setDirLoading] = React.useState(false);
   const [dirError, setDirError] = React.useState(null);
   const [retryTrigger, setRetryTrigger] = React.useState(0);
-  const [authToken, setAuthToken] = React.useState(
-    () => localStorage.getItem("token") || "",
-  );
   const [imgTs, setImgTs] = React.useState(() => Date.now());
   const [driveOptions, setDriveOptions] = React.useState([]);
   const [rootPath, setRootPath] = React.useState("%SYSTEMDRIVE%\\");
@@ -42,10 +40,6 @@ export default function ActivityDetail() {
     }
   });
   const cancelRefs = React.useRef(new Set());
-
-  const headersAuth = React.useMemo(() => {
-    return authToken ? { Authorization: `Bearer ${authToken}` } : {};
-  }, [authToken]);
 
   // Persist download states
   React.useEffect(() => {
@@ -129,7 +123,7 @@ export default function ActivityDetail() {
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [downloadStates, API_URL, headersAuth, t]);
+  }, [downloadStates, API_URL, t]);
 
   // Initialize currentPath when rootPath is determined
   React.useEffect(() => {
@@ -151,13 +145,10 @@ export default function ActivityDetail() {
       pageSize: "500",
       clientId,
     });
-    const eRes = await fetch(`${API_URL}/events?${eParams.toString()}`, {
-      headers: headersAuth,
+    const eRes = await authFetch(`${API_URL}/events?${eParams.toString()}`, {
       cache: "no-store",
     });
     if (eRes.status === 401) {
-      localStorage.removeItem("token");
-      setAuthToken("");
       window.dispatchEvent(new Event("auth:changed"));
       return;
     }
@@ -173,13 +164,10 @@ export default function ActivityDetail() {
     );
     setUsbEvents(usbOnly);
     const sParams = new URLSearchParams({ page: "1", pageSize: "6", clientId });
-    const sRes = await fetch(`${API_URL}/screenshots?${sParams.toString()}`, {
-      headers: headersAuth,
+    const sRes = await authFetch(`${API_URL}/screenshots?${sParams.toString()}`, {
       cache: "no-store",
     });
     if (sRes.status === 401) {
-      localStorage.removeItem("token");
-      setAuthToken("");
       window.dispatchEvent(new Event("auth:changed"));
       return;
     }
@@ -187,7 +175,7 @@ export default function ActivityDetail() {
     const sData = Array.isArray(sJson.data) ? sJson.data : [];
     setShots(sData);
     setImgTs(Date.now());
-  }, [API_URL, clientId, headersAuth]);
+  }, [API_URL, clientId]);
 
   React.useEffect(() => {
     loadData();
@@ -204,7 +192,7 @@ export default function ActivityDetail() {
         "%SYSTEMDRIVE%\\",
         ...driveLetters.map((letter) => `${letter}:\\`),
       ];
-      const headers = { ...headersAuth, "Content-Type": "application/json" };
+      const headers = { "Content-Type": "application/json" };
       const found = [];
       for (const basePath of candidates) {
         try {
@@ -256,7 +244,7 @@ export default function ActivityDetail() {
     return () => {
       cancelled = true;
     };
-  }, [API_URL, clientId, headersAuth, t]);
+  }, [API_URL, clientId, t]);
 
   // Fetch directory contents when currentPath changes
   React.useEffect(() => {
@@ -271,7 +259,7 @@ export default function ActivityDetail() {
       setDirError(null);
       console.log(`Fetching dir for client=${clientId} path=${currentPath}`);
       try {
-        const headers = { ...headersAuth, "Content-Type": "application/json" };
+        const headers = { "Content-Type": "application/json" };
         const res = await authFetch(`${API_URL}/commands/list`, {
           method: "POST",
           headers,
@@ -349,7 +337,7 @@ export default function ActivityDetail() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath, API_URL, clientId, headersAuth, retryTrigger, t]);
+  }, [currentPath, API_URL, clientId, retryTrigger, t]);
 
   // Helper to parse path into breadcrumbs
   const breadcrumbs = React.useMemo(() => {
@@ -394,7 +382,6 @@ export default function ActivityDetail() {
     }));
 
     const headers = {
-      ...headersAuth,
       "Content-Type": "application/json",
     };
     const isFolder = record.isDir;
@@ -487,16 +474,7 @@ export default function ActivityDetail() {
       dataIndex: "lastWriteTime",
       key: "lastWriteTime",
       width: 200,
-      render: (text) => {
-        if (!text) return "-";
-        try {
-          const d = new Date(text);
-          if (isNaN(d.getTime())) return "-";
-          return d.toLocaleString(i18n.language === "uz" ? "uz-UZ" : "ru-RU");
-        } catch {
-          return "-";
-        }
-      },
+      render: (text) => formatTashkent(text),
     },
     {
       title: t("common.actions"),
@@ -569,26 +547,7 @@ export default function ActivityDetail() {
           {
             title: t("common.time"),
             dataIndex: "timestamp",
-            render: (v) => {
-              if (!v) return "-";
-              try {
-                const d = new Date(v);
-                if (isNaN(d.getTime())) return "-";
-                d.setHours(d.getHours() - 2);
-                return d.toLocaleString(
-                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  {
-                    day: "2-digit",
-                    month: "2-digit",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  },
-                );
-              } catch {
-                return "-";
-              }
-            },
+            render: (v) => formatTashkent(v, "DD.MM.YYYY HH:mm"),
           },
           { title: t("common.type"), dataIndex: "eventType" },
           { title: t("common.device"), dataIndex: "deviceId" },
@@ -681,47 +640,16 @@ export default function ActivityDetail() {
       >
         {shots.map((s) => (
           <div key={s.id} style={{ border: "1px solid #eee", padding: 8 }}>
-            {authToken ? (
-              <img
-                src={`${API_URL}/screenshots/${s.id}/file?token=${authToken}&ts=${imgTs}`}
+            <img
+                src={`${API_URL}/screenshots/${s.id}/file?ts=${imgTs}`}
                 alt={s.filename}
                 loading="lazy"
                 decoding="async"
                 fetchPriority="low"
                 style={{ width: "100%", height: 180, objectFit: "cover" }}
               />
-            ) : (
-              <div
-                style={{
-                  height: 180,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#999",
-                }}
-              >
-                {t("common.accessDenied")}
-              </div>
-            )}
             <div style={{ marginTop: 8, fontSize: 12 }}>
-              {(() => {
-                if (!s.timestamp) return "-";
-                try {
-                  const d = new Date(s.timestamp);
-                  if (isNaN(d.getTime())) return "-";
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                    {
-                      day: "2-digit",
-                      month: "short",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    },
-                  );
-                } catch {
-                  return "-";
-                }
-              })()}
+              {formatTashkent(s.timestamp, "DD MMM HH:mm")}
             </div>
           </div>
         ))}

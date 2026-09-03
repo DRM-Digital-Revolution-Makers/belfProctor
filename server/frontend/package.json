@@ -3,11 +3,24 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.22.2 <23"
+  },
   "scripts": {
+    "predev": "node scripts/check-node-version.js",
     "dev": "vite",
+    "prebuild": "node scripts/check-node-version.js",
     "build": "vite build",
+    "prelint": "node scripts/check-node-version.js",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "pretest": "node scripts/check-node-version.js",
+    "test": "vitest run",
+    "pretest:coverage": "node scripts/check-node-version.js",
+    "test:coverage": "vitest run --coverage",
+    "preview": "vite preview",
+    "pree2e": "node scripts/check-node-version.js",
+    "e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-e2e.ps1",
+    "e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
@@ -15,11 +28,10 @@
     "@refinedev/antd": "^6.0.3",
     "@refinedev/core": "^5.0.5",
     "@refinedev/react-router": "^2.0.3",
-    "@refinedev/simple-rest": "^6.0.1",
     "@tanstack/react-query": "^5.90.5",
     "antd": "^5.27.6",
     "apexcharts": "^5.3.6",
-    "flyonui": "^2.4.1",
+    "dayjs": "^1.11.21",
     "i18next": "^25.7.2",
     "lodash": "^4.17.21",
     "react": "^19.1.1",
@@ -27,11 +39,14 @@
     "react-i18next": "^16.4.1",
     "react-router-dom": "^7.9.4",
     "recharts": "^3.7.0",
-    "xlsx": "^0.18.5",
     "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
+    "@playwright/test": "^1.61.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",
@@ -39,9 +54,12 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.22",
     "globals": "^16.4.0",
-    "vite": "npm:rolldown-vite@7.1.14"
+    "jsdom": "^30.0.1",
+    "vite": "npm:rolldown-vite@7.1.14",
+    "vitest": "^4.1.11"
   },
   "overrides": {
-    "vite": "npm:rolldown-vite@7.1.14"
+    "vite": "npm:rolldown-vite@7.1.14",
+    "path-to-regexp": "8.4.2"
   }
 }

@@ -1,26 +1,39 @@
-# Backend Dockerfile
-FROM node:20-alpine AS base
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Install deps
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-RUN npm ci --only=production || npm i --production
+RUN apk add --no-cache openssl
 
-# Copy prisma and generate client
+COPY package.json package-lock.json .npmrc ./
 COPY prisma ./prisma
-RUN npx prisma generate
+RUN npm ci
 
-# Copy source and build
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.test.json jest.config.js ./
 COPY src ./src
-RUN npm i -D typescript && npx tsc
+COPY scripts ./scripts
+RUN npm run build
 
-ENV NODE_ENV=production
-ENV PORT=4000
-ENV UPLOAD_DIR=/data/storage
+FROM builder AS test
+RUN npm run test:coverage
 
-# Create storage directory
-RUN mkdir -p /data/storage/screenshots /data/storage/reports
+FROM node:22-alpine AS runtime
+WORKDIR /app
+
+RUN apk add --no-cache openssl
+
+ENV NODE_ENV=production \
+    PORT=4000 \
+    HOST=0.0.0.0 \
+    UPLOAD_DIR=/app/storage
+
+COPY package.json package-lock.json .npmrc ./
+COPY prisma ./prisma
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=builder /app/dist ./dist
+
+RUN mkdir -p /app/storage
 
 EXPOSE 4000
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec node dist/index.js"]

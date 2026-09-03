@@ -7,7 +7,6 @@ import {
   message,
   Alert,
   Select,
-  Empty,
   Dropdown,
   Checkbox,
 } from "antd";
@@ -24,6 +23,8 @@ const BP = {
   muted: "#707070",
   light: "#A4A4A4",
   green: "#267E26",
+  blue: "#22408C",
+  warning: "#B45309",
   red: "#DC2626",
   divider: "rgba(164,164,164,0.5)",
   shadow: "0 0 4px 0 rgba(241,243,248,1)",
@@ -92,12 +93,13 @@ function ProfilePill({ onClick, label }) {
     <button
       type="button"
       onClick={onClick}
+      className="bp-primary-action"
       style={{
-        background: BP.surface,
-        color: BP.muted,
+        background: "rgba(38,126,38,0.08)",
+        color: BP.green,
         border: "none",
         borderRadius: 30,
-        padding: "8px 20px",
+        padding: "8px 16px",
         cursor: "pointer",
         fontFamily: BP.font,
         fontSize: 14,
@@ -134,6 +136,53 @@ function ColumnHeader({ label, width, flex }) {
   );
 }
 
+function StatusPill({ tone = "muted", children }) {
+  const styles = {
+    success: { color: BP.green, background: "rgba(38,126,38,0.1)" },
+    info: { color: BP.blue, background: "rgba(34,64,140,0.08)" },
+    muted: { color: BP.muted, background: BP.surface },
+    warning: { color: BP.warning, background: "rgba(245,158,11,0.12)" },
+  }[tone];
+  return (
+    <span className="bp-status-pill" style={styles}>
+      {children}
+    </span>
+  );
+}
+
+function ClientsEmptyState({ hasFilter }) {
+  return (
+    <div className="bp-empty-state" style={{ margin: 40, minHeight: 160, fontFamily: BP.font }}>
+      <Icon icon="solar:users-group-rounded-bold-duotone" width={28} height={28} color={BP.light} />
+      <div style={{ color: BP.text, fontSize: 15, fontWeight: 510 }}>
+        {hasFilter ? "По фильтрам ничего не найдено" : "Сотрудники ещё не добавлены"}
+      </div>
+      <div style={{ color: BP.muted, fontSize: 13 }}>
+        {hasFilter
+          ? "Измените поиск или категорию, чтобы увидеть сотрудников."
+          : "Добавьте первого клиента, чтобы начать мониторинг."}
+      </div>
+    </div>
+  );
+}
+
+function useIsNarrow() {
+  const [isNarrow, setIsNarrow] = React.useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 720px)").matches
+      : false,
+  );
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mq = window.matchMedia("(max-width: 720px)");
+    const onChange = () => setIsNarrow(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return isNarrow;
+}
+
 function Divider() {
   return (
     <div
@@ -152,9 +201,10 @@ function Divider() {
 export default function ClientsList() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const isNarrow = useIsNarrow();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [data, setData] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
@@ -182,10 +232,11 @@ export default function ClientsList() {
   const [catForm] = Form.useForm();
 
   const genId = React.useCallback(() => {
-    const n = Math.floor(Math.random() * 1e6)
-      .toString()
-      .padStart(6, "0");
-    return `CLIENT${n}`;
+    const bytes = new Uint8Array(8);
+    window.crypto.getRandomValues(bytes);
+    return `CLIENT${Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")}`;
   }, []);
   const genKey = React.useCallback(() => {
     const arr = new Uint8Array(32);
@@ -333,13 +384,13 @@ export default function ClientsList() {
       const vals = await deleteForm.validateFields();
       setDeleteLoading(true);
       const password = String(vals.password || "").trim();
-      const headers = { "X-Admin-Password": password };
       const results = await Promise.all(
         selected.map(async (id) => {
           try {
             const resp = await authFetch(`${API_URL}/clients/${id}`, {
               method: "DELETE",
-              headers,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ password }),
             });
             return { id, ok: resp.ok };
           } catch {
@@ -426,6 +477,7 @@ export default function ClientsList() {
     <div>
       {/* Outer wrapper */}
       <div
+        className="bp-page-shell"
         style={{
           background: BP.surface,
           borderRadius: 50,
@@ -461,17 +513,22 @@ export default function ClientsList() {
               flexWrap: "wrap",
             }}
           >
-            <h2
-              style={{
-                margin: 0,
-                fontFamily: BP.font,
-                fontSize: 24,
-                fontWeight: 510,
-                color: BP.text,
-              }}
-            >
-              {t("employees.title")}
-            </h2>
+            <div>
+              <h2
+                style={{
+                  margin: 0,
+                  fontFamily: BP.font,
+                  fontSize: 24,
+                  fontWeight: 510,
+                  color: BP.text,
+                }}
+              >
+                {t("employees.title")}
+              </h2>
+              <div style={{ color: BP.muted, fontFamily: BP.font, fontSize: 14, marginTop: 4 }}>
+                {filteredData.length} из {data.length} клиентов в списке
+              </div>
+            </div>
 
             <div
               style={{
@@ -480,6 +537,7 @@ export default function ClientsList() {
                 gap: 12,
                 flex: 1,
                 justifyContent: "flex-end",
+                flexDirection: isNarrow ? "column" : "row",
               }}
             >
               {/* Search */}
@@ -490,7 +548,8 @@ export default function ClientsList() {
                   background: BP.surface,
                   borderRadius: 10,
                   padding: "12px 20px",
-                  minWidth: 280,
+                  minWidth: isNarrow ? "100%" : 280,
+                  width: isNarrow ? "100%" : "auto",
                   gap: 10,
                 }}
               >
@@ -519,7 +578,7 @@ export default function ClientsList() {
               {/* Category filter */}
               <Select
                 allowClear
-                style={{ minWidth: 180 }}
+                style={{ minWidth: isNarrow ? "100%" : 180, width: isNarrow ? "100%" : undefined }}
                 placeholder={t("common.category")}
                 value={categoryFilter}
                 options={categories.map((c) => ({ label: c, value: c }))}
@@ -546,6 +605,7 @@ export default function ClientsList() {
                   borderRadius: 30,
                   height: 40,
                   fontWeight: 510,
+                  width: isNarrow ? "100%" : undefined,
                 }}
               >
                 {t("clients.addClient")}
@@ -597,7 +657,7 @@ export default function ClientsList() {
                   style={{
                     padding: 8,
                     height: 40,
-                    width: 40,
+                    width: isNarrow ? "100%" : 40,
                     borderRadius: 30,
                     background: BP.surface,
                   }}
@@ -659,7 +719,7 @@ export default function ClientsList() {
           {/* Топ бар таблицы */}
           <div
             style={{
-              display: "flex",
+              display: isNarrow ? "none" : "flex",
               justifyContent: "space-between",
               alignItems: "center",
               padding: "16px 28px",
@@ -675,7 +735,7 @@ export default function ClientsList() {
               }}
             >
               {selectMode && <div style={{ width: 28 }} />}
-              <ColumnHeader label="No" width={40} />
+              <ColumnHeader label="№" width={40} />
               <ColumnHeader label={t("common.name")} flex={2} />
               <ColumnHeader label={t("common.status")} flex={1} />
               <ColumnHeader label="Активность" flex={1} />
@@ -695,24 +755,85 @@ export default function ClientsList() {
             }}
           >
             {filteredData.length === 0 ? (
-              <div style={{ padding: 40 }}>
-                <Empty description={t("common.noData")} />
-              </div>
+              <ClientsEmptyState hasFilter={Boolean(search.trim() || categoryFilter)} />
             ) : (
               filteredData.map((c, i) => {
                 const hb = latestHeartbeats.find((h) => h.clientId === c.id);
                 const act = latestActivity.find((a) => a.clientId === c.id);
                 const st = statusFromHeartbeat(hb, act, tickNow);
-                const statusColor = st.online ? BP.green : BP.red;
-                const statusLabel = st.online
-                  ? t("employees.connected")
-                  : t("employees.disconnected");
-                const activityColor = st.active ? BP.green : BP.red;
+                const statusTone = st.online ? "success" : "muted";
+                const statusLabel = st.online ? "Онлайн" : "Оффлайн";
+                const activityTone = st.active ? "success" : "muted";
+                const activityLabel = st.active
+                  ? "Активен"
+                  : st.activeLabel === "—"
+                    ? "Нет данных"
+                    : "Нет активности";
                 const isSelected = selected.includes(c.id);
+
+                if (isNarrow) {
+                  return (
+                    <div
+                      key={c.id}
+                      className="bp-hover-row bp-interactive-card"
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                        padding: 14,
+                        margin: i === 0 ? "0 0 8px" : "8px 0",
+                        border: `1px solid ${BP.surface}`,
+                        borderRadius: 16,
+                        background: isSelected ? "rgba(38,126,38,0.04)" : BP.white,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: BP.light, fontSize: 12, fontFamily: BP.font }}>
+                            № {i + 1}
+                          </div>
+                          <div
+                            style={{
+                              color: BP.text,
+                              fontFamily: BP.font,
+                              fontSize: 16,
+                              fontWeight: 510,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                            title={c.id}
+                          >
+                            {c.id}
+                          </div>
+                        </div>
+                        {selectMode && (
+                          <Checkbox
+                            checked={isSelected}
+                            onChange={(e) => toggleRow(c.id, e.target.checked)}
+                          />
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
+                        <StatusPill tone={activityTone}>{activityLabel}</StatusPill>
+                        {st.duration && (
+                          <span style={{ color: BP.muted, fontSize: 12, fontFamily: BP.font }}>
+                            {st.duration}
+                          </span>
+                        )}
+                      </div>
+                      <ProfilePill
+                        label={t("dashboard.openProfile")}
+                        onClick={() => navigate(`/clients/${c.id}`)}
+                      />
+                    </div>
+                  );
+                }
 
                 return (
                   <div
                     key={c.id}
+                    className="bp-hover-row bp-interactive-card"
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -768,18 +889,16 @@ export default function ClientsList() {
                       <div
                         style={{
                           flex: 1,
-                          color: statusColor,
                           fontFamily: BP.font,
                           fontSize: 16,
                           fontWeight: 400,
                         }}
                       >
-                        {statusLabel}
+                        <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
                       </div>
                       <div
                         style={{
                           flex: 1,
-                          color: activityColor,
                           fontFamily: BP.font,
                           fontSize: 16,
                           fontWeight: 400,
@@ -788,7 +907,7 @@ export default function ClientsList() {
                           gap: 6,
                         }}
                       >
-                        <span>{st.activeLabel}</span>
+                        <StatusPill tone={activityTone}>{activityLabel}</StatusPill>
                         {st.duration && (
                           <span
                             style={{

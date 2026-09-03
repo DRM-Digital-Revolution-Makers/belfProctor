@@ -18,7 +18,10 @@ public class StabilityService : BackgroundService, IStabilityService
     private readonly IServiceProvider _serviceProvider;
     private Timer? _healthCheckTimer;
     private Timer? _memoryCheckTimer;
-    private DateTime _lastHeartbeat = DateTime.Now;
+    // Monotonic tick for the responsiveness watchdog (immune to wall-clock,
+    // DST and NTP jumps); a wall-clock UTC copy is kept only for readable logs.
+    private long _lastHeartbeatTick = Environment.TickCount64;
+    private DateTime _lastHeartbeatUtc = DateTime.UtcNow;
     private int _consecutiveFailures = 0;
     private readonly object _lockObject = new();
 
@@ -69,20 +72,23 @@ public class StabilityService : BackgroundService, IStabilityService
         }
     }
 
-    public new Task StartAsync(CancellationToken cancellationToken)
+    // Override (not `new`): with `new`, the host calls BackgroundService's
+    // StartAsync via IHostedService and this custom init NEVER ran. override +
+    // base.StartAsync preserves ExecuteAsync while running our setup [C-L4].
+    public override Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting stability monitoring");
         IsHealthy = true;
         _consecutiveFailures = 0;
-        return Task.CompletedTask;
+        return base.StartAsync(cancellationToken);
     }
 
-    public new Task StopAsync(CancellationToken cancellationToken)
+    public override Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Stopping stability monitoring");
         _healthCheckTimer?.Dispose();
         _memoryCheckTimer?.Dispose();
-        return Task.CompletedTask;
+        return base.StopAsync(cancellationToken);
     }
 
     public async Task<bool> CheckHealthAsync()
@@ -191,13 +197,12 @@ public class StabilityService : BackgroundService, IStabilityService
                 
                 _logger.LogDebug("Current memory usage: {MemoryMB} MB", memoryUsageMB);
                 
-                // Если использование памяти превышает 500 МБ, принудительно собираем мусор
+                // Log only — never force GC. A forced Stop-the-World collection
+                // stalls monitoring and the runtime collector reclaims memory
+                // far better on its own [C-C6].
                 if (memoryUsageMB > 500)
                 {
-                    _logger.LogWarning("High memory usage detected: {MemoryMB} MB. Forcing garbage collection", memoryUsageMB);
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-                    GC.Collect();
+                    _logger.LogWarning("High memory usage detected: {MemoryMB} MB", memoryUsageMB);
                 }
                 
                 // Если использование памяти критично (> 1 ГБ), перезапускаем сервис
@@ -216,18 +221,21 @@ public class StabilityService : BackgroundService, IStabilityService
 
     private void UpdateHeartbeat()
     {
-        _lastHeartbeat = DateTime.Now;
+        _lastHeartbeatTick = Environment.TickCount64;
+        _lastHeartbeatUtc = DateTime.UtcNow;
     }
 
     private Task<bool> CheckServiceResponsiveness()
     {
         try
         {
-            // Проверяем, что heartbeat обновлялся в последние 2 минуты
-            var timeSinceLastHeartbeat = DateTime.Now - _lastHeartbeat;
-            if (timeSinceLastHeartbeat > TimeSpan.FromMinutes(2))
+            // Elapsed time from a monotonic source [C-C3] — a wall-clock delta
+            // could jump an hour at a DST transition and trigger a spurious
+            // restart.
+            var elapsedMs = Environment.TickCount64 - _lastHeartbeatTick;
+            if (elapsedMs > (long)TimeSpan.FromMinutes(2).TotalMilliseconds)
             {
-                _logger.LogWarning("Service appears unresponsive. Last heartbeat: {LastHeartbeat}", _lastHeartbeat);
+                _logger.LogWarning("Service appears unresponsive. Last heartbeat (UTC): {LastHeartbeat:o}", _lastHeartbeatUtc);
                 return Task.FromResult(false);
             }
 
@@ -340,15 +348,15 @@ public class StabilityService : BackgroundService, IStabilityService
         {
             var restartInfo = new
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 Reason = "Health check failure",
                 ConsecutiveFailures = _consecutiveFailures,
-                LastHeartbeat = _lastHeartbeat,
+                LastHeartbeat = _lastHeartbeatUtc,
                 MemoryUsage = Process.GetCurrentProcess().WorkingSet64 / (1024 * 1024)
             };
 
             var logPath = Path.Combine(_settings.LogPath, "restart_log.txt");
-            var logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - Service restart: {System.Text.Json.JsonSerializer.Serialize(restartInfo)}{Environment.NewLine}";
+            var logEntry = $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z - Service restart: {System.Text.Json.JsonSerializer.Serialize(restartInfo)}{Environment.NewLine}";
             
             await File.AppendAllTextAsync(logPath, logEntry);
         }
@@ -368,12 +376,8 @@ public class StabilityService : BackgroundService, IStabilityService
             _consecutiveFailures = 0;
             IsHealthy = true;
             UpdateHeartbeat();
-            
-            // Принудительная сборка мусора
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            
+
+            // No forced GC — let the runtime manage memory [C-C6].
             await Task.Delay(5000); // Даем время на стабилизацию
         }
         catch (Exception ex)
@@ -436,18 +440,19 @@ public class StabilityService : BackgroundService, IStabilityService
         {
             _logger.LogInformation("Cleaning up old files to free disk space");
             
-            // Удаляем старые скриншоты (старше 7 дней)
+            // Удаляем старые скриншоты (старше 7 дней). UTC on both sides so the
+            // age comparison is consistent and DST-safe.
             var oldScreenshots = Directory.GetFiles(_settings.ScreenshotPath, "screenshot_*.jpg")
-                .Where(f => new FileInfo(f).CreationTime < DateTime.Now.AddDays(-7));
-            
+                .Where(f => new FileInfo(f).CreationTimeUtc < DateTime.UtcNow.AddDays(-7));
+
             foreach (var file in oldScreenshots)
             {
                 File.Delete(file);
             }
-            
+
             // Удаляем старые отчеты (старше 30 дней)
             var oldReports = Directory.GetFiles(_settings.ReportsPath, "*_report_*.json")
-                .Where(f => new FileInfo(f).CreationTime < DateTime.Now.AddDays(-30));
+                .Where(f => new FileInfo(f).CreationTimeUtc < DateTime.UtcNow.AddDays(-30));
             
             foreach (var file in oldReports)
             {

@@ -1,6 +1,8 @@
 # OS junk
 .DS_Store
 Thumbs.db
+.npm-cache/
+
 
 # IDE/Editor
 .vscode/
@@ -35,6 +37,10 @@ TestResults/
 # --- Node / TypeScript (server) ---
 # Dependencies
 node_modules/
+.dotnet/
+.tools/
+.test-tls/
+.artifacts/
 
 # Build outputs
 dist/
@@ -66,3 +72,4 @@ pnpm-debug.log*
 # Large binaries (exceed GitHub 100MB limit)
 client/deploy-pkg/*.exe
 client/bootstrap-pkg/*.exe
+.codex-tools/

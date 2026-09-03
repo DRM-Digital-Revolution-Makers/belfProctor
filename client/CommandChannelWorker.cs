@@ -39,22 +39,35 @@ public class CommandChannelWorker : BackgroundService
                     _logger.LogInformation("Command channel connected");
                     ConnectivityState.SetWsConnected(true);
                     backoffSeconds = 2;
+                    // Matches the server's WebSocket maxPayload. The previous 64KB
+                    // cap both under-sized the server's limit AND broke the whole
+                    // connection on an over-limit frame; now we fully drain and
+                    // discard only the offending message, keeping the channel up [C-M9].
+                    const int MaxWsMessageBytes = 2 * 1024 * 1024;
                     var buf = new byte[16 * 1024];
                     while (ws.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
                     {
                         using var ms = new MemoryStream();
                         WebSocketReceiveResult? result = null;
+                        var oversize = false;
                         do
                         {
                             result = await ws.ReceiveAsync(buf, stoppingToken);
                             if (result.MessageType == WebSocketMessageType.Close) break;
-                            if (result.Count > 0) ms.Write(buf, 0, result.Count);
-                            if (ms.Length > 64 * 1024) break;
+                            if (result.Count > 0)
+                            {
+                                if (ms.Length + result.Count > MaxWsMessageBytes) oversize = true;
+                                else ms.Write(buf, 0, result.Count);
+                            }
                         } while (!result.EndOfMessage);
 
                         if (result == null || result.MessageType == WebSocketMessageType.Close) break;
+                        if (oversize)
+                        {
+                            _logger.LogWarning("Discarded oversized WS message (> {Max} bytes)", MaxWsMessageBytes);
+                            continue;
+                        }
                         if (result.MessageType != WebSocketMessageType.Text) continue;
-                        if (ms.Length > 64 * 1024) break;
 
                         var msg = Encoding.UTF8.GetString(ms.ToArray());
                         Command? cmd = null;
@@ -97,24 +110,28 @@ public class CommandChannelWorker : BackgroundService
         }
     }
 
-    public static string BuildWsUrl(string serverUrl, string clientId)
+    public static string BuildWsUrl(string serverUrl, string clientId, string encryptionKey)
     {
         var uri = new Uri(serverUrl);
-        var scheme = uri.Scheme == "https" ? "wss" : "ws";
+        if (uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Command channel requires an HTTPS server URL.");
+        const string scheme = "wss";
         var host = uri.Host;
-        var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
-        return $"{scheme}://{host}:{port}/ws?clientId={Uri.EscapeDataString(clientId)}";
+        var port = uri.IsDefaultPort ? 443 : uri.Port;
+        return $"{scheme}://{host}:{port}/ws?{WebSocketAuth.CreateQuery(clientId, encryptionKey)}";
     }
 
     private async Task<(ClientWebSocket ws, Uri connectedUri)> ConnectAsync(CancellationToken ct)
     {
-        foreach (var candidate in BuildWsCandidates(_settings.ServerUrl, _settings.ClientId))
+        foreach (var candidate in BuildWsCandidates(_settings.ServerUrl, _settings.ClientId, _settings.EncryptionKey))
         {
             var ws = new ClientWebSocket();
             ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
             try
             {
-                _logger.LogInformation("Connecting to command channel: {Url}", candidate);
+                _logger.LogInformation(
+                    "Connecting to command channel: {Endpoint}",
+                    candidate.GetLeftPart(UriPartial.Path));
                 await ws.ConnectAsync(candidate, ct);
                 if (ws.State == WebSocketState.Open)
                 {
@@ -130,32 +147,24 @@ public class CommandChannelWorker : BackgroundService
         throw new Exception("Command channel connection failed (no candidates succeeded)");
     }
 
-    private static IEnumerable<Uri> BuildWsCandidates(string serverUrl, string clientId)
+    private static IEnumerable<Uri> BuildWsCandidates(string serverUrl, string clientId, string encryptionKey)
     {
-        var escapedId = Uri.EscapeDataString(clientId ?? string.Empty);
+        var query = WebSocketAuth.CreateQuery(clientId ?? string.Empty, encryptionKey);
 
         if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
         {
+            if (uri.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("Command channel requires an HTTPS server URL (WSS transport).");
             var scheme = uri.Scheme == "https" ? "wss" : "ws";
             var host = uri.Host;
             var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
-            yield return new Uri($"{scheme}://{host}:{port}/ws?clientId={escapedId}");
+            yield return new Uri($"{scheme}://{host}:{port}/ws?{query}");
 
             if (uri.IsDefaultPort)
             {
-                yield return new Uri($"{scheme}://{host}:8080/ws?clientId={escapedId}");
+                yield return new Uri($"{scheme}://{host}:8080/ws?{query}");
             }
         }
-        else
-        {
-            var raw = serverUrl?.Trim() ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(raw))
-            {
-                yield return new Uri($"ws://{raw}:8080/ws?clientId={escapedId}");
-            }
-        }
-
-        yield return new Uri($"ws://localhost:8080/ws?clientId={escapedId}");
-        yield return new Uri($"ws://127.0.0.1:8080/ws?clientId={escapedId}");
+        else throw new InvalidOperationException("Command channel server URL is invalid.");
     }
 }

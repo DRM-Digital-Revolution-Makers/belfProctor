@@ -10,6 +10,9 @@ import {
 } from "../store";
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
+import { requireAuth } from "../middleware/auth";
+import { config } from "../config";
 
 const router = Router();
 
@@ -52,12 +55,6 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       console.error(
         `[Activity] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -65,10 +62,12 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(json);
-    const now = new Date();
-    const sampleTs =
-      parseClientActivityTimestamp(payload.Timestamp || payload.timestamp) ||
-      now;
+    const now = authoritativeNow();
+    // Authoritative external time replaces any wildly off client timestamp.
+    const rawClientTs = parseClientActivityTimestamp(
+      payload.Timestamp || payload.timestamp,
+    );
+    const sampleTs = reconcileTime(rawClientTs);
     const activeMs = parseInt(
       String(payload.ActiveMilliseconds ?? payload.activeMilliseconds ?? 0),
       10,
@@ -95,7 +94,7 @@ router.post("/", async (req, res) => {
       inactiveMilliseconds: Number.isFinite(inactiveMs) ? inactiveMs : 0,
     });
     const ms = Date.now() - t0;
-    if (ms > 100 && process.env.NODE_ENV === "production") {
+    if (ms > 100 && config.isProduction) {
       console.warn(`[Activity] Slow request ${clientId}: ${ms}ms`);
     }
     return res.json({ id: "file-saved" });
@@ -105,12 +104,12 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const data = await getLatestActivity(100);
   return res.json({ data, total: data.length });
 });
 
-router.get("/latest", async (req, res) => {
+router.get("/latest", requireAuth, async (req, res) => {
   const q: any = (req as any).query || {};
   const global = String(q.global || "") === "1";
 

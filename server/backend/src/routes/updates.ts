@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import crypto from "crypto";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth } from "../middleware/auth";
 import { getClient, getClients } from "../store";
 import { resolveUploadDir } from "../runtimePaths";
 import {
@@ -12,6 +12,9 @@ import {
   requestClientUpdate,
   listPendingUpdates,
 } from "../wsHub";
+import { prisma } from "../prisma";
+import { config } from "../config";
+import { verifyAgentUpdateDownloadSignature } from "../wsAuth";
 
 const router = Router();
 
@@ -19,11 +22,6 @@ const UPLOAD_DIR = resolveUploadDir();
 const UPDATES_ROOT = path.join(UPLOAD_DIR, "updates");
 const INDEX_FILE = path.join(UPDATES_ROOT, "index.json");
 const DEPLOYMENTS_FILE = path.join(UPDATES_ROOT, "deployments.json");
-
-const MAX_UPDATE_SIZE = parseInt(
-  process.env.MAX_UPDATE_BYTES || String(500 * 1024 * 1024), // 500 MB cap
-  10,
-);
 
 // Multer: stream upload to temp, then move into versioned dir.
 const tempStorage = multer.diskStorage({
@@ -33,12 +31,13 @@ const tempStorage = multer.diskStorage({
     cb(null, tmp);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}_${file.originalname}`);
+    // Never place a client-supplied originalname into a filesystem path.
+    cb(null, `${Date.now()}_${crypto.randomUUID()}.upload`);
   },
 });
 const upload = multer({
   storage: tempStorage,
-  limits: { fileSize: MAX_UPDATE_SIZE },
+  limits: { fileSize: config.uploadLimits.updateBytes },
 });
 
 interface UpdateMeta {
@@ -59,6 +58,43 @@ interface DeploymentRecord {
   lastStatus?: string;
   lastStatusAt?: string;
   lastDetail?: string;
+}
+
+function toDeploymentStatus(status: string):
+  | "queued"
+  | "sent"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "restarted"
+  | "confirmed"
+  | "rolled_back"
+  | "failed"
+  | "already_up_to_date" {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("already")) return "already_up_to_date";
+  if (normalized.includes("queued")) return "queued";
+  if (normalized.includes("sent")) return "sent";
+  if (normalized.includes("download")) return "downloading";
+  if (normalized.includes("verify")) return "verifying";
+  if (normalized.includes("install")) return "installing";
+  if (normalized.includes("restart")) return "restarted";
+  if (normalized.includes("confirm") || normalized === "ok" || normalized === "success") {
+    return "confirmed";
+  }
+  if (normalized.includes("rollback") || normalized.includes("rolled")) return "rolled_back";
+  if (normalized.includes("sha") || normalized.includes("mismatch")) return "failed";
+  if (normalized.includes("fail") || normalized.includes("error")) return "failed";
+  return "sent";
+}
+
+async function ensurePrismaClient(clientId: string): Promise<void> {
+  const existing = await getClient(clientId);
+  await prisma.client.upsert({
+    where: { id: clientId },
+    update: existing?.encryptionKey ? { encryptionKey: existing.encryptionKey } : {},
+    create: { id: clientId, encryptionKey: existing?.encryptionKey || "" },
+  });
 }
 
 async function ensureRoot(): Promise<void> {
@@ -118,6 +154,15 @@ export async function appendDeploymentStatus(
   items[idx].lastStatusAt = new Date().toISOString();
   if (detail !== undefined) items[idx].lastDetail = detail;
   await writeDeployments(items);
+  await prisma.updateDeployment
+    .update({
+      where: { id: commandId },
+      data: {
+        status: toDeploymentStatus(status),
+        detail: detail !== undefined ? detail : status,
+      },
+    })
+    .catch(() => null);
 }
 
 function isValidVersion(v: string): boolean {
@@ -144,7 +189,7 @@ function streamSha256(filePath: string): Promise<{ sha: string; size: number }> 
 // multipart: file=<BelfProctor.exe>, version=1.0.1, notes=optional
 router.post(
   "/",
-  requireAuth,
+  requireAdmin,
   upload.single("file"),
   async (req, res) => {
     const tempPath = req.file?.path;
@@ -194,6 +239,29 @@ router.post(
       // Sort: newest version semantically last? Simpler — by uploadedAt desc.
       next.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
       await writeIndex(next);
+      try {
+        await prisma.agentVersion.upsert({
+          where: { version },
+          update: {
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+          create: {
+            version,
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+        });
+      } catch (prismaErr) {
+        console.warn(
+          "[updates] prisma agentVersion mirror failed (file record kept):",
+          (prismaErr as Error)?.message || prismaErr,
+        );
+      }
 
       return res.json({ ok: true, update: meta });
     } catch (e) {
@@ -211,7 +279,7 @@ router.get("/", requireAuth, async (_req, res) => {
 });
 
 // DELETE /api/updates/:version  (admin)
-router.delete("/:version", requireAuth, async (req, res) => {
+router.delete("/:version", requireAdmin, async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
     return res.status(400).json({ message: "invalid version" });
@@ -227,6 +295,7 @@ router.delete("/:version", requireAuth, async (req, res) => {
   }
   const idx = await readIndex();
   await writeIndex(idx.filter((m) => m.version !== version));
+  await prisma.agentVersion.delete({ where: { version } }).catch(() => null);
   return res.json({ ok: true });
 });
 
@@ -239,7 +308,7 @@ router.get("/deployments", requireAuth, async (_req, res) => {
 
 // POST /api/updates/:version/deploy  (admin)
 // body: { clientIds: string[] | "all" }
-router.post("/:version/deploy", requireAuth, async (req, res) => {
+router.post("/:version/deploy", requireAdmin, async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
     return res.status(400).json({ message: "invalid version" });
@@ -272,6 +341,25 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
     sha256: meta.sha256,
   };
 
+  await prisma.agentVersion
+    .upsert({
+      where: { version: meta.version },
+      update: {
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+      create: {
+        version: meta.version,
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+    })
+    .catch(() => null);
+
   const deployments = await readDeployments();
   const results: Array<{
     clientId: string;
@@ -296,6 +384,8 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
         commandId: r.commandId,
       });
       if (r.commandId) {
+        // Persist file-based record FIRST — it's the source of truth for the UI.
+        // Prisma mirror is best-effort; never let it block the file write.
         deployments.push({
           id: r.commandId,
           version: meta.version,
@@ -305,6 +395,24 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
           lastStatus: r.sent ? "sent" : "queued_offline",
           lastStatusAt: new Date().toISOString(),
         });
+        try {
+          await ensurePrismaClient(clientId);
+          await prisma.updateDeployment
+            .create({
+              data: {
+                id: r.commandId,
+                version: meta.version,
+                clientId,
+                status: r.sent ? "sent" : "queued",
+              },
+            })
+            .catch(() => null);
+        } catch (prismaErr) {
+          console.warn(
+            "[updates] prisma mirror failed (file record kept):",
+            (prismaErr as Error)?.message || prismaErr,
+          );
+        }
       }
     } catch (e) {
       console.error("[updates] deploy failed for", clientId, e);
@@ -320,7 +428,8 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
 });
 
 // GET /api/updates/:version/file  (client)
-// Auth: X-Client-Id header → must be a known client.
+// Auth: a known client plus a fresh, version-bound device HMAC. The nonce is
+// consumed once, preventing replay even inside the timestamp tolerance window.
 router.get("/:version/file", async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
@@ -331,8 +440,19 @@ router.get("/:version/file", async (req, res) => {
     return res.status(401).json({ message: "client id required" });
   }
   const client = await getClient(clientId);
-  if (!client) {
+  if (!client?.encryptionKey) {
     return res.status(403).json({ message: "unknown client" });
+  }
+  const authenticated = verifyAgentUpdateDownloadSignature({
+    clientId,
+    version,
+    timestamp: String(req.headers["x-client-timestamp"] || ""),
+    nonce: String(req.headers["x-client-nonce"] || ""),
+    signature: String(req.headers["x-client-signature"] || ""),
+    secrets: [client.encryptionKey],
+  });
+  if (!authenticated) {
+    return res.status(401).json({ message: "invalid client signature" });
   }
   const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
   if (!fs.existsSync(exePath)) {

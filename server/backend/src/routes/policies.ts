@@ -2,7 +2,6 @@ import { Router } from "express";
 import { encryptAes256CbcPrefixedIv } from "../encryption";
 import { requireAuth } from "../middleware/auth";
 import { getClient, getPolicies } from "../store";
-import { getPrimaryEncryptionKey } from "../keyring";
 
 const router = Router();
 
@@ -22,11 +21,9 @@ router.get("/:id", async (req, res) => {
   let policy = null;
 
   const client = await getClient(clientId);
-  // Use client key if available, otherwise fallback to global key (common in NO_DB setups)
+  // Policies are device-confidential and must use the provisioned device key.
   if (client && client.encryptionKey) {
     encryptionKey = client.encryptionKey;
-  } else {
-    encryptionKey = getPrimaryEncryptionKey();
   }
 
   const policies = await getPolicies();

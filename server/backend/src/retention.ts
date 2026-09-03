@@ -1,357 +1,294 @@
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
-import readline from "readline";
-import { withLock } from "./locks";
-import { resolveUploadDir } from "./runtimePaths";
+import { SystemEventType } from "@prisma/client";
+import { prisma } from "./prisma";
+import { config } from "./config";
 
-const DATA_DIR = resolveUploadDir();
+/**
+ * Data retention sweep. Each concern is isolated in its own try/catch so a
+ * single failure (e.g. a locked file) does not abort the whole sweep — the
+ * remaining tables/files are still cleaned and every error is logged.
+ *
+ * File-backed data (screenshots, reports) is deleted in batches so the file
+ * unlinks and the row deletes stay in lock-step; pure-DB tables use a single
+ * deleteMany (atomic in Postgres).
+ */
 
-function daysToMs(days: number): number {
-  return Math.max(0, days) * 24 * 60 * 60 * 1000;
+function cutoffDate(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
-function parseDays(envName: string, fallback: number): number {
-  const v = Number.parseInt(String(process.env[envName] || ""), 10);
-  if (!Number.isFinite(v) || v <= 0) return fallback;
-  return v;
+const FILE_DELETE_BATCH = 500;
+
+export interface RetentionSummary {
+  screenshotsDeleted: number;
+  reportsDeleted: number;
+  activityRemoved: number;
+  eventsRemoved: number;
+  appUsageEventsRemoved: number;
+  appUsageRowsRemoved: number;
+  heartbeatsRemoved: number;
+  commandResultsRemoved: number;
+  browserActivityRemoved: number;
+  workSessionsRemoved: number;
+  workSessionEventsRemoved: number;
+  pcSessionsRemoved: number;
+  timesheetDaysRemoved: number;
+  agentVersionsRemoved: number;
+  logFilesRemoved: number;
+  errors: string[];
 }
 
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
+async function deleteOldScreenshots(cutoff: Date): Promise<number> {
+  let total = 0;
+  // Loop in batches: fetch rows, unlink their files, delete the rows.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const batch = await prisma.screenshot.findMany({
+      where: { timestamp: { lt: cutoff } },
+      select: { id: true, path: true },
+      take: FILE_DELETE_BATCH,
+    });
+    if (batch.length === 0) break;
 
-async function ensureDir(p: string): Promise<void> {
-  await fsPromises.mkdir(p, { recursive: true });
-}
-
-async function atomicReplaceFile(
-  tmpPath: string,
-  targetPath: string,
-): Promise<void> {
-  try {
-    await fsPromises.rename(tmpPath, targetPath);
-  } catch {
-    try {
-      await fsPromises.unlink(targetPath);
-    } catch {}
-    await fsPromises.rename(tmpPath, targetPath);
+    for (const row of batch) {
+      if (row.path) await fsPromises.unlink(row.path).catch(() => undefined);
+    }
+    const result = await prisma.screenshot.deleteMany({
+      where: { id: { in: batch.map((r) => r.id) } },
+    });
+    total += result.count;
+    if (batch.length < FILE_DELETE_BATCH) break;
   }
+  return total;
 }
 
-function tryParseEventTimestamp(obj: any): Date | null {
-  const raw = obj?.timestamp || obj?.Timestamp || obj?.time || obj?.Time;
-  if (!raw) return null;
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? null : d;
+async function deleteOldReports(cutoff: Date): Promise<number> {
+  let total = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const batch = await prisma.report.findMany({
+      where: { timestamp: { lt: cutoff } },
+      select: { id: true, path: true },
+      take: FILE_DELETE_BATCH,
+    });
+    if (batch.length === 0) break;
+
+    for (const row of batch) {
+      if (row.path) await fsPromises.unlink(row.path).catch(() => undefined);
+    }
+    const result = await prisma.report.deleteMany({
+      where: { id: { in: batch.map((r) => r.id) } },
+    });
+    total += result.count;
+    if (batch.length < FILE_DELETE_BATCH) break;
+  }
+  return total;
 }
 
-async function pruneJsonlFile(
-  filePath: string,
-  keepLine: (obj: any) => boolean,
-): Promise<{ kept: number; removed: number }> {
-  if (!fs.existsSync(filePath)) return { kept: 0, removed: 0 };
-  const dir = path.dirname(filePath);
-  const tmpPath = path.join(
-    dir,
-    `${path.basename(filePath)}.tmp_${process.pid}_${Date.now()}_${Math.random()
-      .toString(16)
-      .slice(2)}`,
-  );
-
-  let kept = 0;
+/** Recursively delete files older than `cutoff` under `dir`. Returns count. */
+export async function deleteOldFilesRecursive(
+  dir: string,
+  cutoff: Date,
+): Promise<number> {
+  if (!fs.existsSync(dir)) return 0;
   let removed = 0;
-
-  await ensureDir(dir);
-  const input = fs.createReadStream(filePath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input, crlfDelay: Infinity });
-  const out = fs.createWriteStream(tmpPath, { encoding: "utf8" });
-
-  await new Promise<void>((resolve, reject) => {
-    rl.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
+  const entries = await fsPromises.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      removed += await deleteOldFilesRecursive(full, cutoff);
+    } else if (entry.isFile()) {
       try {
-        const obj = JSON.parse(trimmed);
-        if (keepLine(obj)) {
-          out.write(trimmed + "\n");
-          kept++;
-        } else {
+        const stat = await fsPromises.stat(full);
+        if (stat.mtime < cutoff) {
+          await fsPromises.unlink(full);
           removed++;
         }
       } catch {
-        removed++;
+        // File vanished or is locked — skip it, try again next sweep.
       }
-    });
-    rl.on("close", resolve);
-    rl.on("error", reject);
-    input.on("error", reject);
+    }
+  }
+  return removed;
+}
+
+/** Keep the newest N agent versions; delete older rows and their binaries. */
+async function pruneAgentVersions(keep: number): Promise<number> {
+  const versions = await prisma.agentVersion.findMany({
+    orderBy: { uploadedAt: "desc" },
+    select: { version: true },
   });
+  if (versions.length <= keep) return 0;
 
-  await new Promise<void>((resolve) => out.end(resolve));
-
-  if (kept === 0) {
-    try {
-      await fsPromises.unlink(filePath);
-    } catch {}
-    try {
-      await fsPromises.unlink(tmpPath);
-    } catch {}
-    return { kept: 0, removed };
+  const toDelete = versions.slice(keep).map((v) => v.version);
+  const updatesDir = path.join(config.uploadDir, "updates");
+  for (const version of toDelete) {
+    const dir = path.join(updatesDir, version);
+    await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  await atomicReplaceFile(tmpPath, filePath);
-  return { kept, removed };
-}
-
-async function cleanupScreenshots(cutoffMs: number): Promise<number> {
-  const root = path.join(DATA_DIR, "screenshots");
-  if (!fs.existsSync(root)) return 0;
-  let deleted = 0;
-  const clientDirs = await fsPromises.readdir(root);
-  for (const clientId of clientDirs) {
-    const dir = path.join(root, clientId);
-    let st: fs.Stats;
-    try {
-      st = await fsPromises.stat(dir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-
-    let files: string[] = [];
-    try {
-      files = await fsPromises.readdir(dir);
-    } catch {
-      continue;
-    }
-
-    for (const f of files) {
-      if (!f.endsWith(".jpg") && !f.endsWith(".png")) continue;
-      const fp = path.join(dir, f);
-      let ts: Date | null = null;
-      const match = f.match(/_(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
-      if (match) {
-        const datePart = match[1].substring(0, 10);
-        const timePart = match[1].substring(11).replace(/-/g, ":");
-        const d = new Date(`${datePart}T${timePart}`);
-        if (!isNaN(d.getTime())) ts = d;
-      }
-      if (!ts) {
-        try {
-          const st2 = await fsPromises.stat(fp);
-          ts = st2.mtime;
-        } catch {
-          ts = null;
-        }
-      }
-      if (!ts) continue;
-      if (ts.getTime() < cutoffMs) {
-        try {
-          await fsPromises.unlink(fp);
-          deleted++;
-        } catch {}
-      }
-    }
-  }
-  return deleted;
-}
-
-function tryParseTrailingEpochMs(filename: string): number | null {
-  const name = String(filename || "");
-  const m1 = name.match(/_(\d+)\.json$/);
-  if (m1) {
-    const n = Number.parseInt(m1[1], 10);
-    return Number.isFinite(n) ? n : null;
-  }
-  const m2 = name.match(/_(\d+)$/);
-  if (m2) {
-    const n = Number.parseInt(m2[1], 10);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-async function cleanupCommands(cutoffMs: number): Promise<number> {
-  const root = path.join(DATA_DIR, "commands");
-  if (!fs.existsSync(root)) return 0;
-  let deleted = 0;
-  const clientDirs = await fsPromises.readdir(root);
-  for (const clientId of clientDirs) {
-    const dir = path.join(root, clientId);
-    let st: fs.Stats;
-    try {
-      st = await fsPromises.stat(dir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-
-    let files: string[] = [];
-    try {
-      files = await fsPromises.readdir(dir);
-    } catch {
-      continue;
-    }
-
-    for (const f of files) {
-      const fp = path.join(dir, f);
-      const tsFromName = tryParseTrailingEpochMs(f);
-      let mtimeMs = 0;
-      try {
-        const st2 = await fsPromises.stat(fp);
-        mtimeMs = st2.mtimeMs;
-      } catch {
-        continue;
-      }
-      const ts = tsFromName ?? mtimeMs;
-      if (ts < cutoffMs) {
-        await withLock(`file:${fp}`, async () => {
-          try {
-            await fsPromises.unlink(fp);
-            deleted++;
-          } catch {}
-        });
-      }
-    }
-
-    try {
-      const remaining = await fsPromises.readdir(dir);
-      if (remaining.length === 0) {
-        await fsPromises.rmdir(dir);
-      }
-    } catch {}
-  }
-  return deleted;
-}
-
-async function cleanupCommandIndex(cutoffMs: number): Promise<number> {
-  const dir = path.join(DATA_DIR, "command_index");
-  if (!fs.existsSync(dir)) return 0;
-  let deleted = 0;
-  let files: string[] = [];
-  try {
-    files = await fsPromises.readdir(dir);
-  } catch {
-    return 0;
-  }
-  for (const f of files) {
-    if (!f.endsWith(".json")) continue;
-    const fp = path.join(dir, f);
-    await withLock(`file:${fp}`, async () => {
-      try {
-        const st = await fsPromises.stat(fp);
-        const raw = await fsPromises.readFile(fp, "utf-8");
-        const obj = JSON.parse(raw);
-        const latestPath = String(obj?.latestPath || "").trim();
-        const updatedAt = new Date(String(obj?.updatedAt || "")).getTime();
-        const indexTs =
-          Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : st.mtimeMs;
-
-        let latestOk = false;
-        let latestTs = 0;
-        if (latestPath && fs.existsSync(latestPath)) {
-          try {
-            const st2 = await fsPromises.stat(latestPath);
-            latestOk = true;
-            latestTs = st2.mtimeMs;
-          } catch {
-            latestOk = false;
-          }
-        }
-
-        if (!latestOk || Math.max(indexTs, latestTs) < cutoffMs) {
-          await fsPromises.unlink(fp);
-          deleted++;
-        }
-      } catch {
-        try {
-          await fsPromises.unlink(fp);
-          deleted++;
-        } catch {}
-      }
-    });
-  }
-  return deleted;
-}
-
-export async function runRetentionOnce(): Promise<{
-  screenshotsDeleted: number;
-  activityRemoved: number;
-  eventsRemoved: number;
-  heartbeatsRemoved: number;
-}> {
-  const screenshotsDays = parseDays("RETENTION_SCREENSHOTS_DAYS", 30);
-  const appHistoryDays = parseDays("RETENTION_APP_HISTORY_DAYS", 30);
-  const activityDays = parseDays("RETENTION_ACTIVITY_DAYS", 30);
-  const heartbeatDays = parseDays("RETENTION_HEARTBEAT_DAYS", 2);
-  const commandsDays = parseDays("RETENTION_COMMANDS_DAYS", 7);
-
-  const now = Date.now();
-  const screenshotsCutoff = now - daysToMs(screenshotsDays);
-  const appCutoff = now - daysToMs(appHistoryDays);
-  const activityCutoff = now - daysToMs(activityDays);
-  const heartbeatCutoff = now - daysToMs(heartbeatDays);
-  const commandsCutoff = now - daysToMs(commandsDays);
-
-  const screenshotsDeleted = await cleanupScreenshots(screenshotsCutoff);
-  await cleanupCommands(commandsCutoff);
-  await cleanupCommandIndex(commandsCutoff);
-
-  const activityDir = path.join(DATA_DIR, "activity");
-  let activityRemoved = 0;
-  if (fs.existsSync(activityDir)) {
-    const files = await fsPromises.readdir(activityDir);
-    for (const f of files) {
-      if (!f.endsWith(".jsonl")) continue;
-      const fp = path.join(activityDir, f);
-      let res = { kept: 0, removed: 0 };
-      await withLock(`file:${fp}`, async () => {
-        res = await pruneJsonlFile(fp, (obj) => {
-          const ts = tryParseEventTimestamp(obj);
-          if (!ts) return false;
-          return ts.getTime() >= activityCutoff;
-        });
-      });
-      activityRemoved += res.removed;
-    }
-  }
-
-  const eventsDir = path.join(DATA_DIR, "events");
-  let eventsRemoved = 0;
-  if (fs.existsSync(eventsDir)) {
-    const files = await fsPromises.readdir(eventsDir);
-    for (const f of files) {
-      if (!f.endsWith(".jsonl")) continue;
-      const fp = path.join(eventsDir, f);
-      let res = { kept: 0, removed: 0 };
-      await withLock(`file:${fp}`, async () => {
-        res = await pruneJsonlFile(fp, (obj) => {
-          const ts = tryParseEventTimestamp(obj);
-          if (!ts) return false;
-          const type = String(obj?.eventType || obj?.EventType || "");
-          if (type !== "AppUsage") return false;
-          return ts.getTime() >= appCutoff;
-        });
-      });
-      eventsRemoved += res.removed;
-    }
-  }
-
-  const hbFile = path.join(DATA_DIR, "heartbeats.jsonl");
-  let hbRes = { kept: 0, removed: 0 };
-  await withLock(`file:${hbFile}`, async () => {
-    hbRes = await pruneJsonlFile(hbFile, (obj) => {
-      const ts = tryParseEventTimestamp(obj);
-      if (!ts) return false;
-      return ts.getTime() >= heartbeatCutoff;
-    });
+  // Cascade removes the related UpdateDeployment rows (schema onDelete: Cascade).
+  const result = await prisma.agentVersion.deleteMany({
+    where: { version: { in: toDelete } },
   });
+  return result.count;
+}
 
-  return {
-    screenshotsDeleted,
-    activityRemoved,
-    eventsRemoved,
-    heartbeatsRemoved: hbRes.removed,
+export async function runRetentionOnce(): Promise<RetentionSummary> {
+  const r = config.retention;
+  const summary: RetentionSummary = {
+    screenshotsDeleted: 0,
+    reportsDeleted: 0,
+    activityRemoved: 0,
+    eventsRemoved: 0,
+    appUsageEventsRemoved: 0,
+    appUsageRowsRemoved: 0,
+    heartbeatsRemoved: 0,
+    commandResultsRemoved: 0,
+    browserActivityRemoved: 0,
+    workSessionsRemoved: 0,
+    workSessionEventsRemoved: 0,
+    pcSessionsRemoved: 0,
+    timesheetDaysRemoved: 0,
+    agentVersionsRemoved: 0,
+    logFilesRemoved: 0,
+    errors: [],
   };
+
+  // Run each concern independently; record but never propagate failures so one
+  // bad section cannot block the rest of the sweep.
+  const run = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (e) {
+      const msg = `${label}: ${e instanceof Error ? e.message : String(e)}`;
+      summary.errors.push(msg);
+      console.error(`[Retention] ${msg}`);
+    }
+  };
+
+  await run("screenshots", async () => {
+    summary.screenshotsDeleted = await deleteOldScreenshots(
+      cutoffDate(r.screenshotsDays),
+    );
+  });
+
+  await run("reports", async () => {
+    summary.reportsDeleted = await deleteOldReports(cutoffDate(r.reportsDays));
+  });
+
+  await run("activity", async () => {
+    summary.activityRemoved = (
+      await prisma.activity.deleteMany({
+        where: { timestamp: { lt: cutoffDate(r.activityDays) } },
+      })
+    ).count;
+  });
+
+  await run("events", async () => {
+    // Non-AppUsage events expire on the general events schedule...
+    summary.eventsRemoved = (
+      await prisma.event.deleteMany({
+        where: {
+          eventType: { not: SystemEventType.AppUsage },
+          timestamp: { lt: cutoffDate(r.eventsDays) },
+        },
+      })
+    ).count;
+    // ...AppUsage-typed events on the app-history schedule (kept separate so the
+    // two can be tuned independently).
+    summary.appUsageEventsRemoved = (
+      await prisma.event.deleteMany({
+        where: {
+          eventType: SystemEventType.AppUsage,
+          timestamp: { lt: cutoffDate(r.appHistoryDays) },
+        },
+      })
+    ).count;
+  });
+
+  await run("appUsage", async () => {
+    summary.appUsageRowsRemoved = (
+      await prisma.appUsage.deleteMany({
+        where: { lastSeen: { lt: cutoffDate(r.appHistoryDays) } },
+      })
+    ).count;
+  });
+
+  await run("heartbeats", async () => {
+    summary.heartbeatsRemoved = (
+      await prisma.heartbeat.deleteMany({
+        where: { timestamp: { lt: cutoffDate(r.heartbeatDays) } },
+      })
+    ).count;
+  });
+
+  await run("commandResults", async () => {
+    summary.commandResultsRemoved = (
+      await prisma.commandResult.deleteMany({
+        where: { receivedAt: { lt: cutoffDate(r.commandsDays) } },
+      })
+    ).count;
+  });
+
+  await run("browserActivity", async () => {
+    summary.browserActivityRemoved = (
+      await prisma.browserActivity.deleteMany({
+        where: { visitedAt: { lt: cutoffDate(r.browserDays) } },
+      })
+    ).count;
+  });
+
+  await run("workSessionEvents", async () => {
+    summary.workSessionEventsRemoved = (
+      await prisma.workSessionEvent.deleteMany({
+        where: { timestampUtc: { lt: cutoffDate(r.workSessionsDays) } },
+      })
+    ).count;
+  });
+
+  await run("workSessions", async () => {
+    summary.workSessionsRemoved = (
+      await prisma.workSession.deleteMany({
+        where: { startedAt: { lt: cutoffDate(r.workSessionsDays) } },
+      })
+    ).count;
+  });
+
+  await run("pcSessions", async () => {
+    summary.pcSessionsRemoved = (
+      await prisma.pcSession.deleteMany({
+        where: { bootAt: { lt: cutoffDate(r.pcSessionsDays) } },
+      })
+    ).count;
+  });
+
+  await run("timesheetDays", async () => {
+    summary.timesheetDaysRemoved = (
+      await prisma.timesheetDay.deleteMany({
+        where: { date: { lt: cutoffDate(r.timesheetDays) } },
+      })
+    ).count;
+  });
+
+  await run("agentVersions", async () => {
+    summary.agentVersionsRemoved = await pruneAgentVersions(r.agentVersionsKeep);
+  });
+
+  await run("logFiles", async () => {
+    const logsRoot = path.join(config.uploadDir, "logs");
+    let removed = 0;
+    removed += await deleteOldFilesRecursive(
+      path.join(logsRoot, "server"),
+      cutoffDate(r.serverLogsDays),
+    );
+    removed += await deleteOldFilesRecursive(
+      path.join(logsRoot, "clients"),
+      cutoffDate(r.clientLogsDays),
+    );
+    summary.logFilesRemoved = removed;
+  });
+
+  return summary;
 }

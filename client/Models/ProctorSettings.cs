@@ -10,6 +10,8 @@ public class ProctorSettings
     public string ServerUrl { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
     public string EncryptionKey { get; set; } = string.Empty;
+    public bool AllowInsecureDevelopmentTransport { get; set; } = false;
+    public string TrustedUpdateSignerThumbprint { get; set; } = string.Empty;
     public bool MonitorUSB { get; set; } = true;
     public bool MonitorProcesses { get; set; } = true;
     public bool MonitorNetwork { get; set; } = true;
@@ -22,7 +24,9 @@ public class ProctorSettings
     public int HeartbeatIntervalMs { get; set; } = 60000; // мс
     public int PolicyUpdateIntervalMs { get; set; } = 300000; // мс
     public int DirectoryListingIntervalMs { get; set; } = 600000; // мс
+    public int MaxStartupJitterMs { get; set; } = 30000; // мс, разброс старта таймеров чтобы 60 ПК не синхронизировались (0 = немедленно)
     public int InactivityThresholdMinutes { get; set; } = 3; // минуты, через сколько считать пользователя неактивным
     public List<string> DirectoryRoots { get; set; } = new();
     public string AdminPasswordHash { get; set; } = string.Empty;
+    public FeatureSettings Features { get; set; } = new();
 }

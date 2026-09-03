@@ -8,7 +8,9 @@ import {
 } from "antd";
 import { Icon } from "@iconify/react";
 import { authFetch } from "../dataProvider.js";
+import { formatTashkent } from "../utils/time";
 import dayjs from "dayjs";
+import MonthlyScreenshotsPdf from "../components/MonthlyScreenshotsPdf";
 import "dayjs/locale/ru";
 import "dayjs/locale/uz-latn";
 import { useTranslation } from "react-i18next";
@@ -84,7 +86,7 @@ export default function Timesheet() {
   dayjs.locale(i18n.language === "uz" ? "uz-latn" : i18n.language);
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [date, setDate] = React.useState(dayjs());
   const [data, setData] = React.useState([]);
@@ -175,12 +177,10 @@ export default function Timesheet() {
 
   const formatTime = (isoString) => {
     if (!isoString) return "-";
-    const stringValue = String(isoString).trim();
-    const match = stringValue.match(/T(\d{2}):(\d{2})/);
-    if (match) return `${match[1]}:${match[2]}`;
-    const parsedDate = new Date(isoString);
-    if (Number.isNaN(parsedDate.getTime())) return "-";
-    return dayjs(parsedDate).format("HH:mm");
+    // Use the shared Asia/Tashkent formatter so timesheet times match the rest
+    // of the panel instead of showing the raw UTC clock from the ISO string.
+    const formatted = formatTashkent(isoString, "HH:mm");
+    return formatted === "—" ? "-" : formatted;
   };
 
   const formatDuration = (ms) => {
@@ -763,6 +763,7 @@ export default function Timesheet() {
 
   return (
     <div>
+      <MonthlyScreenshotsPdf clients={clientsList} />
       {/* Outer wrapper */}
       <div
         style={{

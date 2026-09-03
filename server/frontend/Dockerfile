@@ -1,22 +1,22 @@
-# Frontend multi-stage: build with Node, serve with Nginx
-FROM node:18-alpine AS builder
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Install deps
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-RUN if [ -f package-lock.json ]; then npm ci; \
-    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
-    elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm && pnpm i --frozen-lockfile; \
-    else npm i; fi
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=${VITE_API_URL}
 
-# Copy sources and build
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci
+
 COPY . .
 RUN npm run build
 
-# Runtime image
+FROM builder AS test
+RUN npm run lint && npm test
+
 FROM nginx:alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
-# Provide default server configuration
-RUN printf "server {\n  listen 80;\n  server_name localhost;\n  root /usr/share/nginx/html;\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n" > /etc/nginx/conf.d/default.conf
-EXPOSE 80
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80 443
 CMD ["nginx", "-g", "daemon off;"]

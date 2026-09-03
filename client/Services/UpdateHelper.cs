@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -11,18 +10,6 @@ using Microsoft.Extensions.Logging;
 
 namespace BelfProctor.Services;
 
-/// <summary>
-/// Silent background self-update helper.
-/// Downloads new exe with low priority, verifies SHA-256, waits for user
-/// to be idle, then spawns a detached hidden PowerShell script that does
-/// Stop-Service → replace .exe → Start-Service with rollback on failure.
-///
-/// Resource budget per spec:
-///   CPU < 5% avg (BelowNormal/Idle priority)
-///   RAM < 30 MB (streamed download, streamed SHA)
-///   Network ~1.3 MB/s (64KB chunks with 50ms delay)
-///   UI: zero windows, zero notifications
-/// </summary>
 public static class UpdateHelper
 {
     private const string ServiceName = "BelfProctor";
@@ -32,16 +19,6 @@ public static class UpdateHelper
     private const int ChunkSize = 64 * 1024;
     private const int InterChunkDelayMs = 50;
 
-    private static readonly string TempRoot =
-        Path.Combine(Path.GetTempPath(), "BelfProctor", "update");
-    private static readonly string LockFile = Path.Combine(TempRoot, "update.lock");
-
-    /// <summary>
-    /// Download a new client exe and schedule a silent self-replace.
-    /// Returns true if update was successfully scheduled (PS-script
-    /// started; process exit is imminent). Returns false on any
-    /// failure (caller should report status back to server).
-    /// </summary>
     public static async Task<bool> DownloadAndInstall(
         ProctorSettings settings,
         ILogger? logger,
@@ -50,120 +27,85 @@ public static class UpdateHelper
         string newVersion,
         Func<string, string, Task>? progressCallback = null)
     {
-        // Self-cleaning lock.
-        // FileOptions.DeleteOnClose tells Windows to delete the file when the
-        // last handle is closed — including when the process crashes/terminates.
-        // This means stale lock files from previous failed updates simply
-        // cannot accumulate on disk. As an extra safety net, if a lock somehow
-        // remains (e.g. antivirus held a handle), we force-delete it after
-        // 5 minutes instead of the previous 2 hours.
-        try { Directory.CreateDirectory(TempRoot); } catch { }
-
-        FileStream? lockStream = null;
-        try
+        if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var updateUri) ||
+            !string.Equals(updateUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
-            lockStream = new FileStream(
-                LockFile,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                options: FileOptions.DeleteOnClose);
-            var info = System.Text.Encoding.UTF8.GetBytes(
-                $"pid={Environment.ProcessId} ts={DateTime.UtcNow:o}\n");
-            await lockStream.WriteAsync(info, 0, info.Length);
-            await lockStream.FlushAsync();
-        }
-        catch (IOException)
-        {
-            // Another process holds the lock OR antivirus is scanning.
-            // If the stale file is older than 5 min, force-clear and retry once.
-            try
-            {
-                if (File.Exists(LockFile))
-                {
-                    var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(LockFile);
-                    if (age.TotalMinutes >= 5)
-                    {
-                        File.Delete(LockFile);
-                        lockStream = new FileStream(
-                            LockFile,
-                            FileMode.Create,
-                            FileAccess.Write,
-                            FileShare.None,
-                            bufferSize: 4096,
-                            options: FileOptions.DeleteOnClose);
-                    }
-                }
-            }
-            catch { }
-            if (lockStream == null)
-            {
-                logger?.LogWarning("Could not acquire update lock (another update may be running)");
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Could not acquire update lock");
+            logger?.LogError("Refusing update from non-HTTPS or invalid URL: {Url}", downloadUrl);
+            if (progressCallback != null) await progressCallback("failed", "https_required");
             return false;
         }
 
+        if (!settings.Features.UpdateV2)
+        {
+            if (progressCallback != null) await progressCallback("failed", "update_v2_disabled");
+            return false;
+        }
+
+        string updateRoot;
         try
         {
-            // Lower our own priority for the whole flow so user apps remain snappy.
+            updateRoot = GetSecureUpdateRoot();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Could not prepare the protected update directory");
+            if (progressCallback != null) await progressCallback("failed", "secure_staging_unavailable");
+            return false;
+        }
+
+        await using var lockStream = await TryAcquireLockAsync(updateRoot, logger);
+        if (lockStream == null) return false;
+
+        try
+        {
             TryLowerSelfPriority();
 
-            // Skip if already on the requested version.
             var currentVersion = GetCurrentVersion();
             if (!string.IsNullOrWhiteSpace(newVersion) &&
                 string.Equals(currentVersion, newVersion, StringComparison.OrdinalIgnoreCase))
             {
-                logger?.LogInformation("Already at version {V}, skipping update", newVersion);
                 if (progressCallback != null) await progressCallback("already_up_to_date", currentVersion);
                 return true;
             }
 
-            // === Phase 1: download (chunked, throttled, streaming) ===
             if (progressCallback != null) await progressCallback("downloading", "0%");
-            var downloadedPath = Path.Combine(
-                TempRoot,
-                $"BelfProctor_{DateTime.UtcNow:yyyyMMdd_HHmmss}.exe");
-            var downloadOk = await DownloadFile(settings, logger, downloadUrl, downloadedPath, progressCallback);
-            if (!downloadOk)
+            var downloadedPath = Path.Combine(updateRoot, $"BelfProctor_{Guid.NewGuid():N}.exe");
+            if (!await DownloadFile(settings, logger, downloadUrl, downloadedPath, newVersion, progressCallback))
             {
-                if (progressCallback != null)
-                    await progressCallback("download_failed", downloadUrl);
+                if (progressCallback != null) await progressCallback("failed", "download_failed");
                 return false;
             }
 
-            // === Phase 2: verify SHA-256 (streaming) ===
             if (progressCallback != null) await progressCallback("verifying", "");
             var actualHash = ComputeSha256(downloadedPath);
             var expectedHash = (sha256Expected ?? "").Trim().ToLowerInvariant();
             if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
             {
-                logger?.LogError("SHA-256 mismatch. expected={E} actual={A}", expectedHash, actualHash);
                 TryDelete(downloadedPath);
-                if (progressCallback != null) await progressCallback("sha_mismatch", actualHash);
+                logger?.LogError("SHA-256 mismatch. expected={Expected} actual={Actual}", expectedHash, actualHash);
+                if (progressCallback != null) await progressCallback("failed", "hash_mismatch");
                 return false;
             }
 
-            // === Phase 3: wait for user idle (silent UX) ===
-            if (progressCallback != null) await progressCallback("waiting_idle", "");
-            await WaitForUserIdle(logger);
-
-            // === Phase 4: spawn hidden PowerShell to do the swap ===
-            if (progressCallback != null) await progressCallback("installing", newVersion);
-            var ok = LaunchHiddenReplaceScript(logger, downloadedPath, newVersion);
-            if (!ok)
+            var trustedSigner = ResolveTrustedSignerThumbprint(settings.TrustedUpdateSignerThumbprint);
+            if (!VerifyAuthenticodeSignature(downloadedPath, trustedSigner, logger, updateRoot))
             {
                 TryDelete(downloadedPath);
+                if (progressCallback != null) await progressCallback("failed", "untrusted_signature");
                 return false;
             }
 
-            // PowerShell will Stop-Service us in a moment. Give it time to start
-            // before we exit, so service control sequence is clean.
+            if (progressCallback != null) await progressCallback("installing", newVersion);
+            await WaitForUserIdle(logger);
+
+            if (!LaunchHiddenVersionSwitchScript(logger, downloadedPath, newVersion, updateRoot))
+            {
+                TryDelete(downloadedPath);
+                if (progressCallback != null) await progressCallback("failed", "script_launch_failed");
+                return false;
+            }
+
+            if (progressCallback != null) await progressCallback("restarted", newVersion);
             _ = Task.Run(async () =>
             {
                 await Task.Delay(2500);
@@ -176,16 +118,122 @@ public static class UpdateHelper
             logger?.LogError(ex, "UpdateHelper failed");
             if (progressCallback != null)
             {
-                try { await progressCallback("exception", ex.Message); } catch { }
+                try { await progressCallback("failed", ex.Message); } catch { }
             }
+            return false;
+        }
+    }
+
+    internal static string ResolveTrustedSignerThumbprint(string configuredThumbprint)
+    {
+        var configured = NormalizeThumbprint(configuredThumbprint);
+        var embedded = Assembly.GetExecutingAssembly()
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "BelfProctor.TrustedUpdateSignerThumbprint")?.Value;
+        var protectedValue = NormalizeThumbprint(embedded ?? string.Empty);
+        if (protectedValue.Length == 0) return configured;
+        // A writable configuration file may not redirect trust away from the
+        // publisher identity embedded in (and protected by) the signed EXE.
+        return configured.Length == 0 || configured == protectedValue ? protectedValue : string.Empty;
+    }
+
+    private static string NormalizeThumbprint(string value) =>
+        (value ?? string.Empty).Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+
+    internal static bool VerifyAuthenticodeSignature(
+        string filePath,
+        string expectedThumbprint,
+        ILogger? logger,
+        string? preparedUpdateRoot = null)
+    {
+        var normalized = (expectedThumbprint ?? "").Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+        if (normalized.Length != 40 || !normalized.All(Uri.IsHexDigit))
+        {
+            logger?.LogError("Trusted update signer thumbprint is missing or invalid");
+            return false;
+        }
+
+        var scriptPath = string.Empty;
+        try
+        {
+            var updateRoot = preparedUpdateRoot ?? GetSecureUpdateRoot();
+            scriptPath = Path.Combine(updateRoot, $"verify-authenticode-{Guid.NewGuid():N}.ps1");
+            File.WriteAllText(scriptPath, @"
+param([Parameter(Mandatory=$true)][string]$TargetPath,
+      [Parameter(Mandatory=$true)][string]$ExpectedThumbprint)
+$ErrorActionPreference = 'Stop'
+$signature = Get-AuthenticodeSignature -LiteralPath $TargetPath
+$actual = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { '' }
+if ($signature.Status -ne 'Valid' -or $actual -ne $ExpectedThumbprint) { exit 23 }
+exit 0
+", new UTF8Encoding(false));
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-NonInteractive");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(scriptPath);
+            psi.ArgumentList.Add("-TargetPath");
+            psi.ArgumentList.Add(filePath);
+            psi.ArgumentList.Add("-ExpectedThumbprint");
+            psi.ArgumentList.Add(normalized);
+            using var process = Process.Start(psi);
+            if (process == null) return false;
+            if (!process.WaitForExit(30_000))
+            {
+                try { process.Kill(true); } catch { }
+                logger?.LogError("Authenticode verification timed out");
+                return false;
+            }
+            if (process.ExitCode == 0) return true;
+            logger?.LogError("Authenticode verification failed with code {Code}: {Error}",
+                process.ExitCode, process.StandardError.ReadToEnd().Trim());
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Authenticode verification failed");
             return false;
         }
         finally
         {
-            // FileOptions.DeleteOnClose ensures the OS removes the lock file
-            // when this handle is released — even if the process crashes.
-            // Stale locks from killed/crashed processes cannot accumulate.
-            try { lockStream?.Dispose(); } catch { }
+            TryDelete(scriptPath);
+        }
+    }
+
+    private static async Task<FileStream?> TryAcquireLockAsync(string updateRoot, ILogger? logger)
+    {
+        try
+        {
+            var lockFile = Path.Combine(updateRoot, "update.lock");
+            var stream = new FileStream(
+                lockFile,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                options: FileOptions.DeleteOnClose);
+            var info = Encoding.UTF8.GetBytes($"pid={Environment.ProcessId} ts={DateTime.UtcNow:o}\n");
+            await stream.WriteAsync(info, 0, info.Length);
+            await stream.FlushAsync();
+            return stream;
+        }
+        catch (IOException)
+        {
+            logger?.LogWarning("Could not acquire update lock");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not acquire update lock");
+            return null;
         }
     }
 
@@ -202,12 +250,8 @@ public static class UpdateHelper
 
     private static void TryLowerSelfPriority()
     {
-        try
-        {
-            using var p = Process.GetCurrentProcess();
-            p.PriorityClass = ProcessPriorityClass.BelowNormal;
-        }
-        catch { /* not critical */ }
+        try { using var p = Process.GetCurrentProcess(); p.PriorityClass = ProcessPriorityClass.BelowNormal; }
+        catch { }
     }
 
     private static void TryDelete(string path)
@@ -220,24 +264,40 @@ public static class UpdateHelper
         ILogger? logger,
         string url,
         string destPath,
+        string version,
         Func<string, string, Task>? progress)
     {
         try
         {
-            using var handler = new SocketsHttpHandler
-            {
-                UseProxy = false,
-                AllowAutoRedirect = true,
-            };
+            // A redirect could disclose device authentication headers to a
+            // different HTTPS origin. Update URLs are generated by our server,
+            // so redirects are neither required nor accepted.
+            using var handler = new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false };
             using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(15) };
-            http.DefaultRequestHeaders.Add("User-Agent", "BelfProctor-Updater/1.0");
-            if (!string.IsNullOrWhiteSpace(settings.ClientId))
-                http.DefaultRequestHeaders.Add("X-Client-Id", settings.ClientId);
-            if (!string.IsNullOrWhiteSpace(settings.EncryptionKey))
-                http.DefaultRequestHeaders.Add("X-Client-Key", settings.EncryptionKey);
+            http.DefaultRequestHeaders.Add("User-Agent", "BelfProctor-Updater/2.0");
 
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+            var signature = WebSocketAuth.CreateUpdateDownloadSignature(
+                settings.ClientId,
+                version,
+                timestamp,
+                settings.EncryptionKey,
+                nonce);
+            req.Headers.Add("X-Client-Id", settings.ClientId);
+            req.Headers.Add("X-Client-Timestamp", timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            req.Headers.Add("X-Client-Nonce", nonce);
+            req.Headers.Add("X-Client-Signature", signature);
             using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            // SocketsHttpHandler may follow redirects. Never allow a trusted HTTPS
+            // update URL to be downgraded to plaintext by a redirect response.
+            if (!IsHttpsUpdateResponse(req.RequestUri, resp.RequestMessage?.RequestUri))
+            {
+                logger?.LogError("Update download redirected to a non-HTTPS endpoint: {Url}",
+                    resp.RequestMessage?.RequestUri);
+                return false;
+            }
             if (!resp.IsSuccessStatusCode)
             {
                 logger?.LogError("Update download failed: {Code}", resp.StatusCode);
@@ -247,31 +307,25 @@ public static class UpdateHelper
             var total = resp.Content.Headers.ContentLength ?? -1;
             using var src = await resp.Content.ReadAsStreamAsync();
             using var dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
-
-            var buf = new byte[ChunkSize];
+            var buffer = new byte[ChunkSize];
             long got = 0;
+            var lastPercent = -1;
             int read;
-            int lastPercentReported = -1;
-            while ((read = await src.ReadAsync(buf, 0, buf.Length)) > 0)
+            while ((read = await src.ReadAsync(buffer, 0, buffer.Length)) > 0)
             {
-                await dst.WriteAsync(buf, 0, read);
+                await dst.WriteAsync(buffer, 0, read);
                 got += read;
-
-                // Throttle to avoid disk/network spikes that the user could feel.
-                if (InterChunkDelayMs > 0)
-                    await Task.Delay(InterChunkDelayMs);
-
+                if (InterChunkDelayMs > 0) await Task.Delay(InterChunkDelayMs);
                 if (total > 0 && progress != null)
                 {
-                    int pct = (int)((got * 100) / total);
-                    if (pct >= lastPercentReported + 10) // report each 10%
+                    var percent = (int)((got * 100) / total);
+                    if (percent >= lastPercent + 10)
                     {
-                        lastPercentReported = pct;
-                        try { await progress("downloading", $"{pct}%"); } catch { }
+                        lastPercent = percent;
+                        try { await progress("downloading", $"{percent}%"); } catch { }
                     }
                 }
             }
-            logger?.LogInformation("Downloaded update: {Bytes} bytes → {Path}", got, destPath);
             return true;
         }
         catch (Exception ex)
@@ -281,6 +335,11 @@ public static class UpdateHelper
             return false;
         }
     }
+
+    internal static bool IsHttpsUpdateResponse(Uri? requestedUri, Uri? finalUri) =>
+        requestedUri != null && finalUri != null &&
+        string.Equals(requestedUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(finalUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
     private static string ComputeSha256(string path)
     {
@@ -306,17 +365,13 @@ public static class UpdateHelper
     {
         try
         {
-            LASTINPUTINFO lii = new LASTINPUTINFO();
-            lii.cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>();
+            var lii = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
             if (!GetLastInputInfo(ref lii)) return uint.MaxValue;
-            uint tick = (uint)Environment.TickCount;
-            uint idleMs = tick - lii.dwTime;
-            return idleMs / 1000;
+            var tick = (uint)Environment.TickCount;
+            return (tick - lii.dwTime) / 1000;
         }
         catch
         {
-            // If P/Invoke fails (no user32, no interactive session — Session 0 service)
-            // assume idle so we don't block forever.
             return uint.MaxValue;
         }
     }
@@ -326,179 +381,168 @@ public static class UpdateHelper
         var deadline = DateTime.UtcNow.AddMinutes(IdleWaitTimeoutMinutes);
         while (DateTime.UtcNow < deadline)
         {
-            try
+            var idle = GetIdleSeconds();
+            if (idle >= IdleThresholdSeconds)
             {
-                var idle = GetIdleSeconds();
-                if (idle >= IdleThresholdSeconds)
-                {
-                    logger?.LogInformation("User idle for {S}s → proceeding with replace", idle);
-                    return;
-                }
+                logger?.LogInformation("User idle for {Seconds}s, proceeding with update", idle);
+                return;
             }
-            catch { return; }
             await Task.Delay(TimeSpan.FromSeconds(30));
         }
-        logger?.LogInformation("Idle wait timeout — proceeding with replace anyway");
+        logger?.LogInformation("Idle wait timeout, proceeding with update");
     }
 
-    private static bool LaunchHiddenReplaceScript(
+    private static bool LaunchHiddenVersionSwitchScript(
         ILogger? logger,
-        string downloadedNewExePath,
-        string newVersion)
+        string stagedExePath,
+        string newVersion,
+        string updateRoot)
     {
         try
         {
-            Directory.CreateDirectory(TempRoot);
-
-            // Resolve install dir from the running exe location (works whether
-            // service installed in C:\Program Files\BelfProctor or anywhere else).
-            var installedExePath = Process.GetCurrentProcess().MainModule?.FileName
+            var currentExe = Process.GetCurrentProcess().MainModule?.FileName
                 ?? Path.Combine(AppContext.BaseDirectory, InstalledExeName);
-            var installDir = Path.GetDirectoryName(installedExePath) ?? "C:\\Program Files\\BelfProctor";
-            var oldExe = installedExePath;
-            var bakExe = installedExePath + ".bak";
-            var newExe = downloadedNewExePath;
+            var installRoot = FindInstallRoot(currentExe);
+            var safeVersion = SanitizeVersion(newVersion);
+            var versionDir = Path.Combine(installRoot, "versions", safeVersion);
+            var targetExe = Path.Combine(versionDir, InstalledExeName);
+            var operationId = Guid.NewGuid().ToString("N");
+            var logPath = Path.Combine(updateRoot, $"update_{operationId}.log");
+            var scriptPath = Path.Combine(updateRoot, $"update_{operationId}.ps1");
+            var lockFile = Path.Combine(updateRoot, "update.lock");
 
-            var scriptPath = Path.Combine(
-                TempRoot,
-                $"update_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.ps1");
-            var logPath = Path.Combine(
-                TempRoot,
-                $"update_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.log");
-
-            // PowerShell script — fully silent + robust swap.
-            // Key technique: use Move-Item to rename the locked old exe out of
-            // the way (Windows allows renaming a running executable even when
-            // overwriting it would fail). Then copy new exe into the original
-            // path. This avoids the "file in use by another process" error.
             var script = $@"
 $ErrorActionPreference = 'SilentlyContinue'
-try {{ (Get-Process -Id $PID).PriorityClass = 'Idle' }} catch {{}}
-
-$logFile  = '{logPath.Replace("'", "''")}'
-$svc      = '{ServiceName}'
-$oldExe   = '{oldExe.Replace("'", "''")}'
-$newExe   = '{newExe.Replace("'", "''")}'
-$bakExe   = '{bakExe.Replace("'", "''")}'
-$lockFile = '{LockFile.Replace("'", "''")}'
-
-function Log($m) {{ try {{ Add-Content -LiteralPath $logFile -Value (""{{0:o}}  {{1}}"" -f (Get-Date).ToUniversalTime(), $m) -ErrorAction SilentlyContinue }} catch {{}} }}
-
-Log ""begin update to {newVersion}""
-
-# === Step 1: Stop the service ===
-try {{ Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue }} catch {{}}
-# Wait up to 30 sec for service to reach Stopped state
-for ($i=0; $i -lt 60; $i++) {{
-  try {{
-    $st = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
-    if ($st -eq 'Stopped' -or -not $st) {{ break }}
-  }} catch {{}}
-  Start-Sleep -Milliseconds 500
-}}
-Log ""service stop requested""
-
-# === Step 2: Kill any lingering processes by FULL PATH (more reliable than name) ===
-for ($k=0; $k -lt 5; $k++) {{
-  $locking = @()
-  try {{
-    $locking = Get-Process | Where-Object {{
-      try {{ $_.Path -ieq $oldExe }} catch {{ $false }}
-    }}
-  }} catch {{}}
-  if (-not $locking -or $locking.Count -eq 0) {{ break }}
-  foreach ($p in $locking) {{
-    try {{ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }} catch {{}}
-  }}
-  Start-Sleep -Milliseconds 800
-}}
-# Belt-and-suspenders: name-based kills for all known aliases
-foreach ($n in 'BelfProctor','Microsoft OneDrive','SystemWorker') {{
-  try {{ taskkill /F /IM ($n + '.exe') /T 2>$null | Out-Null }} catch {{}}
-}}
-Start-Sleep -Seconds 2
-
-$swapOk = $false
-try {{
-  if (Test-Path $bakExe) {{ try {{ Remove-Item -LiteralPath $bakExe -Force }} catch {{}} }}
-
-  # === Step 3: RENAME old exe out of the way (works even if file is briefly locked) ===
-  # Windows allows Move-Item on a running exe file; only overwrite is blocked.
-  if (Test-Path $oldExe) {{
-    $moved = $false
-    for ($m=0; $m -lt 10; $m++) {{
-      try {{
-        Move-Item -LiteralPath $oldExe -Destination $bakExe -Force -ErrorAction Stop
-        $moved = $true
-        break
-      }} catch {{
-        Start-Sleep -Milliseconds 500
-      }}
-    }}
-    if (-not $moved) {{ throw 'cannot move old exe (file locked after retries)' }}
-  }}
-  Log ""old exe moved to .bak""
-
-  # === Step 4: Copy new exe to original path ===
-  Copy-Item -LiteralPath $newExe -Destination $oldExe -Force -ErrorAction Stop
-  Log ""new exe installed""
-
-  # Remove Mark-of-the-Web (downloaded files have NTFS Zone.Identifier ADS that
-  # makes Defender re-scan on every execution, slowing startup massively).
-  try {{ Unblock-File -LiteralPath $oldExe -ErrorAction SilentlyContinue }} catch {{}}
-
-  # === Step 5: Start the service ===
-  # Self-contained .NET on first run extracts native libs to %TEMP%\.net\<hash>\
-  # which can take 30-90 sec (especially with Defender real-time scanning).
-  # We wait up to 120 sec and accept 'StartPending' as in-progress (not failure).
-  Start-Service -Name $svc -ErrorAction SilentlyContinue
-  $running = $false
-  $lastStatus = ''
-  for ($i=0; $i -lt 240; $i++) {{
+$logFile = '{Ps(logPath)}'
+$svc = '{ServiceName}'
+$desktopTask = '{DesktopAgentSupervisor.ScheduledTaskName}'
+$currentExe = '{Ps(currentExe)}'
+$stagedExe = '{Ps(stagedExePath)}'
+$versionDir = '{Ps(versionDir)}'
+$targetExe = '{Ps(targetExe)}'
+$installRoot = '{Ps(installRoot)}'
+$versionsRoot = Join-Path $installRoot 'versions'
+function Log($m) {{ try {{ Add-Content -LiteralPath $logFile -Value (""{{0:o}} {{1}}"" -f (Get-Date).ToUniversalTime(), $m) }} catch {{}} }}
+function StartAndWait($name) {{
+  try {{ Start-Service -Name $name -ErrorAction SilentlyContinue }} catch {{}}
+  for ($i=0; $i -lt 120; $i++) {{
     try {{
-      $st = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
-      if ($st -ne $lastStatus) {{
-        Log (""service status: "" + $st)
-        $lastStatus = $st
+      $st = (Get-Service -Name $name -ErrorAction SilentlyContinue).Status
+      if ($st -eq 'Running') {{
+        # A service can briefly report Running and then crash. It must remain
+        # alive through a stabilization window before the old ImagePath is
+        # considered safely replaced.
+        $stable = $true
+        for ($j=0; $j -lt 15; $j++) {{
+          Start-Sleep -Seconds 1
+          try {{
+            if ((Get-Service -Name $name -ErrorAction Stop).Status -ne 'Running') {{ $stable = $false; break }}
+          }} catch {{ $stable = $false; break }}
+        }}
+        if ($stable) {{ return $true }}
       }}
-      if ($st -eq 'Running') {{ $running = $true; break }}
-      # StartPending = still extracting / initializing — keep waiting
     }} catch {{}}
+    Start-Sleep -Seconds 1
+  }}
+  return $false
+}}
+function SetDesktopTask($exe) {{
+  $action = New-ScheduledTaskAction -Execute $exe -Argument '--auto-start' -WorkingDirectory (Split-Path $exe -Parent)
+  Set-ScheduledTask -TaskName $desktopTask -Action $action -ErrorAction Stop | Out-Null
+}}
+function PathEquals($a, $b) {{
+  if ([string]::IsNullOrWhiteSpace($a) -or [string]::IsNullOrWhiteSpace($b)) {{ return $false }}
+  try {{ return [string]::Equals([IO.Path]::GetFullPath($a), [IO.Path]::GetFullPath($b), [StringComparison]::OrdinalIgnoreCase) }}
+  catch {{ return $false }}
+}}
+function GetDesktopAgents($exe) {{
+  try {{
+    return @(Get-CimInstance -ClassName Win32_Process -Filter ""Name='BelfProctor.exe'"" | Where-Object {{
+      [uint32]$_.SessionId -gt 0 -and (PathEquals $_.ExecutablePath $exe) -and
+        ([string]$_.CommandLine).IndexOf('--auto-start', [StringComparison]::OrdinalIgnoreCase) -ge 0
+    }})
+  }} catch {{ return @() }}
+}}
+function StopManagedAgents($firstExe, $secondExe) {{
+  try {{ Stop-ScheduledTask -TaskName $desktopTask -ErrorAction SilentlyContinue }} catch {{}}
+  try {{
+    Get-CimInstance -ClassName Win32_Process -Filter ""Name='BelfProctor.exe'"" | Where-Object {{
+      [uint32]$_.SessionId -gt 0 -and
+        ((PathEquals $_.ExecutablePath $firstExe) -or (PathEquals $_.ExecutablePath $secondExe))
+    }} | ForEach-Object {{ Invoke-CimMethod -InputObject $_ -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null }}
+  }} catch {{}}
+  for ($i=0; $i -lt 30; $i++) {{
+    if ((GetDesktopAgents $firstExe).Count -eq 0 -and (GetDesktopAgents $secondExe).Count -eq 0) {{ return $true }}
     Start-Sleep -Milliseconds 500
   }}
-  if (-not $running) {{ throw ('service did not start within 120 sec (last status: ' + $lastStatus + ')') }}
-  $swapOk = $true
-  Log ""service running on new version""
-}} catch {{
-  Log (""swap failed: "" + $_.Exception.Message)
-  # Rollback: move .bak back to oldExe
-  try {{
-    if (Test-Path $bakExe) {{
-      if (Test-Path $oldExe) {{ Remove-Item -LiteralPath $oldExe -Force -ErrorAction SilentlyContinue }}
-      Move-Item -LiteralPath $bakExe -Destination $oldExe -Force -ErrorAction SilentlyContinue
+  return $false
+}}
+function StartDesktopAndWait($exe) {{
+  try {{ Start-ScheduledTask -TaskName $desktopTask -ErrorAction Stop }} catch {{ return $false }}
+  for ($i=0; $i -lt 30; $i++) {{
+    if ((GetDesktopAgents $exe).Count -gt 0) {{ return $true }}
+    Start-Sleep -Seconds 1
+  }}
+  return $false
+}}
+Log 'begin versioned update'
+try {{
+  New-Item -ItemType Directory -Force -Path $versionsRoot | Out-Null
+  if ((Get-Item -LiteralPath $versionsRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {{ throw 'versions root is a reparse point' }}
+  New-Item -ItemType Directory -Force -Path $versionDir | Out-Null
+  if ((Get-Item -LiteralPath $versionDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {{ throw 'version directory is a reparse point' }}
+  Copy-Item -LiteralPath $stagedExe -Destination $targetExe -Force -ErrorAction Stop
+  try {{ Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue }} catch {{}}
+  # Mirror config files from install root next to the new exe — Program.cs
+  # reads appsettings.json from AppContext.BaseDirectory and from LocalSystem's
+  # AppData (empty), so without this the new versioned exe sees no ClientId
+  # and the worker exits immediately.
+  foreach ($cfg in 'appsettings.json','appsettings.Production.json') {{
+    $src = Join-Path $installRoot $cfg
+    if (Test-Path -LiteralPath $src) {{
+      Copy-Item -LiteralPath $src -Destination (Join-Path $versionDir $cfg) -Force -ErrorAction SilentlyContinue
     }}
+  }}
+  Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  if (-not (StopManagedAgents $currentExe $targetExe)) {{ throw 'existing interactive agent did not stop' }}
+  $imagePath = '""' + $targetExe + '"" --service-host'
+  Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $imagePath -Type ExpandString -ErrorAction Stop
+  SetDesktopTask $targetExe
+  Log ('binPath set to ' + $imagePath)
+  if (-not (StartAndWait $svc)) {{ throw 'new service version did not start' }}
+  if (-not (StartDesktopAndWait $targetExe)) {{ throw 'new interactive desktop agent did not start' }}
+  Log 'new version started'
+  try {{
+    Get-ChildItem -LiteralPath (Join-Path $installRoot 'versions') -Directory |
+      Sort-Object LastWriteTime -Descending |
+      Select-Object -Skip 3 |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   }} catch {{}}
-  try {{ Start-Service -Name $svc -ErrorAction SilentlyContinue }} catch {{}}
+}} catch {{
+  Log ('update failed: ' + $_.Exception.Message)
+  try {{
+    Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    StopManagedAgents $targetExe $currentExe | Out-Null
+    $rollbackImage = '""' + $currentExe + '"" --service-host'
+    Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $rollbackImage -Type ExpandString -ErrorAction Stop
+    SetDesktopTask $currentExe
+    if (-not (StartAndWait $svc)) {{ throw 'rollback service did not start' }}
+    if (-not (StartDesktopAndWait $currentExe)) {{ throw 'rollback desktop agent did not start' }}
+    Log 'previous version restored'
+  }} catch {{ Log ('rollback failed: ' + $_.Exception.Message) }}
 }}
-
-# Cleanup
-try {{ Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue }} catch {{}}
-if ($swapOk) {{
-  try {{ Remove-Item -LiteralPath $bakExe -Force -ErrorAction SilentlyContinue }} catch {{}}
-}}
-try {{ if (Test-Path $lockFile) {{ Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }} }} catch {{}}
-
-# Self-delete script
+try {{ Remove-Item -LiteralPath $stagedExe -Force -ErrorAction SilentlyContinue }} catch {{}}
+try {{ Remove-Item -LiteralPath '{Ps(lockFile)}' -Force -ErrorAction SilentlyContinue }} catch {{}}
 try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }} catch {{}}
 ";
 
             File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
-
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass " +
-                            $"-WindowStyle Hidden -File \"{scriptPath}\"",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden,
@@ -506,19 +550,74 @@ try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyConti
                 RedirectStandardError = true,
             };
             var proc = Process.Start(psi);
-            if (proc == null)
-            {
-                logger?.LogError("Failed to start update PowerShell");
-                return false;
-            }
+            if (proc == null) return false;
             try { proc.PriorityClass = ProcessPriorityClass.Idle; } catch { }
-            logger?.LogInformation("Update PowerShell started (pid={Pid}, script={Script})", proc.Id, scriptPath);
+            logger?.LogInformation("Versioned update script started (pid={Pid})", proc.Id);
             return true;
         }
         catch (Exception ex)
         {
-            logger?.LogError(ex, "LaunchHiddenReplaceScript failed");
+            logger?.LogError(ex, "Failed to launch versioned update script");
             return false;
         }
     }
+
+    private static string FindInstallRoot(string currentExe)
+    {
+        var dir = Path.GetDirectoryName(currentExe) ?? @"C:\Program Files\BelfProctor";
+        var parent = Directory.GetParent(dir);
+        if (parent?.Name.Equals("versions", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return parent.Parent?.FullName ?? @"C:\Program Files\BelfProctor";
+        }
+        return dir;
+    }
+
+    private static string GetSecureUpdateRoot()
+    {
+        // The desktop agent is registered with RunLevel Highest. Never hand an
+        // elevated PowerShell process a script stored in the user's writable
+        // TEMP directory: a medium-integrity process could replace it between
+        // creation and execution. The installer removes inherited write access
+        // from the install root, granting the interactive user RX only, so this
+        // child directory is writable solely by elevated Administrators/SYSTEM.
+        var currentExe = Process.GetCurrentProcess().MainModule?.FileName
+            ?? Path.Combine(AppContext.BaseDirectory, InstalledExeName);
+        var updateRoot = ResolveUpdateRoot(currentExe);
+        var installRoot = FindInstallRoot(currentExe);
+        var expectedPrefix = Path.GetFullPath(installRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!updateRoot.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Update staging escaped the protected install root");
+        }
+
+        Directory.CreateDirectory(updateRoot);
+        if ((File.GetAttributes(updateRoot) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException("Update staging must not be a reparse point");
+        }
+        return updateRoot;
+    }
+
+    internal static string ResolveUpdateRoot(string executablePath) =>
+        Path.GetFullPath(Path.Combine(FindInstallRoot(executablePath), ".update"));
+
+    internal static string SanitizeVersion(string version)
+    {
+        var raw = string.IsNullOrWhiteSpace(version)
+            ? DateTime.UtcNow.ToString("yyyyMMddHHmmss")
+            : version.Trim();
+        if (raw.Length > 64 || !char.IsAsciiLetterOrDigit(raw[0]) ||
+            raw.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '.' and not '-' and not '_'))
+        {
+            throw new ArgumentException(
+                "Update version must start with a letter or digit and contain at most 64 ASCII letters, digits, dots, hyphens, or underscores.",
+                nameof(version));
+        }
+        return raw;
+    }
+
+    private static string Ps(string value) => value.Replace("'", "''");
 }

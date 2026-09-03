@@ -1,13 +1,18 @@
 import "dotenv/config";
+import "express-async-errors";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
+import { randomUUID } from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
+import { verifyAgentWsSignature } from "./wsAuth";
+import { getKeysToTry } from "./keyring";
 import { IncomingMessage } from "http";
 
 import authRouter from "./routes/auth";
@@ -19,7 +24,14 @@ import policiesRouter from "./routes/policies";
 import activityRouter from "./routes/activity";
 import logsRouter from "./routes/logs";
 import updatesRouter, { appendDeploymentStatus } from "./routes/updates";
-import { requireAuth } from "./middleware/auth";
+import workRouter from "./routes/work";
+import pcSessionRouter from "./routes/pcSession";
+import browserActivityRouter from "./routes/browserActivity";
+import commandsRouter from "./routes/commands";
+import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
+import { startTimeSync, getDebugState as getTimeDebugState, now as authoritativeNow } from "./serverTime";
+import { extractAuthToken, requireAdmin, requireAuth } from "./middleware/auth";
+import { jsonErrorHandler } from "./middleware/error";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
 import {
@@ -34,31 +46,26 @@ import { getSenderClientId, normalizeClientId } from "./clientId";
 import {
   registerClientSocket,
   unregisterClientSocket,
-  sendCommandToClient,
+  registerStreamSource,
+  registerStreamViewer,
 } from "./wsHub";
 import { runRetentionOnce } from "./retention";
+import { indexExistingReports } from "./services/reportStore";
 import { withLock } from "./locks";
 import { initServerLogToStorage } from "./serverLog";
-import { getPrimaryEncryptionKey } from "./keyring";
-import { resolveUploadDir } from "./runtimePaths";
+import { config } from "./config";
+import { connectWithRetry, disconnectPrisma, pingDatabase } from "./prisma";
+import { getConnectedClientCount } from "./wsHub";
+import { isSafeCommandId } from "./util/commandId";
 
 const app = express();
-const PORT = parseInt(process.env.PORT || "8080", 10);
-const HOST = process.env.HOST || "0.0.0.0";
-const UPLOAD_DIR = resolveUploadDir();
-
-void getPrimaryEncryptionKey();
-
-if (!process.env.ENCRYPTION_KEY && !process.env.ENCRYPTION_KEYS) {
-  console.warn(
-    "[Config] ENCRYPTION_KEY is not set. Clients may fall back to the default key. Set ENCRYPTION_KEY for pilot/prod.",
-  );
-}
-if (!process.env.DEFAULT_ADMIN_EMAIL || !process.env.DEFAULT_ADMIN_PASSWORD) {
-  console.warn(
-    "[Config] DEFAULT_ADMIN_EMAIL/DEFAULT_ADMIN_PASSWORD are not set. No admin will be auto-created on boot.",
-  );
-}
+if (config.isProduction) app.set("trust proxy", 1);
+const PORT = config.port;
+const HOST = config.host;
+const UPLOAD_DIR = config.uploadDir;
+const JWT_SECRET = config.jwtSecret;
+// Config validation (secrets, DB url, retention, feature flags) runs on import
+// of ./config and will refuse to boot in production on an insecure setup.
 
 // Ensure upload directories
 try {
@@ -71,7 +78,7 @@ try {
   process.exit(1);
 }
 try {
-  if (process.env.DISABLE_FILE_LOGS !== "1") {
+  if (config.fileLogsEnabled) {
     initServerLogToStorage(UPLOAD_DIR);
   }
 } catch (e) {
@@ -90,14 +97,13 @@ app.use(
   }),
 );
 const corsOptions: cors.CorsOptions = {
-  origin: true,
+  origin: config.isProduction ? false : true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
     "X-Client-Id",
-    "X-Admin-Password",
     "Cache-Control",
     "Pragma",
     "X-Requested-With",
@@ -106,24 +112,22 @@ const corsOptions: cors.CorsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 // Skip morgan in prod to avoid per-request allocation (flat 50-70MB for 20 clients)
-if (process.env.NODE_ENV !== "production") {
+if (!config.isProduction) {
   app.use(morgan("combined"));
 }
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-// Rate limiter: 10000 req/min (virtually unlimited for your scale). Env RATE_LIMIT_MAX overrides.
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "10000", 10);
+// Global transport-level ceiling. Authentication has an additional strict limiter.
 const limiter = rateLimit({
   windowMs: 60 * 1000,
-  max: Number.isFinite(RATE_LIMIT_MAX) ? RATE_LIMIT_MAX : 10000,
-  keyGenerator: (req: any) => {
-    const cid = normalizeClientId(String(req?.headers?.["x-client-id"] || ""));
-    if (cid) return `client:${cid}`;
-    return `ip:${String(req.ip || "")}`;
-  },
+  max: config.rateLimitMax,
+  keyGenerator: (req: any) =>
+    `ip:${String(req.ip || req.socket?.remoteAddress || "unknown")}`,
 });
 app.use("/api/", limiter);
+
+// Rate limiting must run before parsers allocate attacker-controlled bodies.
+// Large binary artifacts use their dedicated streaming multipart endpoints.
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // Raw parsers: generous buffers for ingestion
 app.use(
@@ -139,8 +143,20 @@ app.use(
   express.raw({ type: "application/octet-stream", limit: "10mb" }),
 );
 app.use(
+  "/api/work/events",
+  express.raw({ type: "application/octet-stream", limit: "10mb" }),
+);
+app.use(
   "/api/logs",
   express.raw({ type: "application/octet-stream", limit: "1mb" }),
+);
+app.use(
+  "/api/pc-session",
+  express.raw({ type: "application/octet-stream", limit: "256kb" }),
+);
+app.use(
+  "/api/browser-activity",
+  express.raw({ type: "application/octet-stream", limit: "5mb" }),
 );
 // Use raw parser only for the specific octet-stream endpoint to avoid breaking JSON admin endpoints under /api/commands
 
@@ -154,6 +170,10 @@ app.use("/api/policies", policiesRouter);
 app.use("/api/activity", activityRouter);
 app.use("/api/logs", logsRouter);
 app.use("/api/updates", updatesRouter);
+app.use("/api/work", workRouter);
+app.use("/api/pc-session", pcSessionRouter);
+app.use("/api/browser-activity", browserActivityRouter);
+app.use("/api/commands", commandsRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -191,6 +211,7 @@ if (staticDir) {
 async function findLatestCommandResult(
   commandId: string,
 ): Promise<string | null> {
+  if (!isSafeCommandId(commandId)) return null;
   const baseDir = path.join(UPLOAD_DIR, "commands");
   if (!fs.existsSync(baseDir)) return null;
 
@@ -225,9 +246,7 @@ async function writeJsonFileAtomic(filePath: string, json: string): Promise<void
   await fsPromises.mkdir(dir, { recursive: true });
   const tmp = path.join(
     dir,
-    `${path.basename(filePath)}.tmp_${process.pid}_${Date.now()}_${Math.random()
-      .toString(16)
-      .slice(2)}`,
+    `${path.basename(filePath)}.tmp_${process.pid}_${randomUUID()}`,
   );
   await fsPromises.writeFile(tmp, json, "utf-8");
   try {
@@ -245,25 +264,30 @@ async function writeJsonFileAtomic(filePath: string, json: string): Promise<void
 }
 
 async function readCommandIndex(commandId: string): Promise<string | null> {
+  if (!isSafeCommandId(commandId)) return null;
   const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
   if (!fs.existsSync(fp)) return null;
   try {
     const content = await fsPromises.readFile(fp, "utf-8");
     const obj = JSON.parse(content);
     const p = String(obj?.latestPath || "").trim();
-    return p || null;
+    if (!p) return null;
+    const commandsRoot = path.resolve(UPLOAD_DIR, "commands") + path.sep;
+    const resolved = path.resolve(p);
+    return resolved.startsWith(commandsRoot) ? resolved : null;
   } catch {
     return null;
   }
 }
 
 async function writeCommandIndex(commandId: string, latestPath: string): Promise<void> {
+  if (!isSafeCommandId(commandId)) throw new Error("Invalid command id");
   const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
   await withLock(`file:${fp}`, async () => {
     await writeJsonFileAtomic(
       fp,
       JSON.stringify(
-        { commandId, latestPath, updatedAt: new Date().toISOString() },
+        { commandId, latestPath, updatedAt: authoritativeNow().toISOString() },
         null,
         2,
       ),
@@ -278,14 +302,17 @@ app.post(
   async (req, res) => {
     try {
       const commandId = req.params.id;
+      if (!isSafeCommandId(commandId)) {
+        return res.status(400).json({ message: "Invalid command id" });
+      }
       const clientId = getSenderClientId(req);
 
       const client = await getClient(clientId);
       if (!client) {
         await saveClient({
           id: clientId,
-          createdAt: new Date(),
-          lastSeen: new Date(),
+          createdAt: authoritativeNow(),
+          lastSeen: authoritativeNow(),
         });
         return res
           .status(400)
@@ -358,6 +385,9 @@ const commandResultHandler = async (
 ) => {
   try {
     const commandId = req.params.id;
+    if (!isSafeCommandId(commandId)) {
+      return res.status(400).json({ message: "Invalid command id" });
+    }
     const indexed = await readCommandIndex(commandId);
     let latestPath = indexed && fs.existsSync(indexed) ? indexed : null;
     if (!latestPath) {
@@ -382,17 +412,90 @@ const commandResultHandler = async (
   }
 };
 
-app.get("/api/commands/:id/json", commandResultHandler);
-app.get("/api/commands/:id/result", commandResultHandler);
+app.get("/api/commands/:id/json", requireAdmin, commandResultHandler);
+app.get("/api/commands/:id/result", requireAdmin, commandResultHandler);
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
-app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+/**
+ * Health probe for external monitors (uptime checks, load balancers, the ops
+ * team). Reports the database, free disk on the storage volume, process memory
+ * and the number of connected agents. Returns 503 when a hard dependency
+ * (the database) is unreachable so monitors can alert instead of guessing.
+ */
+async function healthHandler(_req: express.Request, res: express.Response) {
+  const checks: Record<string, unknown> = {};
+  let healthy = true;
+
+  // Database (hard dependency)
+  try {
+    const HEALTH_DB_TIMEOUT_MS = 2000;
+    // Attach a no-op catch to the ping so that, if it loses the race to the
+    // timeout, its eventual rejection does not surface as an unhandled rejection.
+    const ping = pingDatabase();
+    ping.catch(() => undefined);
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("timeout")),
+        HEALTH_DB_TIMEOUT_MS,
+      );
+    });
+    const latencyMs = await Promise.race([ping, timeout]).finally(() =>
+      clearTimeout(timer),
+    );
+    checks.database = { ok: true, latencyMs };
+  } catch (e) {
+    healthy = false;
+    checks.database = {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  // Free disk on the storage volume (best-effort; statfs may be unavailable)
+  try {
+    const statfs = (fsPromises as unknown as {
+      statfs?: (p: string) => Promise<{ bsize: number; blocks: number; bavail: number }>;
+    }).statfs;
+    if (statfs) {
+      const s = await statfs(UPLOAD_DIR);
+      const freeBytes = s.bsize * s.bavail;
+      const totalBytes = s.bsize * s.blocks;
+      checks.disk = {
+        ok: true,
+        freeBytes,
+        freePercent:
+          totalBytes > 0 ? Math.round((freeBytes / totalBytes) * 100) : null,
+      };
+    }
+  } catch (e) {
+    checks.disk = {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  const mem = process.memoryUsage();
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "degraded",
+    time: authoritativeNow().toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+    connectedClients: getConnectedClientCount(),
+    memory: {
+      rssBytes: mem.rss,
+      heapUsedBytes: mem.heapUsed,
+    },
+    checks,
+  });
+}
+
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
+app.get("/api/time", (_req, res) => res.json(getTimeDebugState()));
 
 // Seed default admin if not exists
 async function ensureAdmin() {
-  const email = process.env.DEFAULT_ADMIN_EMAIL;
-  const password = process.env.DEFAULT_ADMIN_PASSWORD;
-  if (!email || !password) return;
+  if (!config.admin) return;
+  const { email, password } = config.admin;
   const existing = await getUser(email);
   if (!existing) {
     const passwordHash = await bcrypt.hash(password, 10);
@@ -401,66 +504,145 @@ async function ensureAdmin() {
   }
 }
 
-ensureAdmin().catch(console.error);
+const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_JOBS_START_DELAY_MS = 30_000;
 
-setTimeout(() => {
-  (async () => {
-    try {
-      const now = new Date();
-      const y = now.getUTCFullYear();
-      const m = String(now.getUTCMonth() + 1).padStart(2, "0");
-      const currMonth = `${y}-${m}`;
-      const prev = new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
-      );
-      const py = prev.getUTCFullYear();
-      const pm = String(prev.getUTCMonth() + 1).padStart(2, "0");
-      const prevMonth = `${py}-${pm}`;
+/**
+ * Backfill timesheets for the current and previous month, run an initial
+ * retention sweep, then schedule periodic retention and the heartbeat-gap
+ * detector. Deferred after boot so the first wave of client traffic is not
+ * competing with these maintenance scans.
+ */
+function scheduleBackgroundJobs(): void {
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const now = new Date();
+        const y = now.getUTCFullYear();
+        const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+        const currMonth = `${y}-${m}`;
+        const prev = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
+        );
+        const py = prev.getUTCFullYear();
+        const pm = String(prev.getUTCMonth() + 1).padStart(2, "0");
+        const prevMonth = `${py}-${pm}`;
 
-      const clients = await getClients();
-      for (const c of clients) {
-        const id = String(c?.id || "").trim();
-        if (!id) continue;
-        try {
-          await backfillTimesheetFromActivity(id, prevMonth);
-        } catch {}
-        try {
-          await backfillTimesheetFromActivity(id, currMonth);
-        } catch {}
+        const clients = await getClients();
+        for (const c of clients) {
+          const id = String(c?.id || "").trim();
+          if (!id) continue;
+          try {
+            await backfillTimesheetFromActivity(id, prevMonth);
+          } catch (e) {
+            console.warn(`[Backfill] ${id} ${prevMonth} failed:`, e);
+          }
+          try {
+            await backfillTimesheetFromActivity(id, currMonth);
+          } catch (e) {
+            console.warn(`[Backfill] ${id} ${currMonth} failed:`, e);
+          }
+        }
+      } catch (e) {
+        console.warn("[Backfill] sweep failed:", e);
       }
-    } catch {}
 
+      // Index any report files that predate DB-backed reports so they appear
+      // in the admin UI and are subject to retention.
+      try {
+        const indexed = await indexExistingReports(UPLOAD_DIR);
+        if (indexed > 0) {
+          console.log(`[Reports] Backfilled ${indexed} report file(s) into the DB.`);
+        }
+      } catch (e) {
+        console.error("[Reports] Backfill failed:", e);
+      }
+
+      try {
+        await runRetentionOnce();
+      } catch (e) {
+        console.error("[Retention] initial run failed:", e);
+      }
+
+      setInterval(() => {
+        runRetentionOnce().catch((e) =>
+          console.error("[Retention] scheduled run failed:", e),
+        );
+      }, RETENTION_INTERVAL_MS);
+
+      startHeartbeatGapDetector();
+    })();
+  }, BACKGROUND_JOBS_START_DELAY_MS);
+}
+
+/** Attach the WebSocket server (command channel + screen streaming). */
+function attachWebSocketServer(httpServer: import("http").Server): WebSocketServer {
+  // WebSocket: no compression, 2MB max payload (flat memory for 20 clients)
+  const wss = new WebSocketServer({
+    server: httpServer,
+    perMessageDeflate: false,
+    maxPayload: 2 * 1024 * 1024,
+  });
+  wss.on("connection", async (socket: WebSocket, req: IncomingMessage) => {
     try {
-      await runRetentionOnce();
-    } catch {}
-
-    setInterval(
-      () => {
-        runRetentionOnce().catch(() => {});
-      },
-      6 * 60 * 60 * 1000,
-    );
-  })();
-}, 30_000);
-
-// Start HTTP server and attach WebSocket
-const server = app.listen(PORT, HOST as any, () => {
-  console.log(`Backend listening on http://${HOST}:${PORT}`);
-});
-
-// WebSocket: no compression, 64KB max payload (flat memory for 20 clients)
-const wss = new WebSocketServer({
-  server,
-  perMessageDeflate: false,
-  maxPayload: 65536,
-});
-wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-  try {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
+    if (url.pathname === "/ws/stream") {
+      const streamClientId = String(url.searchParams.get("clientId") || "").trim();
+      const client = streamClientId ? await getClient(streamClientId) : null;
+      const authenticated = verifyAgentWsSignature({
+        clientId: streamClientId,
+        timestamp: String(url.searchParams.get("ts") || ""),
+        nonce: String(url.searchParams.get("nonce") || ""),
+        signature: String(url.searchParams.get("sig") || ""),
+        secrets: getKeysToTry(client?.encryptionKey),
+      });
+      if (!authenticated) {
+        socket.close(1008, "Unauthorized");
+        return;
+      }
+      registerStreamSource(streamClientId, socket);
+      return;
+    }
+
+    if (url.pathname.startsWith("/ws/admin/stream/")) {
+      // Browser WebSockets carry the same-origin HttpOnly session cookie.
+      // URL tokens are forbidden because proxy logs/history can disclose them.
+      const token = extractAuthToken(req as any);
+      let actor = "";
+      try {
+        const payload = jwt.verify(token, JWT_SECRET) as any;
+        actor = String(payload?.email || payload?.id || "");
+      } catch {
+        socket.close();
+        return;
+      }
+      const streamClientId = decodeURIComponent(
+        url.pathname.replace(/^\/ws\/admin\/stream\//, ""),
+      ).trim();
+      if (!streamClientId) {
+        socket.close();
+        return;
+      }
+      registerStreamViewer(streamClientId, socket, actor);
+      return;
+    }
+
+    if (url.pathname !== "/ws") {
+      socket.close(1008, "Unsupported WebSocket path");
+      return;
+    }
     const rawId = url.searchParams.get("clientId") || "";
     const clientId = rawId.trim();
-    if (!clientId) {
-      socket.close();
+    const client = clientId ? await getClient(clientId) : null;
+    const authenticated = verifyAgentWsSignature({
+      clientId,
+      timestamp: String(url.searchParams.get("ts") || ""),
+      nonce: String(url.searchParams.get("nonce") || ""),
+      signature: String(url.searchParams.get("sig") || ""),
+      secrets: getKeysToTry(client?.encryptionKey),
+    });
+    if (!authenticated) {
+      socket.close(1008, "Unauthorized");
       return;
     }
     // The IP this client used to reach the server — used to build
@@ -473,71 +655,97 @@ wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
   } catch {
     socket.close();
   }
-});
+  });
+  return wss;
+}
 
-// Admin endpoint to send command to a client via WebSocket
-app.post("/api/commands/send", requireAuth, async (req, res) => {
-  try {
-    const { clientId, type, payload } = req.body as any;
-    if (!clientId || !type)
-      return res.status(400).json({ message: "clientId and type required" });
-    const id = sendCommandToClient(clientId, type, payload ?? {});
-    if (!id) return res.status(404).json({ message: "client not connected" });
-    res.json({ ok: true, id });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to send command" });
-  }
-});
+// Express 4 does not natively forward rejected async route promises. The
+// express-async-errors patch above routes them here so a transient DB/filesystem
+// failure produces a bounded JSON 500 response instead of an unhandled
+// rejection that can destabilize the process.
+app.use(jsonErrorHandler);
 
-// Admin convenience endpoints
-const createCommandSender = (
-  type: string,
-  payloadFactory: (req: express.Request) => any,
-) => {
-  return async (req: express.Request, res: express.Response) => {
-    try {
-      const { clientId } = req.body as any;
-      if (!clientId)
-        return res.status(400).json({ message: "clientId required" });
-      const payload = payloadFactory(req);
-      const id = sendCommandToClient(clientId, type, payload);
-      if (!id) return res.status(404).json({ message: "client not connected" });
-      res.json({ ok: true, id });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ message: `Failed to request ${type}` });
-    }
+// ── Startup ───────────────────────────────────────────────────────────────────
+
+const SHUTDOWN_FORCE_EXIT_MS = 10_000;
+
+function registerGracefulShutdown(
+  httpServer: import("http").Server,
+  wss: WebSocketServer,
+): void {
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Shutdown] ${signal} received, closing gracefully...`);
+
+    // Safety net: if a connection refuses to drain, force exit rather than hang.
+    const forceTimer = setTimeout(() => {
+      console.error("[Shutdown] Graceful close timed out, forcing exit.");
+      process.exit(1);
+    }, SHUTDOWN_FORCE_EXIT_MS);
+    forceTimer.unref();
+
+    wss.close();
+    httpServer.close(() => {
+      void (async () => {
+        await disconnectPrisma();
+        clearTimeout(forceTimer);
+        console.log("[Shutdown] Closed cleanly.");
+        process.exit(0);
+      })();
+    });
   };
-};
 
-app.post(
-  "/api/commands/list",
-  requireAuth,
-  createCommandSender("list", (req) => {
-    const {
-      basePath,
-      pattern = "*",
-      recursive = false,
-      maxEntries = 1000,
-      includeDirs = true,
-    } = req.body;
-    return { basePath, pattern, recursive, maxEntries, includeDirs };
-  }),
-);
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
 
-app.post(
-  "/api/commands/file",
-  requireAuth,
-  createCommandSender("file", (req) => {
-    return { path: req.body.path };
-  }),
-);
+async function bootstrap(): Promise<void> {
+  // 1. The database is a hard dependency — every route needs it. Retry to ride
+  //    out a Postgres that is still starting; exit (so the service/PM2 restarts
+  //    us) only after the configured attempts, instead of serving 500s forever.
+  try {
+    await connectWithRetry();
+  } catch (e) {
+    console.error(
+      "[Boot] Database unavailable:",
+      e instanceof Error ? e.message : e,
+    );
+    process.exit(1);
+  }
 
-app.post(
-  "/api/commands/folder",
-  requireAuth,
-  createCommandSender("folder", (req) => {
-    return { path: req.body.path };
-  }),
-);
+  // 2. Seed the admin account now that the DB is reachable.
+  try {
+    await ensureAdmin();
+  } catch (e) {
+    console.error("[Boot] ensureAdmin failed:", e);
+  }
+
+  // 3. Authoritative time sync — every ingest stamps data with it, so warm it
+  //    before the first request lands.
+  startTimeSync();
+
+  // 4. Accept traffic and attach the WebSocket server.
+  const httpServer = app.listen(PORT, HOST as unknown as string, () => {
+    console.log(
+      `Backend listening on http://${HOST}:${PORT} (env=${config.nodeEnv})`,
+    );
+  });
+  const wss = attachWebSocketServer(httpServer);
+
+  // 5. Deferred maintenance jobs (backfill, retention, gap detector).
+  scheduleBackgroundJobs();
+
+  // 6. Clean shutdown on signals.
+  registerGracefulShutdown(httpServer, wss);
+}
+
+if (require.main === module) {
+  void bootstrap().catch((e) => {
+    console.error("[Boot] Fatal startup error:", e);
+    process.exit(1);
+  });
+}
+
+export { app };
