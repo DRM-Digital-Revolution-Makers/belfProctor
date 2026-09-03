@@ -38,7 +38,7 @@ if not exist "%~dp0install-windows-service.ps1" (
 REM Validate required binaries exist (publish folder)
 if not exist "BelfProctor.exe" (
     call :log "ERROR: BelfProctor.exe not found."
-    call :log "Please build and publish the project, then run install-client.bat from the publish folder."
+    call :log "Please run this installer from the released client package containing BelfProctor.exe."
     goto :end
 )
 call :log "Found installer and binaries."

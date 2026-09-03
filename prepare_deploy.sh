@@ -42,12 +42,12 @@ cd client
 if command -v dotnet >/dev/null 2>&1; then
     echo "Building Client for Windows x64..."
     # Publish for Windows x64 self-contained (no .NET runtime needed on target)
-    dotnet publish BelfProctor.csproj -c Release -r win-x64 --self-contained true -o "$CLIENT_DEPLOY"
+    dotnet publish Properties/BelfProctor.csproj -c Release -r win-x64 --self-contained true -o "$CLIENT_DEPLOY"
     
     # Copy installation scripts
     echo "Copying installation scripts..."
-    cp install-client.bat "$CLIENT_DEPLOY/"
-    cp install-windows-service.ps1 "$CLIENT_DEPLOY/"
+    cp scripts/install-client.bat "$CLIENT_DEPLOY/"
+    cp scripts/install-windows-service.ps1 "$CLIENT_DEPLOY/"
     
     echo "Client built successfully."
 else

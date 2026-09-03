@@ -128,6 +128,8 @@ try {
         "BelfProctor.dll",
         "BelfProctor.runtimeconfig.json",
         "appsettings.json",
+        "uninstall.ps1",
+        "update-helper.ps1",
         "Microsoft.Extensions.Hosting.dll",
         "Microsoft.Extensions.Hosting.WindowsServices.dll",
         "Microsoft.Extensions.Configuration.dll",

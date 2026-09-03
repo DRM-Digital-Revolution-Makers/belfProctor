@@ -24,6 +24,7 @@ import workRouter from "./routes/work";
 import pcSessionRouter from "./routes/pcSession";
 import browserActivityRouter from "./routes/browserActivity";
 import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
+import { startGitHubReleasePoller } from "./jobs/githubReleasePoller";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -117,7 +118,14 @@ app.options(/.*/, cors(corsOptions));
 if (process.env.NODE_ENV !== "production") {
   app.use(morgan("combined"));
 }
-app.use(express.json({ limit: "50mb" }));
+app.use(
+  express.json({
+    limit: "50mb",
+    verify: (req: any, _res, buf) => {
+      req.rawBody = Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Rate limiter: 10000 req/min (virtually unlimited for your scale). Env RATE_LIMIT_MAX overrides.
@@ -465,6 +473,7 @@ setTimeout(() => {
     );
 
     startHeartbeatGapDetector();
+    startGitHubReleasePoller();
   })();
 }, 30_000);
 

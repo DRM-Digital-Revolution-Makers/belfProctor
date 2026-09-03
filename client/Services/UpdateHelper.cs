@@ -271,83 +271,45 @@ public static class UpdateHelper
             var targetExe = Path.Combine(versionDir, InstalledExeName);
             var logPath = Path.Combine(TempRoot, $"update_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.log");
             var scriptPath = Path.Combine(TempRoot, $"update_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.ps1");
+            var sourceScriptPath = ResolveUpdateScriptPath(AppContext.BaseDirectory);
+            if (sourceScriptPath == null)
+            {
+                logger?.LogError("Update helper script not found near base directory {BaseDir}", AppContext.BaseDirectory);
+                return false;
+            }
 
-            var script = $@"
-$ErrorActionPreference = 'SilentlyContinue'
-$logFile = '{Ps(logPath)}'
-$svc = '{ServiceName}'
-$currentExe = '{Ps(currentExe)}'
-$stagedExe = '{Ps(stagedExePath)}'
-$versionDir = '{Ps(versionDir)}'
-$targetExe = '{Ps(targetExe)}'
-$installRoot = '{Ps(installRoot)}'
-function Log($m) {{ try {{ Add-Content -LiteralPath $logFile -Value (""{{0:o}} {{1}}"" -f (Get-Date).ToUniversalTime(), $m) }} catch {{}} }}
-function StartAndWait($name) {{
-  try {{ Start-Service -Name $name -ErrorAction SilentlyContinue }} catch {{}}
-  for ($i=0; $i -lt 120; $i++) {{
-    try {{
-      $st = (Get-Service -Name $name -ErrorAction SilentlyContinue).Status
-      if ($st -eq 'Running') {{ return $true }}
-    }} catch {{}}
-    Start-Sleep -Seconds 1
-  }}
-  return $false
-}}
-Log 'begin versioned update'
-try {{
-  New-Item -ItemType Directory -Force -Path $versionDir | Out-Null
-  Copy-Item -LiteralPath $stagedExe -Destination $targetExe -Force -ErrorAction Stop
-  try {{ Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue }} catch {{}}
-  # Mirror config files from install root next to the new exe — Program.cs
-  # reads appsettings.json from AppContext.BaseDirectory and from LocalSystem's
-  # AppData (empty), so without this the new versioned exe sees no ClientId
-  # and the worker exits immediately.
-  foreach ($cfg in 'appsettings.json','appsettings.Production.json') {{
-    $src = Join-Path $installRoot $cfg
-    if (Test-Path -LiteralPath $src) {{
-      Copy-Item -LiteralPath $src -Destination (Join-Path $versionDir $cfg) -Force -ErrorAction SilentlyContinue
-    }}
-  }}
-  Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
-  foreach ($n in 'BelfProctor','Microsoft OneDrive','SystemWorker') {{
-    try {{ taskkill /F /IM ($n + '.exe') /T 2>$null | Out-Null }} catch {{}}
-  }}
-  $imagePath = '""' + $targetExe + '"" --auto-start'
-  Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $imagePath -Type ExpandString -ErrorAction Stop
-  Log ('binPath set to ' + $imagePath)
-  if (-not (StartAndWait $svc)) {{ throw 'new service version did not start' }}
-  Log 'new version started'
-  try {{
-    Get-ChildItem -LiteralPath (Join-Path $installRoot 'versions') -Directory |
-      Sort-Object LastWriteTime -Descending |
-      Select-Object -Skip 3 |
-      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-  }} catch {{}}
-}} catch {{
-  Log ('update failed: ' + $_.Exception.Message)
-  try {{
-    $rollbackImage = '""' + $currentExe + '"" --auto-start'
-    Set-ItemProperty -Path ('HKLM:\SYSTEM\CurrentControlSet\Services\' + $svc) -Name 'ImagePath' -Value $rollbackImage -Type ExpandString -ErrorAction SilentlyContinue
-  }} catch {{}}
-  try {{ StartAndWait $svc | Out-Null }} catch {{}}
-}}
-try {{ Remove-Item -LiteralPath $stagedExe -Force -ErrorAction SilentlyContinue }} catch {{}}
-try {{ Remove-Item -LiteralPath '{Ps(LockFile)}' -Force -ErrorAction SilentlyContinue }} catch {{}}
-try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }} catch {{}}
-";
-
-            File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
+            File.Copy(sourceScriptPath, scriptPath, overwrite: true);
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-NonInteractive");
+            psi.ArgumentList.Add("-WindowStyle");
+            psi.ArgumentList.Add("Hidden");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(scriptPath);
+            psi.ArgumentList.Add("-ServiceName");
+            psi.ArgumentList.Add(ServiceName);
+            psi.ArgumentList.Add("-CurrentExe");
+            psi.ArgumentList.Add(currentExe);
+            psi.ArgumentList.Add("-StagedExe");
+            psi.ArgumentList.Add(stagedExePath);
+            psi.ArgumentList.Add("-VersionDir");
+            psi.ArgumentList.Add(versionDir);
+            psi.ArgumentList.Add("-TargetExe");
+            psi.ArgumentList.Add(targetExe);
+            psi.ArgumentList.Add("-InstallRoot");
+            psi.ArgumentList.Add(installRoot);
+            psi.ArgumentList.Add("-LockFile");
+            psi.ArgumentList.Add(LockFile);
+            psi.ArgumentList.Add("-LogPath");
+            psi.ArgumentList.Add(logPath);
             var proc = Process.Start(psi);
             if (proc == null) return false;
             try { proc.PriorityClass = ProcessPriorityClass.Idle; } catch { }
@@ -379,5 +341,24 @@ try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyConti
         return new string(chars);
     }
 
-    private static string Ps(string value) => value.Replace("'", "''");
+    private static string? ResolveUpdateScriptPath(string baseDir)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "update-helper.ps1"),
+            Path.Combine(baseDir, "scripts", "update-helper.ps1")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath)) return fullPath;
+            }
+            catch { }
+        }
+
+        return null;
+    }
 }

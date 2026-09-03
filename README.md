@@ -75,3 +75,11 @@ npm run dev              # Vite на http://localhost:5173
 - "Can't reach database server": запустите PostgreSQL локально или Docker.
 - Prisma Client не сгенерирован: выполните `npm run prisma:generate` в `server/backend`.
 - Vite ошибка экспорта `notificationProvider`: уже устранено, импорт удалён.
+
+## Обновления через `main`
+- `main` считается production-веткой.
+- Push/merge в `main` запускает GitHub Actions workflow `.github/workflows/production-release.yml`.
+- Workflow собирает backend, frontend и клиентский Windows exe, затем публикует GitHub Release.
+- LAN-сервер может раз в сутки забирать latest release и рассылать новую клиентскую версию рабочим станциям через локальный WebSocket/download-канал.
+
+Подробная инструкция: `docs/ops/production-update-workflow.md`.
