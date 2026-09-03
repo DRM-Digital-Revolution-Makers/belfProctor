@@ -3,13 +3,11 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * E2E config for the admin panel.
  *
- * Assumes the full stack is already running and serving the SPA + API at
- * BASE_URL (default http://127.0.0.1:8080). Bring it up with:
- *   docker run ... postgres   (or docker compose up postgres)
- *   cd server/backend && npm run build && PORT=8080 ... node dist/index.js
- * See TEST_PLAN.md for the exact single-laptop steps.
+ * Uses a local Vite server with deterministic API mocks by default. Set
+ * E2E_BASE_URL to exercise the same suite against the HTTPS Compose endpoint.
  */
-const BASE_URL = process.env.E2E_BASE_URL || "http://127.0.0.1:8080";
+const externalBaseUrl = process.env.E2E_BASE_URL;
+const BASE_URL = externalBaseUrl || "http://127.0.0.1:4173";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -18,6 +16,14 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   reporter: [["list"]],
+  webServer: externalBaseUrl
+    ? undefined
+    : {
+        command: "node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173",
+        url: BASE_URL,
+        reuseExistingServer: false,
+        timeout: 30_000,
+      },
   use: {
     baseURL: BASE_URL,
     headless: true,

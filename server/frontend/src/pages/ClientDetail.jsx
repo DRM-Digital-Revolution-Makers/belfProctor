@@ -54,7 +54,7 @@ const ClientDetail = () => {
   const { t, i18n } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [loading, setLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState(dayjs());
@@ -163,8 +163,7 @@ const ClientDetail = () => {
 
   const getImageUrl = (url) => {
     const baseUrl = API_URL.replace(/\/api$/, "");
-    const token = localStorage.getItem("token") || "";
-    return `${baseUrl}${url}?token=${token}`;
+    return `${baseUrl}${url}`;
   };
 
   const imageFallback =
@@ -266,7 +265,8 @@ const ClientDetail = () => {
         }
         const resp = await authFetch(`${API_URL}/clients/${id}`, {
           method: "DELETE",
-          headers: { "X-Admin-Password": String(password || "").trim() },
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: String(password || "").trim() }),
         });
         if (resp.ok) {
           message.success(t("clients.deleted"));
@@ -1538,7 +1538,7 @@ function MonthTab({ monthlyData, formatDurationHM, combinedChartData, t }) {
 function WorkTab({ clientId, date, getImageUrl }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
   const [summary, setSummary] = React.useState(null);
   const [sessions, setSessions] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
@@ -1953,9 +1953,11 @@ function LiveViewPanel({ clientId, apiUrl }) {
   const start = React.useCallback(() => {
     stop();
     setHasFrame(false);
-    const token = localStorage.getItem("token") || "";
-    const base = apiUrl.replace(/\/api$/, "").replace(/^http/, "ws");
-    const ws = new WebSocket(`${base}/ws/admin/stream/${encodeURIComponent(clientId)}?token=${encodeURIComponent(token)}`);
+    const configuredBase = apiUrl.replace(/\/api$/, "");
+    const base = configuredBase.startsWith("http")
+      ? configuredBase.replace(/^http/, "ws")
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const ws = new WebSocket(`${base}/ws/admin/stream/${encodeURIComponent(clientId)}`);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
     setStatus("connecting");
@@ -2298,7 +2300,7 @@ function fmtWorkDateTime(value) {
 function AppsTab({ clientId, t }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
@@ -2737,7 +2739,7 @@ function formatFileSize(bytes) {
 function FilesTab({ clientId, t }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [driveOptions, setDriveOptions] = React.useState([]);
   const [drivesLoading, setDrivesLoading] = React.useState(true);

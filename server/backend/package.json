@@ -5,18 +5,25 @@
   "main": "dist/index.js",
   "type": "commonjs",
   "scripts": {
+    "predev": "node scripts/check-node-version.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "prebuild": "node scripts/check-node-version.js",
     "build": "tsc",
+    "prestart": "node scripts/check-node-version.js",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "migrate:storage": "node dist/scripts/migrate-to-postgres.js",
     "backfill:timesheet": "ts-node src/scripts/backfill-timesheet.ts",
+    "presmoke": "node scripts/check-node-version.js",
     "smoke": "node scripts/smoke-test.js",
-    "test": "jest"
+    "pretest": "node scripts/check-node-version.js",
+    "test": "jest",
+    "pretest:coverage": "node scripts/check-node-version.js",
+    "test:coverage": "jest --coverage --runInBand && node scripts/check-coverage.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.22.2 <23"
   },
   "keywords": [],
   "author": "",
@@ -57,10 +64,12 @@
     "ts-jest": "^29.4.11",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.3.3",
-    "xlsx": "^0.18.5"
+    "typescript": "^5.3.3"
   },
   "optionalDependencies": {
     "sharp": "^0.35.4"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

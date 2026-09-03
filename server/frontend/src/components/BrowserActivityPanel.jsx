@@ -4,7 +4,7 @@ import { formatTashkent } from "../utils/time";
 
 const API_URL =
   import.meta.env.VITE_API_URL ||
-  `http://${window.location.hostname}:8080/api`;
+  "/api";
 
 const BROWSERS = ["", "chrome", "edge", "yandex", "brave", "opera", "vivaldi", "firefox"];
 

@@ -8,14 +8,22 @@ export interface AuthRequest extends Request {
   user?: { id: number; role: string; email: string };
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
-  let token = "";
+export function extractAuthToken(req: Request): string {
   const auth = req.headers.authorization;
-  if (auth && auth.startsWith("Bearer ")) {
-    token = auth.slice("Bearer ".length);
-  } else if (typeof req.query.token === "string" && req.query.token) {
-    token = String(req.query.token);
-  } else {
+  if (auth && auth.startsWith("Bearer ")) return auth.slice("Bearer ".length);
+  const cookies = String(req.headers.cookie || "");
+  for (const part of cookies.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "bp_session") return decodeURIComponent(rest.join("="));
+  }
+  // Never accept session JWTs in URLs: query strings leak through browser
+  // history, reverse-proxy/access logs and Referer headers.
+  return "";
+}
+
+export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  const token = extractAuthToken(req);
+  if (!token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
   try {
@@ -25,4 +33,13 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   } catch (e) {
     return res.status(401).json({ message: "Invalid token" });
   }
+}
+
+export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {
+  return requireAuth(req, res, () => {
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Administrator role required" });
+    }
+    next();
+  });
 }

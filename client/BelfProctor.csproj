@@ -5,25 +5,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OutputType>WinExe</OutputType>
-    <!--
-      Production (Release) ships under a disguised name per the deployment spec.
-      Debug/test builds use the real name so the OS application-control policy
-      (WDAC / Smart App Control) doesn't block loading a DLL that masquerades as
-      Microsoft OneDrive — which otherwise makes the unit tests unrunnable.
-    -->
-    <AssemblyName Condition="'$(Configuration)' == 'Release'">Microsoft One Drive</AssemblyName>
-    <AssemblyName Condition="'$(Configuration)' != 'Release'">BelfProctor</AssemblyName>
+    <AssemblyName>BelfProctor</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnableDefaultItems>false</EnableDefaultItems>
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <NuGetAudit>true</NuGetAudit>
-    <Authors>Microsoft One Drive</Authors>
-    <Company>Microsoft One Drive</Company>
-    <Product>Microsoft One Drive</Product>
-    <Description>Microsoft One Drive</Description>
+    <Authors>BelfProctor</Authors>
+    <Company>BelfProctor</Company>
+    <Product>BelfProctor Agent</Product>
+    <Description>BelfProctor endpoint monitoring agent</Description>
     <Version>2.0.2</Version>
     <AssemblyVersion>2.0.2.0</AssemblyVersion>
     <FileVersion>2.0.2.0</FileVersion>
@@ -38,6 +33,10 @@
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.30" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TrustedUpdateSignerThumbprint)' != ''">
+    <AssemblyMetadata Include="BelfProctor.TrustedUpdateSignerThumbprint" Value="$(TrustedUpdateSignerThumbprint)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -63,6 +62,7 @@
     <Compile Include="Models\WorkEvent.cs" />
     <Compile Include="Models\BrowserVisit.cs" />
     <Compile Include="Services\DataTransmissionService.cs" />
+    <Compile Include="Services\DesktopAgentSupervisor.cs" />
     <Compile Include="Services\IDataTransmissionService.cs" />
     <Compile Include="Services\IActivityMonitorService.cs" />
     <Compile Include="Services\IPolicyService.cs" />

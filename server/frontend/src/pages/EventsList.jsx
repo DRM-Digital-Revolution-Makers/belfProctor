@@ -314,7 +314,7 @@ export default function EventsList() {
   const navigate = useNavigate();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);

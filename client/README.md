@@ -1,205 +1,113 @@
-# BelfProctor - Система мониторинга и контроля
+# BelfProctor Windows agent
 
-BelfProctor - это Windows служба для мониторинга системных событий, создания скриншотов и обеспечения безопасности рабочих станций.
+BelfProctor состоит из двух процессов одного подписанного EXE:
 
-## Возможности
+- служба `BelfProctor` (`--service-host`) работает как лёгкий LocalSystem-supervisor;
+- задача `BelfProctor-Desktop` (`--auto-start`) запускает worker в интерактивной
+  сессии для screenshot, activity, WMI/USB и live view.
 
-- ✅ **Создание скриншотов** с настраиваемыми интервалами
-- ✅ **Мониторинг системных событий**: подключение USB, запуск приложений, сетевая активность
-- ✅ **Безопасная передача данных** на центральный сервер с шифрованием
-- ✅ **Локальные политики безопасности** с возможностью обновления с сервера
-- ✅ **Логирование и отчетность** о состоянии системы
-- ✅ **Контроль стабильности** с автоматическим перезапуском при сбоях
-- ✅ **Работа как Windows служба** в фоновом режиме
+## Требования
 
-## Системные требования
+- Windows 11 или Windows Server 2022;
+- права администратора для установки;
+- production HTTPS endpoint;
+- уникальные `ClientId` и `EncryptionKey` длиной не менее 32 символов;
+- production code-signing PFX с доверенной цепочкой для выпуска.
 
-- Windows 10/11 или Windows Server 2016+
-- .NET 8.0 Runtime
-- Права администратора для установки
-- Минимум 100 МБ свободного места на диске
+Агент публикуется self-contained под `win-x64`; установка .NET Runtime на рабочую
+станцию не требуется.
+
+## Сборка подписанного release
+
+Из корня репозитория:
+
+```powershell
+$password = Read-Host 'PFX password' -AsSecureString
+.\client\build-release.ps1 `
+  -PfxPath C:\secure\belfproctor-publisher.pfx `
+  -PfxPassword $password
+```
+
+Конвейер создаёт self-contained single-file EXE, подписывает EXE, installer и
+uninstaller, проверяет `Valid` Authenticode и точный signer thumbprint, формирует
+SHA-256 manifest и ZIP. Unsigned batch wrappers и альтернативный unsigned publish
+path не включаются; mutable config в ZIP отсутствует и создаётся подписанным
+installer из safe template. Self-signed сертификат допустим только в отдельном
+ephemeral test harness и не закрывает production gate.
+
+Production release выполняется только из чистого Git worktree; manifest фиксирует
+точный `sourceCommit` и `sourceState=clean`. Dirty-tree override доступен только
+изолированному ephemeral pipeline test и не принимается с publisher PFX.
 
 ## Установка
 
-### Автоматическая установка
+Распакуйте подписанный ZIP и в elevated PowerShell запустите подписанный
+installer с реальными значениями:
 
-1. Скачайте все файлы проекта
-2. Запустите `install-client.bat` **от имени администратора**
-3. Дождитесь завершения установки
+```powershell
+.\install-windows-service.ps1 `
+  -ServerUrl 'https://proctor.example.com/api' `
+  -ClientId 'device-unique-id' `
+  -EncryptionKey '<unique-32+-character-secret>' `
+  -TrustedUpdateSignerThumbprint '<40-hex-publisher-thumbprint>'
+```
 
-### Ручная установка
-
-1. Соберите проект:
-   ```bash
-   dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
-   ```
-
-2. Запустите PowerShell от имени администратора:
-  ```powershell
-  Set-ExecutionPolicy Bypass -Scope Process
-  .\install-windows-service.ps1
-  ```
+Installer до изменения системы проверяет elevation, HTTPS, credentials,
+собственную подпись и подписи EXE/uninstaller. Он копирует только эти подписанные
+payloads и создаёт config из покрытого своей подписью safe template. Файлы размещаются в защищённом
+`C:\Program Files\BelfProctor`; ACL даёт пользователю только чтение/запуск.
+Self-install из GUI и автозапуск через `HKCU\Run` намеренно не поддерживаются.
 
 ## Конфигурация
 
-### Основные настройки (appsettings.json)
+Release загружает только защищённый `appsettings.json` рядом с EXE. GUI изменяет
+его атомарной заменой, сохраняя не показанные в форме security-поля и feature
+flags. Пользовательский `%LOCALAPPDATA%\BelfProctor\appsettings.json` допускается
+только в Debug build и не может переопределить production-конфигурацию.
+
+Обязательные поля:
 
 ```json
 {
   "ProctorSettings": {
-    "ScreenshotInterval": 30000,        // Интервал скриншотов (мс)
-    "ScreenshotQuality": 85,            // Качество JPEG (1-100)
-    "ServerUrl": "https://your-server.com/api",
-    "ClientId": "unique-client-id",
-    "EncryptionKey": "32-character-encryption-key",
-    "MonitorUSB": true,                 // Мониторинг USB устройств
-    "MonitorProcesses": true,           // Мониторинг процессов
-    "MonitorNetwork": true,             // Мониторинг сети
-    "BlockedProcesses": [               // Заблокированные процессы
-      "cmd.exe",
-      "powershell.exe"
-    ]
+    "ServerUrl": "https://proctor.example.com/api",
+    "ClientId": "device-unique-id",
+    "EncryptionKey": "unique-secret-with-at-least-32-characters",
+    "TrustedUpdateSignerThumbprint": "40_HEX_CHARACTERS_WITHOUT_SPACES",
+    "ScreenshotIntervalMs": 300000,
+    "ScreenshotQuality": 75,
+    "MonitorUSB": true,
+    "MonitorProcesses": true,
+    "MonitorNetwork": true
   }
 }
 ```
 
-### Важные параметры для настройки
+Новые payloads используют BPG1/AES-256-GCM, а transport в Release — только
+HTTPS/WSS. Обновление проверяет SHA-256, `Valid` Authenticode и embedded signer,
+после чего работает только из защищённого `.update` внутри install root. При
+неуспешном запуске новой версии updater возвращает прежние service/task paths.
 
-1. **ServerUrl** - URL вашего сервера для получения данных
-2. **ClientId** - уникальный идентификатор клиента
-3. **EncryptionKey** - 32-символьный ключ для шифрования данных
-4. **ScreenshotInterval** - интервал между скриншотами в миллисекундах
-5. **BlockedProcesses** - список процессов для блокировки
+## Проверка и эксплуатация
 
-## Структура файлов
-
-```
-C:\Program Files\BelfProctor\
-├── BelfProctor.exe              # Основной исполняемый файл
-├── appsettings.json             # Конфигурация
-├── Screenshots\                 # Папка со скриншотами
-├── Logs\                        # Папка с логами
-├── Reports\                     # Папка с отчетами
-└── Uninstall-Service.ps1        # Скрипт удаления
-```
-
-## Управление службой
-
-### Через Services.msc
-1. Откройте `services.msc`
-2. Найдите "Belf Proctor Service"
-3. Используйте контекстное меню для управления
-
-### Через PowerShell
 ```powershell
-# Проверить статус
 Get-Service BelfProctor
-
-# Остановить службу
-Stop-Service BelfProctor
-
-# Запустить службу
-Start-Service BelfProctor
-
-# Перезапустить службу
-Restart-Service BelfProctor
+Get-ScheduledTask BelfProctor-Desktop
+sc.exe qfailure BelfProctor
 ```
 
-### Через командную строку
-```cmd
-# Проверить статус
-sc query BelfProctor
-
-# Остановить службу
-sc stop BelfProctor
-
-# Запустить службу
-sc start BelfProctor
-```
-
-## Мониторинг и логи
-
-### Расположение логов
-- **Системные логи**: `C:\Program Files\BelfProctor\Logs\`
-- **Windows Event Log**: Applications and Services Logs → BelfProctor
-- **Отчеты**: `C:\Program Files\BelfProctor\Reports\`
-
-### Типы событий
-- **ProcessStarted** - запуск процесса
-- **USBConnected** - подключение USB устройства
-- **NetworkConnection** - сетевое соединение
-- **PolicyViolation** - нарушение политики безопасности
-- **SystemError** - системная ошибка
-
-## Безопасность
-
-### Шифрование данных
-- Все данные шифруются AES-256 перед отправкой на сервер
-- Используется уникальный ключ для каждого клиента
-- Поддерживается целостность данных
-
-### Политики безопасности
-- Блокировка запуска определенных процессов
-- Мониторинг подключения USB устройств
-- Контроль сетевой активности
-- Автоматическое обновление политик с сервера
-
-## Устранение неполадок
-
-### Служба не запускается
-1. Проверьте права администратора
-2. Убедитесь, что .NET 8.0 Runtime установлен
-3. Проверьте логи в Event Viewer
-4. Проверьте конфигурационный файл
-
-### Скриншоты не создаются
-1. Проверьте права доступа к папке Screenshots
-2. Убедитесь, что есть активная сессия пользователя
-3. Проверьте настройки ScreenshotInterval
-
-### Данные не отправляются на сервер
-1. Проверьте настройки ServerUrl
-2. Убедитесь в доступности сервера
-3. Проверьте настройки шифрования
-4. Проверьте сетевое подключение
-
-### Высокое использование ресурсов
-1. Увеличьте ScreenshotInterval
-2. Уменьшите ScreenshotQuality
-3. Настройте очистку старых файлов
-4. Проверьте логи на ошибки
+Автоматические и полевые проверки описаны в
+[`TEST_PLAN.md`](../TEST_PLAN.md). Текущий подтверждённый статус и внешние
+release-gates находятся в
+[`FULL_AUDIT_REPORT_2026-08-31.md`](../FULL_AUDIT_REPORT_2026-08-31.md).
 
 ## Удаление
 
-### Автоматическое удаление
-Запустите от имени администратора:
+В elevated PowerShell из распакованного подписанного release:
+
 ```powershell
-C:\Program Files\BelfProctor\Uninstall-Service.ps1
+.\uninstall-windows-service.ps1
 ```
 
-### Ручное удаление
-1. Остановите службу: `Stop-Service BelfProctor`
-2. Удалите службу: `sc delete BelfProctor`
-3. Удалите папку: `C:\Program Files\BelfProctor`
-
-## API сервера
-
-Служба ожидает следующие эндпоинты на сервере:
-
-- `POST /api/screenshots` - загрузка скриншотов
-- `POST /api/events` - отправка системных событий
-- `POST /api/heartbeat` - отправка heartbeat
-- `POST /api/reports` - отправка отчетов
-- `GET /api/policies` - получение политик безопасности
-
-## Поддержка
-
-При возникновении проблем:
-1. Проверьте логи службы
-2. Проверьте Windows Event Log
-3. Убедитесь в корректности конфигурации
-4. Проверьте сетевое подключение к серверу
-
-## Лицензия
-
-Этот проект предназначен для внутреннего использования.
+Uninstaller проверяет собственную Authenticode-подпись и ограничивает удаление
+каноническими дочерними каталогами BelfProctor.

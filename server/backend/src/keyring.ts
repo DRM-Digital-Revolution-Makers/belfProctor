@@ -16,6 +16,11 @@ export function getKeysToTry(clientKey?: string): string[] {
   const ck = String(clientKey || "").trim();
   if (ck) out.push(ck);
 
+  // Production ingestion is strictly bound to the provisioned per-device
+  // credential. Global keys are migration/dev helpers only: accepting one here
+  // would let a compromised agent impersonate every other client ID.
+  if (config.isProduction) return out;
+
   for (const k of config.encryptionKeys) out.push(k);
 
   if (config.allowDefaultEncryptionKey) {

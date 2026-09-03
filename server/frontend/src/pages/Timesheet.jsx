@@ -86,7 +86,7 @@ export default function Timesheet() {
   dayjs.locale(i18n.language === "uz" ? "uz-latn" : i18n.language);
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [date, setDate] = React.useState(dayjs());
   const [data, setData] = React.useState([]);

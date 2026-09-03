@@ -50,11 +50,6 @@ router.post("/", async (req, res) => {
 
     const now = authoritativeNow();
     if (!usedKey) {
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       return res.status(400).json({ message: "Decryption failed" });
     }
 

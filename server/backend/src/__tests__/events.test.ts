@@ -4,6 +4,8 @@
  */
 import express from "express";
 import request from "supertest";
+import jwt from "jsonwebtoken";
+import { config } from "../config";
 import { encryptAes256CbcPrefixedIv } from "../encryption";
 
 jest.mock("../store", () => ({
@@ -18,10 +20,14 @@ jest.mock("../store", () => ({
 }));
 
 jest.mock("../prisma", () => ({
-  prisma: {},
+  prisma: {
+    event: { findMany: jest.fn(), count: jest.fn() },
+    $transaction: jest.fn(),
+  },
 }));
 
-import { appendEvent, upsertAppStat } from "../store";
+import { appendEvent, upsertAppStat, getAppStats } from "../store";
+import { prisma } from "../prisma";
 import eventsRouter from "../routes/events";
 
 function buildApp() {
@@ -89,5 +95,34 @@ describe("POST /api/events — AppStat filtering", () => {
       expect.any(Date),
     );
     expect(appendEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("ingests an array including numeric event types", async () => {
+    const body = encrypted([
+      { EventType: 2, DeviceId: "USB-1", Description: "connected" },
+      { eventType: "SystemError", description: "failure" },
+    ]);
+    const response = await request(buildApp()).post("/api/events")
+      .set("X-Client-Id", "CLIENT_TEST")
+      .set("Content-Type", "application/octet-stream").send(body).expect(200);
+    expect(response.body).toEqual({ count: 2 });
+    expect(appendEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves sorted stats and bounded paginated events to admins", async () => {
+    (getAppStats as jest.Mock).mockResolvedValueOnce([
+      { name: "low", count: 1 }, { name: "high", count: 5 },
+    ]);
+    (prisma.$transaction as jest.Mock).mockResolvedValueOnce([[{ id: "e1" }], 1]);
+    const token = `Bearer ${jwt.sign({ id: "u1", role: "ADMIN" }, config.jwtSecret)}`;
+    const stats = await request(buildApp()).get("/api/events/stats")
+      .set("Authorization", token).expect(200);
+    expect(stats.body.map((x: any) => x.name)).toEqual(["high", "low"]);
+    const list = await request(buildApp()).get("/api/events?page=2&pageSize=999&clientId=CLIENT_TEST")
+      .set("Authorization", token).expect(200);
+    expect(list.body).toEqual({ data: [{ id: "e1" }], total: 1 });
+    expect((prisma.event.findMany as jest.Mock).mock.calls[0][0]).toMatchObject({
+      where: { clientId: "CLIENT_TEST" }, skip: 50, take: 50,
+    });
   });
 });

@@ -5,11 +5,9 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-proctor}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test:
         - CMD-SHELL
@@ -31,9 +29,9 @@ services:
       PORT: 4000
       HOST: 0.0.0.0
       UPLOAD_DIR: /app/storage
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-proctor}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-proctor}?schema=public
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL must be the public https URL}
       DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-admin@local}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?DEFAULT_ADMIN_PASSWORD must be set in .env}
       RETENTION_SCREENSHOTS_DAYS: ${RETENTION_SCREENSHOTS_DAYS:-30}
@@ -43,7 +41,8 @@ services:
       RETENTION_HEARTBEAT_DAYS: ${RETENTION_HEARTBEAT_DAYS:-2}
       MAX_SCREENSHOT_BYTES: ${MAX_SCREENSHOT_BYTES:-20971520}
       MAX_REPORT_BYTES: ${MAX_REPORT_BYTES:-209715200}
-      MAX_COMMAND_RESULT_BYTES: ${MAX_COMMAND_RESULT_BYTES:-536870912}
+      MAX_COMMAND_RESULT_BYTES: ${MAX_COMMAND_RESULT_BYTES:-104857600}
+      MAX_UPDATE_BYTES: ${MAX_UPDATE_BYTES:-524288000}
       FEATURE_UPDATE_V2: ${FEATURE_UPDATE_V2:-true}
       FEATURE_WORK_TRACKING: ${FEATURE_WORK_TRACKING:-true}
       FEATURE_PROJECT_MAPPING: ${FEATURE_PROJECT_MAPPING:-true}
@@ -52,8 +51,6 @@ services:
       LIVE_VIEW_MAX_STREAMS: ${LIVE_VIEW_MAX_STREAMS:-10}
     volumes:
       - ./backend/storage:/app/storage
-    ports:
-      - "${BACKEND_PORT:-4000}:4000"
     healthcheck:
       test:
         - CMD
@@ -78,7 +75,17 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTP_REDIRECT_PORT:-80}:80"
+    volumes:
+      - type: bind
+        source: ${TLS_CERT_FILE:?TLS_CERT_FILE must point to a PEM certificate}
+        target: /etc/nginx/tls/tls.crt
+        read_only: true
+      - type: bind
+        source: ${TLS_KEY_FILE:?TLS_KEY_FILE must point to its private key}
+        target: /etc/nginx/tls/tls.key
+        read_only: true
 
 volumes:
   pgdata:

@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import crypto from "crypto";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth } from "../middleware/auth";
 import { getClient, getClients } from "../store";
 import { resolveUploadDir } from "../runtimePaths";
 import {
@@ -13,6 +13,8 @@ import {
   listPendingUpdates,
 } from "../wsHub";
 import { prisma } from "../prisma";
+import { config } from "../config";
+import { verifyAgentUpdateDownloadSignature } from "../wsAuth";
 
 const router = Router();
 
@@ -20,11 +22,6 @@ const UPLOAD_DIR = resolveUploadDir();
 const UPDATES_ROOT = path.join(UPLOAD_DIR, "updates");
 const INDEX_FILE = path.join(UPDATES_ROOT, "index.json");
 const DEPLOYMENTS_FILE = path.join(UPDATES_ROOT, "deployments.json");
-
-const MAX_UPDATE_SIZE = parseInt(
-  process.env.MAX_UPDATE_BYTES || String(500 * 1024 * 1024), // 500 MB cap
-  10,
-);
 
 // Multer: stream upload to temp, then move into versioned dir.
 const tempStorage = multer.diskStorage({
@@ -34,12 +31,13 @@ const tempStorage = multer.diskStorage({
     cb(null, tmp);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}_${file.originalname}`);
+    // Never place a client-supplied originalname into a filesystem path.
+    cb(null, `${Date.now()}_${crypto.randomUUID()}.upload`);
   },
 });
 const upload = multer({
   storage: tempStorage,
-  limits: { fileSize: MAX_UPDATE_SIZE },
+  limits: { fileSize: config.uploadLimits.updateBytes },
 });
 
 interface UpdateMeta {
@@ -191,7 +189,7 @@ function streamSha256(filePath: string): Promise<{ sha: string; size: number }> 
 // multipart: file=<BelfProctor.exe>, version=1.0.1, notes=optional
 router.post(
   "/",
-  requireAuth,
+  requireAdmin,
   upload.single("file"),
   async (req, res) => {
     const tempPath = req.file?.path;
@@ -281,7 +279,7 @@ router.get("/", requireAuth, async (_req, res) => {
 });
 
 // DELETE /api/updates/:version  (admin)
-router.delete("/:version", requireAuth, async (req, res) => {
+router.delete("/:version", requireAdmin, async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
     return res.status(400).json({ message: "invalid version" });
@@ -310,7 +308,7 @@ router.get("/deployments", requireAuth, async (_req, res) => {
 
 // POST /api/updates/:version/deploy  (admin)
 // body: { clientIds: string[] | "all" }
-router.post("/:version/deploy", requireAuth, async (req, res) => {
+router.post("/:version/deploy", requireAdmin, async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
     return res.status(400).json({ message: "invalid version" });
@@ -430,7 +428,8 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
 });
 
 // GET /api/updates/:version/file  (client)
-// Auth: X-Client-Id header → must be a known client.
+// Auth: a known client plus a fresh, version-bound device HMAC. The nonce is
+// consumed once, preventing replay even inside the timestamp tolerance window.
 router.get("/:version/file", async (req, res) => {
   const version = String(req.params.version || "").trim();
   if (!isValidVersion(version)) {
@@ -441,8 +440,19 @@ router.get("/:version/file", async (req, res) => {
     return res.status(401).json({ message: "client id required" });
   }
   const client = await getClient(clientId);
-  if (!client) {
+  if (!client?.encryptionKey) {
     return res.status(403).json({ message: "unknown client" });
+  }
+  const authenticated = verifyAgentUpdateDownloadSignature({
+    clientId,
+    version,
+    timestamp: String(req.headers["x-client-timestamp"] || ""),
+    nonce: String(req.headers["x-client-nonce"] || ""),
+    signature: String(req.headers["x-client-signature"] || ""),
+    secrets: [client.encryptionKey],
+  });
+  if (!authenticated) {
+    return res.status(401).json({ message: "invalid client signature" });
   }
   const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
   if (!fs.existsSync(exePath)) {

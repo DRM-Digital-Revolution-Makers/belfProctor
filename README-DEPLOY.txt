@@ -1,48 +1,27 @@
-ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ ДЛЯ СЕРВЕРА WINDOWS 8 И РАБОЧИХ СТАНЦИЙ
-===================================================================
+BelfProctor — production deployment
+===================================
 
-ШАГ 1: ПОДГОТОВКА ФАЙЛОВ (На этом Mac)
---------------------------------------
-1. Откройте Терминал в папке проекта.
-2. Запустите скрипт сборки:
-   sh prepare_deploy.sh
+Server
+------
+The supported production topology is server/docker-compose.yml:
+PostgreSQL and backend stay on the private Compose network; nginx exposes only
+HTTPS 443 and redirects HTTP 80 to HTTPS.
 
-   Это создаст папку 'deploy_package' с двумя подпапками:
-   - server_bundle (для вашего сервера на Windows 8)
-   - client_bundle (для компьютеров сотрудников)
+1. Copy server/.env.example to server/.env.
+2. Replace every change_me value, set PUBLIC_BASE_URL to the public https:// URL,
+   and provide TLS_CERT_FILE/TLS_KEY_FILE for a certificate trusted by agents.
+3. From server run: docker compose up -d --build --wait
+4. Verify: docker compose exec backend npx prisma migrate status
 
-ШАГ 2: НАСТРОЙКА СЕРВЕРА (Компьютер с Windows 8)
-------------------------------------------------
-1. Скопируйте папку 'server_bundle' на ваш сервер (например, в C:\belfProctor).
-2. Установите Node.js, совместимый с Windows 8.
-   - Рекомендуется: Node.js 16.20.2 или 14.21.3.
-   - Скачивайте 64-битный установщик (.msi).
-3. Откройте папку 'server\backend'.
-4. Запустите двойным кликом 'win8-start.bat'.
-   - Это установит зависимости и запустит сервер.
-   - Дождитесь надписи "Starting server".
-   - Если что-то пойдет не так, создастся лог-файл 'server-win8.log'.
-5. (Опционально) Запустите 'win8-install-autostart.bat', чтобы сервер запускался сам при перезагрузке.
-6. Узнайте IP-адрес вашего сервера:
-   - Откройте командную строку (cmd.exe).
-   - Введите 'ipconfig' и нажмите Enter.
-   - Запишите IPv4-адрес (например, 192.168.1.100).
+Agent
+-----
+1. Obtain an Authenticode code-signing PFX owned by the publisher.
+2. Run client/build-release.ps1 with -PfxPath and -PfxPassword.
+3. Verify the generated release-manifest.json and Authenticode signature.
+4. From an elevated PowerShell session, install with the signed
+   install-windows-service.ps1 using ExecutionPolicy AllSigned and pass unique
+   -ClientId/-EncryptionKey,
+   the https:// ServerUrl and the exact publisher certificate thumbprint.
 
-ШАГ 3: НАСТРОЙКА КЛИЕНТОВ (Компьютеры сотрудников)
---------------------------------------------------
-1. Скопируйте папку 'client_bundle' на компьютер сотрудника.
-2. Откройте файл 'appsettings.json' в текстовом редакторе (Блокнот).
-3. Найдите строку: "ServerUrl": "http://192.168.2.1:8080/api"
-4. Замените '192.168.2.1' на IP-адрес вашего сервера (из Шага 2).
-   - Пример: "ServerUrl": "http://192.168.1.100:8080/api"
-5. Сохраните файл.
-6. Нажмите правой кнопкой на 'install-client.bat' и выберите "Запуск от имени администратора".
-   - Это установит BelfProctor как системную службу.
-   - Она будет запускаться автоматически при включении компьютера.
-
-УСТРАНЕНИЕ НЕПОЛАДОК
---------------------
-- Если сервер не запускается: Проверьте файл 'server-win8.log' в папке backend.
-- Если клиент не подключается:
-  - Проверьте Брандмауэр Windows (Firewall) на сервере. Возможно, нужно открыть порт 8080.
-  - Попробуйте открыть 'http://<IP_СЕРВЕРА>:8080' в браузере на компьютере сотрудника, чтобы проверить связь.
+The old Windows 8 + PM2 + plaintext HTTP deployment is unsupported and unsafe.
+Do not expose backend port 4000/8080 or use HTTP/WS for agents.

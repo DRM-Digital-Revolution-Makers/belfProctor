@@ -1,15 +1,11 @@
 using System.Text;
 using System.Windows.Forms;
-using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
 using BelfProctor.Models;
-using System.Security.Principal;
 using System.Security.Cryptography;
 using System.IO;
 using System.Net.Http;
-
-using Microsoft.Win32;
 
 namespace BelfProctor.UI;
 
@@ -59,7 +55,7 @@ public class SettingsForm : Form
         Controls.Add(panel);
         
         AddSectionHeader(panel, "Connection Settings");
-        AddRow(panel, "Server Url (e.g. http://192.168.1.5:8080/api)", _serverUrl);
+        AddRow(panel, "Server URL (e.g. https://proctor.example.com/api)", _serverUrl);
         
         var connButtons = new FlowLayoutPanel { AutoSize = true };
         _testConnection.Text = "Test Connection";
@@ -215,11 +211,17 @@ public class SettingsForm : Form
 
         try
         {
-            using var client = new HttpClient();
+            using var handler = new HttpClientHandler
+            {
+                UseCookies = true,
+                CookieContainer = new System.Net.CookieContainer(),
+            };
+            using var client = new HttpClient(handler);
             client.BaseAddress = new Uri(url.TrimEnd('/') + "/");
             client.Timeout = TimeSpan.FromSeconds(10);
 
-            // 1. Login to get token
+            // Login establishes the HttpOnly bp_session cookie. The server no
+            // longer exposes bearer tokens in JSON responses.
             var loginContent = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(new { email, password }), Encoding.UTF8, "application/json");
             var loginResp = await client.PostAsync("auth/login", loginContent);
             
@@ -229,18 +231,8 @@ public class SettingsForm : Form
                 return;
             }
 
-            var loginJson = await loginResp.Content.ReadAsStringAsync();
-            var loginObj = JObject.Parse(loginJson);
-            var token = loginObj["token"]?.ToString();
-
-            if (string.IsNullOrEmpty(token))
-            {
-                MessageBox.Show("Login succeeded but no token received.", "Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            // 2. Register client
-            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            // HttpClientHandler carries the session cookie to this admin-only
+            // endpoint without exposing it to application code.
             var regContent = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(new { id = clientId, encryptionKey = key }), Encoding.UTF8, "application/json");
             var regResp = await client.PostAsync("clients/register", regContent);
 
@@ -299,29 +291,36 @@ public class SettingsForm : Form
         _blockedProcesses.Text = string.Join(Environment.NewLine, _settings.BlockedProcesses ?? new List<string>());
         _directoryRoots.Text = string.Join(Environment.NewLine, _settings.DirectoryRoots ?? new List<string>());
         
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-            // Check for both old and new keys
-            if (key?.GetValue("WindowsSystemWorker") != null || key?.GetValue("BelfProctor") != null)
-            {
-                _runOnStartup.Checked = true;
-            }
-            else
-            {
-                _runOnStartup.Checked = true; // Default to true for new installs
-            }
-        }
-        catch { }
+        // Startup is owned by the signed installer and the protected
+        // BelfProctor-Desktop scheduled task, not by user-writable HKCU entries.
+        _runOnStartup.Checked = true;
+        _runOnStartup.Enabled = false;
     }
 
     private async Task SaveSettings()
     {
-        // Require Encryption Key
-        if (string.IsNullOrWhiteSpace(_encryptionKey.Text))
+        var serverUrl = _serverUrl.Text.Trim();
+        if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var serverUri) ||
+            (serverUri.Scheme != Uri.UriSchemeHttps && !_settings.AllowInsecureDevelopmentTransport))
         {
-             MessageBox.Show("Encryption Key is required for server communication.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-             return;
+            MessageBox.Show("A valid HTTPS server URL is required.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var clientId = _clientId.Text.Trim();
+        if (string.IsNullOrWhiteSpace(clientId) || clientId.Contains("PROVISION_", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("A unique Client Id is required.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var encryptionKey = _encryptionKey.Text.Trim();
+        if (encryptionKey.Length < 32 ||
+            encryptionKey.Contains("PROVISION_", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(encryptionKey, "ABCDEFGHIJKLMNOP", StringComparison.Ordinal))
+        {
+            MessageBox.Show("A unique encryption key of at least 32 characters is required.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
         }
 
         // Auto-Register if credentials provided
@@ -334,19 +333,38 @@ public class SettingsForm : Form
             }
         }
 
-        // Define install path
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var installDir = Path.Combine(appData, "BelfProctor");
-        var installPath = Path.Combine(installDir, "BelfProctor.exe");
-        var currentPath = Environment.ProcessPath ?? Application.ExecutablePath;
+        // There is exactly one authoritative configuration target. In Release
+        // Program.cs supplies the protected file beside the installed EXE; a
+        // user-writable LocalAppData override is intentionally not loaded.
+        var targetPath = _configPaths.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            MessageBox.Show("No writable configuration target is available.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
 
-        // Save settings to config file (standard logic)
-        var newSettings = new JObject();
-        var section = new JObject();
-        section["ServerUrl"] = _serverUrl.Text;
-        section["ClientId"] = _clientId.Text;
-        section["EncryptionKey"] = _encryptionKey.Text;
-        section["RunOnStartup"] = _runOnStartup.Checked;
+        JObject document;
+        try
+        {
+            document = File.Exists(targetPath)
+                ? JObject.Parse(File.ReadAllText(targetPath))
+                : new JObject();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"The existing configuration is invalid: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // Update only fields exposed by this form. Security-sensitive and
+        // forward-compatible values (trusted signer, feature flags, retention,
+        // transport policy, and future fields) remain intact.
+        var section = document["ProctorSettings"] as JObject ?? new JObject();
+        document["ProctorSettings"] = section;
+        section["ServerUrl"] = serverUrl;
+        section["ClientId"] = clientId;
+        section["EncryptionKey"] = encryptionKey;
+        section["RunOnStartup"] = true;
         section["ScreenshotIntervalMs"] = Convert.ToInt32(_screenshotInterval.Value);
         section["ScreenshotQuality"] = Convert.ToInt32(_screenshotQuality.Value);
         section["ScreenshotPath"] = _screenshotPath.Text;
@@ -361,272 +379,32 @@ public class SettingsForm : Form
         section["PolicyUpdateIntervalMs"] = Convert.ToInt32(_policyUpdateInterval.Value);
         section["DirectoryListingIntervalMs"] = Convert.ToInt32(_directoryListingInterval.Value);
         section["DirectoryRoots"] = new JArray(_directoryRoots.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
-        section["AdminPasswordHash"] = _settings.AdminPasswordHash;
-
-        newSettings["ProctorSettings"] = section;
-
-        // Save to existing paths AND to the install directory if it exists
-        var pathsToSave = new List<string>(_configPaths);
-        pathsToSave.Add(Path.Combine(installDir, "appsettings.json"));
-
-        foreach (var path in pathsToSave)
+        if (!string.IsNullOrWhiteSpace(_settings.AdminPasswordHash))
         {
-            try
-            {
-                var dir = Path.GetDirectoryName(path);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(path, newSettings.ToString());
-            }
-            catch { }
+            section["AdminPasswordHash"] = _settings.AdminPasswordHash;
         }
 
-        // Install logic: Copy ALL files if not already running from install path
-        bool isInstalled = string.Equals(currentPath, installPath, StringComparison.OrdinalIgnoreCase);
-        
-        if (!isInstalled)
-        {
-            try
-            {
-                if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
-
-                // Stop the Windows service first — it owns the running exe as
-                // LocalSystem, so a user-mode Process.Kill cannot release the
-                // file lock. sc.exe stop succeeds for both admin and a service
-                // that allows user control; if neither, the catch below falls
-                // through to Kill+overwrite which may still fail.
-                try
-                {
-                    var stopPsi = new ProcessStartInfo("sc.exe", "stop BelfProctor")
-                    {
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true,
-                    };
-                    using var stopProc = Process.Start(stopPsi);
-                    stopProc?.WaitForExit(10000);
-                    // Give SCM a moment to release the file handle even after
-                    // STATE: STOPPED is reported.
-                    for (int i = 0; i < 20; i++)
-                    {
-                        try
-                        {
-                            using var probe = File.Open(installPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-                            break;
-                        }
-                        catch { System.Threading.Thread.Sleep(250); }
-                    }
-                }
-                catch { }
-
-                // Best-effort: also kill any lingering user-mode processes by name.
-                var existingProcess = Process.GetProcessesByName("BelfProctor").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id))
-                    ?? Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
-                if (existingProcess != null)
-                {
-                    try
-                    {
-                        existingProcess.Kill();
-                        existingProcess.WaitForExit(3000);
-                    }
-                    catch { }
-                }
-
-                // Copy all files from current directory to install directory to ensure dependencies (DLLs, JSONs) are present
-                var sourceDir = Path.GetDirectoryName(currentPath);
-                if (!string.IsNullOrEmpty(sourceDir))
-                {
-                    var files = Directory.GetFiles(sourceDir);
-                    foreach (var file in files)
-                    {
-                        var fileName = Path.GetFileName(file);
-                        var destFile = Path.Combine(installDir, fileName);
-                        // Skip the main exe as we handle it specifically or it might be locked? 
-                        // Actually, File.Copy allows overwriting. 
-                        // Keep the main exe under the canonical BelfProctor.exe name.
-                        
-                        if (string.Equals(file, currentPath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            File.Copy(file, installPath, true);
-                        }
-                        else
-                        {
-                            // Don't copy .pdb files to save space/stealth, and skip old configs
-                            if (!fileName.EndsWith(".pdb") && !fileName.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase)) 
-                            {
-                                File.Copy(file, destFile, true);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Failed to install to system directory: {ex.Message}. Running from current location.");
-                installPath = currentPath; // Fallback
-            }
-        }
-
-        // Setup Registry for Auto-Run (pointing to the PERMANENT install path)
+        var tempPath = targetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-            if (_runOnStartup.Checked)
-            {
-                // IMPORTANT: Quote the path to handle spaces in username/path
-                // Add --auto-start flag
-                key?.SetValue("BelfProctor", $"\"{installPath}\" --auto-start");
-                key?.DeleteValue("WindowsSystemWorker", false);
-                
-                // FALLBACK 1: Create Shortcut in Startup Folder
-                CreateStartupShortcut(installPath, installDir);
-
-                // FALLBACK 2: Scheduled Task (Persistence)
-                CreateScheduledTask(installPath);
-            }
-            else
-            {
-                key?.DeleteValue("WindowsSystemWorker", false);
-                key?.DeleteValue("BelfProctor", false);
-                
-                // Remove Shortcut
-                var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
-                if (File.Exists(shortcutPath)) File.Delete(shortcutPath);
-                var legacyShortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
-                if (File.Exists(legacyShortcutPath)) File.Delete(legacyShortcutPath);
-            }
+            var directory = Path.GetDirectoryName(targetPath)
+                ?? throw new InvalidOperationException("Configuration target has no parent directory");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(tempPath, document.ToString(), new UTF8Encoding(false));
+            File.Move(tempPath, targetPath, true);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Error setting startup: {ex.Message}");
-        }
-
-        MessageBox.Show("Settings saved. Application updated and will restart in background.");
-
-        // Make sure the BelfProctor Windows service exists and is running.
-        // If we're not elevated, this kicks UAC for a child process that does the
-        // sc.exe create + start, then returns ElevationRequested — we treat that
-        // as success and exit; the service will own the worker from then on.
-        var serviceResult = BelfProctor.Services.ServiceInstaller.EnsureInstalled(installPath);
-        bool serviceOwnsWorker =
-            serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.AlreadyInstalled
-            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.Installed
-            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.ElevationRequested;
-
-        if (serviceOwnsWorker)
-        {
-            // The service runs the worker as LocalSystem with --auto-start; no
-            // need to spawn another user-mode copy.
-            Application.Exit();
+            try { File.Delete(tempPath); } catch { }
+            MessageBox.Show($"Could not save the protected configuration: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
-        // Service install failed (e.g. user denied UAC) — fall back to the
-        // legacy HKCU\Run launch so the agent still runs, just not as a service.
-        if (!isInstalled && File.Exists(installPath))
-        {
-            Process.Start(installPath);
-            Application.Exit();
-        }
-        else
-        {
-            var proc = new ProcessStartInfo(Application.ExecutablePath)
-            {
-                UseShellExecute = true,
-                Arguments = "--auto-start",
-            };
-            Process.Start(proc);
-            Application.Exit();
-        }
-    }
-
-    private static bool IsAdmin()
-    {
-        try
-        {
-            var wi = WindowsIdentity.GetCurrent();
-            var wp = new WindowsPrincipal(wi);
-            return wp.IsInRole(WindowsBuiltInRole.Administrator);
-        }
-        catch { return false; }
-    }
-
-    private static byte[] HashPassword(string password)
-    {
-        var salt = Encoding.UTF8.GetBytes("BelfProctorAdminSalt");
-        return Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, 20000, HashAlgorithmName.SHA256, 32);
-    }
-
-    private static bool TimingSafeEquals(byte[] a, byte[] b)
-    {
-        if (a.Length != b.Length) return false;
-        int diff = 0;
-        for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-        return diff == 0;
-    }
-
-    private void CreateStartupShortcut(string targetPath, string workingDir)
-    {
-        try
-        {
-            var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-            var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
-            
-            // Use VBScript to create shortcut to avoid COM dependencies
-            var vbsScript = new StringBuilder();
-            vbsScript.AppendLine("Set oWS = WScript.CreateObject(\"WScript.Shell\")");
-            vbsScript.AppendLine($"sLinkFile = \"{shortcutPath}\"");
-            vbsScript.AppendLine("Set oLink = oWS.CreateShortcut(sLinkFile)");
-            vbsScript.AppendLine($"oLink.TargetPath = \"{targetPath}\"");
-            vbsScript.AppendLine("oLink.Arguments = \"--auto-start\"");
-            vbsScript.AppendLine($"oLink.WorkingDirectory = \"{workingDir}\"");
-            vbsScript.AppendLine("oLink.WindowStyle = 7"); // 7 = Minimized
-            vbsScript.AppendLine("oLink.Save");
-            
-            var vbsPath = Path.Combine(Path.GetTempPath(), "create_shortcut.vbs");
-            File.WriteAllText(vbsPath, vbsScript.ToString());
-            
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "cscript",
-                Arguments = $"//Nologo \"{vbsPath}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            })?.WaitForExit();
-            
-            if (File.Exists(vbsPath)) File.Delete(vbsPath);
-        }
-        catch (Exception ex)
-        {
-            // Log or ignore, registry is primary method
-            Debug.WriteLine($"Failed to create shortcut: {ex.Message}");
-        }
-    }
-
-    private void CreateScheduledTask(string targetPath)
-    {
-        try
-        {
-            // Create a scheduled task that runs at logon for any user
-            // We use schtasks.exe. This requires Admin usually, but if run as standard user, it might fail or create a user task.
-            // We'll try to create a user-level task which doesn't strictly need Admin if it's for the current user.
-            
-            var taskName = "BelfProctorUpdate";
-            // Use escaped double quotes for path to handle spaces correctly
-            var args = $"/create /tn \"{taskName}\" /tr \"\\\"{targetPath}\\\" --auto-start\" /sc onlogon /f";
-            
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "schtasks",
-                Arguments = args,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Failed to create scheduled task: {ex.Message}");
-        }
+        MessageBox.Show(
+            "Settings saved atomically. Restart the BelfProctor-Desktop task to apply them.",
+            "BelfProctor",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        Close();
     }
 }

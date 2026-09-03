@@ -204,7 +204,7 @@ export default function ClientsList() {
   const isNarrow = useIsNarrow();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [data, setData] = React.useState([]);
   const [latestHeartbeats, setLatestHeartbeats] = React.useState([]);
@@ -232,10 +232,11 @@ export default function ClientsList() {
   const [catForm] = Form.useForm();
 
   const genId = React.useCallback(() => {
-    const n = Math.floor(Math.random() * 1e6)
-      .toString()
-      .padStart(6, "0");
-    return `CLIENT${n}`;
+    const bytes = new Uint8Array(8);
+    window.crypto.getRandomValues(bytes);
+    return `CLIENT${Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")}`;
   }, []);
   const genKey = React.useCallback(() => {
     const arr = new Uint8Array(32);
@@ -383,13 +384,13 @@ export default function ClientsList() {
       const vals = await deleteForm.validateFields();
       setDeleteLoading(true);
       const password = String(vals.password || "").trim();
-      const headers = { "X-Admin-Password": password };
       const results = await Promise.all(
         selected.map(async (id) => {
           try {
             const resp = await authFetch(`${API_URL}/clients/${id}`, {
               method: "DELETE",
-              headers,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ password }),
             });
             return { id, ok: resp.ok };
           } catch {

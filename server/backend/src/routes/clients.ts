@@ -2,20 +2,17 @@ import { Router } from "express";
 import path from "path";
 import fs from "fs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { AuthRequest, requireAuth } from "../middleware/auth";
-import bcrypt from "bcryptjs";
+import { requireAdmin, requireAuth } from "../middleware/auth";
 import {
   getClients,
   getClient,
   saveClient,
-  deleteClient,
   streamDailyActivitySummary,
   streamMonthlyActivitySummary,
   streamAppCounts,
   getTimesheetDataForMonth,
-  getUser,
 } from "../store";
-import { requestClientUninstall } from "../wsHub";
+import clientDeletionRouter from "./clientDeletion";
 import { resolveUploadDir } from "../runtimePaths";
 import { prisma } from "../prisma";
 import {
@@ -254,7 +251,7 @@ router.get("/:id/work-sessions", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/:id/category", requireAuth, async (req, res) => {
+router.put("/:id/category", requireAdmin, async (req, res) => {
   try {
     const id = String(req.params.id || "");
     const category = String((req.body as any)?.category || "").trim();
@@ -274,47 +271,22 @@ router.get("/:id", requireAuth, async (req, res) => {
 });
 
 // Optional: register client with encryption key
-router.post("/register", requireAuth, async (req, res) => {
+router.post("/register", requireAdmin, async (req, res) => {
   const { id, encryptionKey } = req.body as {
     id: string;
     encryptionKey: string;
   };
   if (!id || !encryptionKey)
     return res.status(400).json({ message: "id and encryptionKey required" });
+  if (String(encryptionKey).length < 32 || String(encryptionKey) === "ABCDEFGHIJKLMNOP") {
+    return res.status(400).json({ message: "a unique device credential of at least 32 characters is required" });
+  }
 
   await saveClient({ id, encryptionKey });
   res.json(await getClient(id));
 });
 
-router.delete("/:id", requireAuth, async (req: AuthRequest, res) => {
-  const id = String(req.params.id);
-  try {
-    if (!req.user || req.user.role !== "ADMIN") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const password =
-      String((req.body as any)?.password || "").trim() ||
-      String(req.headers["x-admin-password"] || "").trim();
-    if (!password) {
-      return res.status(400).json({ message: "Password required" });
-    }
-
-    const user = await getUser(req.user.email);
-    if (!user)
-      return res.status(500).json({ message: "User record not found" });
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(403).json({ message: "Invalid password" });
-
-    const uninstall = await requestClientUninstall(id, {
-      serviceName: "BelfProctor",
-    });
-    await deleteClient(id);
-    res.json({ ok: true, uninstall });
-  } catch (e) {
-    res.status(404).json({ message: "Not found" });
-  }
-});
+router.use(clientDeletionRouter);
 
 router.get("/:id/daily-summary", requireAuth, async (req, res) => {
   const id = String(req.params.id);

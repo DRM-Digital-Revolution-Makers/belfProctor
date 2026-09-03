@@ -1,20 +1,24 @@
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
+import { randomUUID } from "crypto";
 import type { WebSocket } from "ws";
 import { resolveUploadDir } from "./runtimePaths";
+import { config } from "./config";
+import { isSafeCommandId } from "./util/commandId";
 
 const sockets = new Map<string, WebSocket>();
 // IP-адрес сервера, по которому каждый клиент успешно достучался через WS.
 // Используется для построения downloadUrl при push-обновлениях — каждый
 // клиент получает URL с тем IP сервера, который у него работает.
 const serverAddrByClient = new Map<string, string>();
+const pendingUninstallClaims = new Set<string>();
 
 const UPLOAD_DIR = resolveUploadDir();
 const PENDING_UNINSTALL_DIR = path.join(UPLOAD_DIR, "pending_uninstall");
 const PENDING_UPDATE_DIR = path.join(UPLOAD_DIR, "pending_update");
-const SERVER_PORT = parseInt(process.env.PORT || "8080", 10);
-const LIVE_VIEW_MAX_STREAMS = parseInt(process.env.LIVE_VIEW_MAX_STREAMS || "10", 10);
+const SERVER_PORT = config.port;
+const LIVE_VIEW_MAX_STREAMS = config.liveViewMaxStreams;
 
 const streamSources = new Map<string, WebSocket>();
 const streamViewers = new Map<string, Set<WebSocket>>();
@@ -37,6 +41,7 @@ function isLoopback(addr: string): boolean {
 /** Returns the server URL that this specific client successfully reached
  * us at via WebSocket. Null if no WS history. */
 export function getServerAddrForClient(clientId: string): string | null {
+  if (config.publicBaseUrl) return config.publicBaseUrl.replace(/\/+$/, "");
   const ip = serverAddrByClient.get(clientId);
   if (!ip) return null;
   return `http://${ip}:${SERVER_PORT}`;
@@ -53,17 +58,14 @@ export function resolveClientDownloadBase(
   clientId: string,
   adminLocalAddr?: string,
 ): string {
+  if (config.publicBaseUrl) return config.publicBaseUrl.replace(/\/+$/, "");
   // 1. Per-client WS address — auto-detected
   const wsAddr = serverAddrByClient.get(clientId);
   if (wsAddr && !isLoopback(wsAddr)) {
     return `http://${wsAddr}:${SERVER_PORT}`;
   }
 
-  // 2. Env override
-  const envBase = process.env.PUBLIC_BASE_URL?.trim();
-  if (envBase) return envBase.replace(/\/+$/, "");
-
-  // 3. Admin's request landed on this server IP
+  // 2. Admin's request landed on this server IP
   const adminIp = cleanIp(adminLocalAddr);
   if (adminIp && !isLoopback(adminIp)) {
     return `http://${adminIp}:${SERVER_PORT}`;
@@ -72,7 +74,7 @@ export function resolveClientDownloadBase(
     return `http://127.0.0.1:${SERVER_PORT}`;
   }
 
-  // 4. Pick first non-loopback IPv4 from OS interfaces
+  // 3. Pick first non-loopback IPv4 from OS interfaces
   const os = require("os");
   const ifs = os.networkInterfaces();
   for (const name of Object.keys(ifs)) {
@@ -86,7 +88,7 @@ export function resolveClientDownloadBase(
 }
 
 function makeId(): string {
-  return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return `${Date.now()}_${randomUUID()}`;
 }
 
 async function appendStreamAudit(input: {
@@ -243,15 +245,17 @@ export async function consumePendingUninstall(clientId: string): Promise<{
   id: string;
   payload: any;
 } | null> {
+  const claimKey = String(clientId || "").trim();
+  if (pendingUninstallClaims.has(claimKey)) return null;
+  pendingUninstallClaims.add(claimKey);
+  try {
   await ensurePendingDir();
   const fp = pendingUninstallPath(clientId);
   // Atomically CLAIM the record by renaming it. rename() is atomic, so when two
   // consumers race (e.g. a heartbeat and a WebSocket reconnect of the same
   // client) only one rename succeeds; the loser gets ENOENT and returns null.
   // This guarantees the uninstall command is delivered exactly once [B-M5].
-  const claimed = `${fp}.claim_${process.pid}_${Date.now()}_${Math.random()
-    .toString(16)
-    .slice(2)}`;
+  const claimed = `${fp}.claim_${process.pid}_${randomUUID()}`;
   try {
     await fsPromises.rename(fp, claimed);
   } catch {
@@ -265,6 +269,9 @@ export async function consumePendingUninstall(clientId: string): Promise<{
     return null;
   } finally {
     await fsPromises.unlink(claimed).catch(() => undefined);
+  }
+  } finally {
+    pendingUninstallClaims.delete(claimKey);
   }
 }
 
@@ -393,22 +400,23 @@ export function registerClientSocket(
   socket: WebSocket,
   serverAddr?: string,
 ): void {
-  const prev = sockets.get(clientId);
+  const id = String(clientId || "").trim();
+  const prev = sockets.get(id);
   if (prev && prev !== socket) {
     try {
       prev.close();
     } catch {}
   }
-  sockets.set(clientId, socket);
+  sockets.set(id, socket);
   const cleaned = cleanIp(serverAddr);
   if (cleaned && !isLoopback(cleaned)) {
-    serverAddrByClient.set(clientId, cleaned);
+    serverAddrByClient.set(id, cleaned);
   }
   (async () => {
     // Claim the uninstall atomically so the heartbeat path can't deliver the
     // same command concurrently [B-M5]. If we fail to push it (socket already
     // gone), re-queue so a later heartbeat/reconnect retries.
-    const uninstall = await consumePendingUninstall(clientId);
+    const uninstall = await consumePendingUninstall(id);
     if (uninstall && uninstall.id) {
       let delivered = false;
       if (socket.readyState === 1) {
@@ -427,24 +435,24 @@ export function registerClientSocket(
       }
       if (!delivered) {
         await requeuePendingUninstall(
-          clientId,
+          id,
           uninstall.id,
           uninstall.payload,
         ).catch(() => undefined);
       }
     }
 
-    if (await hasPendingUpdate(clientId)) {
+    if (await hasPendingUpdate(id)) {
       try {
         const content = await fsPromises.readFile(
-          pendingUpdatePath(clientId),
+          pendingUpdatePath(id),
           "utf-8",
         );
         const rec = JSON.parse(content);
         const basePayload = rec?.payload ?? {};
         // Recompute downloadUrl now that the client is connected — use the
         // IP that just worked for them.
-        const baseUrl = resolveClientDownloadBase(clientId);
+        const baseUrl = resolveClientDownloadBase(id);
         const downloadUrl = basePayload.version
           ? `${baseUrl}/api/updates/${encodeURIComponent(basePayload.version)}/file`
           : undefined;
@@ -458,7 +466,7 @@ export function registerClientSocket(
         }
       } finally {
         try {
-          await clearPendingUpdate(clientId);
+          await clearPendingUpdate(id);
         } catch {}
       }
     }
@@ -469,13 +477,14 @@ export function unregisterClientSocket(
   clientId: string,
   socket: WebSocket,
 ): void {
-  if (sockets.get(clientId) === socket) {
-    sockets.delete(clientId);
+  const id = String(clientId || "").trim();
+  if (sockets.get(id) === socket) {
+    sockets.delete(id);
   }
 }
 
 export function isClientConnected(clientId: string): boolean {
-  const socket = sockets.get(clientId);
+  const socket = sockets.get(String(clientId || "").trim());
   return !!socket && socket.readyState === 1;
 }
 
@@ -498,7 +507,7 @@ export function sendCommandToClient(
   // Use payload.id if caller provided one (so deployment tracking and client
   // responses share the same command id). Otherwise mint a fresh one.
   const id =
-    payload && typeof payload === "object" && payload.id
+    payload && typeof payload === "object" && isSafeCommandId(payload.id)
       ? String(payload.id)
       : makeId();
   const cmd = { id, type, payload: payload ?? {} };

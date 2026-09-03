@@ -109,6 +109,38 @@ public class CommandHandlerTests
         Directory.Delete(tmp);
     }
 
+    [Fact]
+    public async Task ListCommand_RejectsTraversalInSearchPattern()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "bp_pattern_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var tx = new TestTransmission();
+            var settings = Options.Create(new ProctorSettings { DirectoryRoots = new List<string> { tmp } });
+            var handler = new CommandHandler(settings, tx,
+                new StreamingService(NullLogger<StreamingService>.Instance, settings));
+
+            await handler.HandleAsync(new Command
+            {
+                Id = "cmd-pattern",
+                Type = "list",
+                Payload = new Dictionary<string, object>
+                {
+                    ["basePath"] = tmp,
+                    ["pattern"] = "..\\*.json"
+                }
+            });
+
+            var response = JObject.Parse(Encoding.UTF8.GetString(tx.LastJsonBytes!));
+            Assert.Equal("invalid_pattern", (string?)response["error"]);
+        }
+        finally
+        {
+            Directory.Delete(tmp);
+        }
+    }
+
 
     [Fact]
     public async Task FileCommand_SendsFileResult()
@@ -147,6 +179,34 @@ public class CommandHandlerTests
         File.Delete(f);
         Directory.Delete(tmp);
     }
+
+    [Fact]
+    public async Task FileCommand_DeniesExistingFileOutsideConfiguredRoots()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bp_denied_" + Guid.NewGuid().ToString("N") + ".txt");
+        await File.WriteAllTextAsync(outside, "must-not-leave-agent");
+        try
+        {
+            var tx = new TestTransmission();
+            var settings = Settings();
+            var handler = new CommandHandler(settings, tx,
+                new StreamingService(NullLogger<StreamingService>.Instance, settings));
+
+            await handler.HandleAsync(new Command
+            {
+                Id = "cmd-denied",
+                Type = "file",
+                Payload = new Dictionary<string, object> { ["path"] = outside }
+            });
+
+            Assert.Empty(tx.FileCalls);
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
     private class TestTransmission : IDataTransmissionService
     {
         public int JsonCalls { get; private set; }

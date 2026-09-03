@@ -7,7 +7,7 @@ import { prisma } from "../prisma";
 import { makeId } from "../services/id";
 import { resolveProjectFromPath } from "../services/projectResolver";
 import { classifyActivity } from "../services/rulesClassifier";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth } from "../middleware/auth";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
@@ -282,7 +282,7 @@ router.get("/unknown", requireAuth, async (req, res) => {
   res.json({ data, total: data.length });
 });
 
-router.put("/unknown/:id/resolve", requireAuth, async (req, res) => {
+router.put("/unknown/:id/resolve", requireAdmin, async (req, res) => {
   const id = String(req.params.id);
   const projectName = String(req.body?.projectName || "").trim();
   if (!projectName) return res.status(400).json({ message: "projectName required" });
@@ -298,7 +298,7 @@ router.get("/project-roots", requireAuth, async (_req, res) => {
   res.json({ data, total: data.length });
 });
 
-router.post("/project-roots", requireAuth, async (req, res) => {
+router.post("/project-roots", requireAdmin, async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const rootPath = String(req.body?.path || "").trim();
   if (!name || !rootPath) return res.status(400).json({ message: "name and path required" });
@@ -308,7 +308,7 @@ router.post("/project-roots", requireAuth, async (req, res) => {
   res.json(created);
 });
 
-router.delete("/project-roots/:id", requireAuth, async (req, res) => {
+router.delete("/project-roots/:id", requireAdmin, async (req, res) => {
   await prisma.projectRoot.delete({ where: { id: String(req.params.id) } });
   res.json({ ok: true });
 });
@@ -318,7 +318,7 @@ router.get("/project-aliases", requireAuth, async (_req, res) => {
   res.json({ data, total: data.length });
 });
 
-router.post("/project-aliases", requireAuth, async (req, res) => {
+router.post("/project-aliases", requireAdmin, async (req, res) => {
   const alias = String(req.body?.alias || "").trim();
   const projectName = String(req.body?.projectName || "").trim();
   if (!alias || !projectName) return res.status(400).json({ message: "alias and projectName required" });
@@ -328,7 +328,7 @@ router.post("/project-aliases", requireAuth, async (req, res) => {
   res.json(created);
 });
 
-router.delete("/project-aliases/:id", requireAuth, async (req, res) => {
+router.delete("/project-aliases/:id", requireAdmin, async (req, res) => {
   await prisma.projectAlias.delete({ where: { id: String(req.params.id) } });
   res.json({ ok: true });
 });

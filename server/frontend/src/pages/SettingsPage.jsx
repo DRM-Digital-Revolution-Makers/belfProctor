@@ -37,7 +37,7 @@ export default function SettingsPage() {
   const { t, i18n } = useTranslation();
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [tab, setTab] = React.useState("general");
   const [search, setSearch] = React.useState("");
@@ -457,7 +457,7 @@ function formatDeploymentStatus(status, detail) {
 function AgentsTab({ clients }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
-    `http://${window.location.hostname}:8080/api`;
+    "/api";
 
   const [versions, setVersions] = React.useState([]);
   const [deployments, setDeployments] = React.useState([]);

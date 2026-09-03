@@ -9,6 +9,18 @@ namespace BelfProctor.UnitTests;
 public class ScreenshotCleanupTests
 {
     [Fact]
+    public void UniformFrameDetection_RejectsBlankButAcceptsRealContent()
+    {
+        using var blank = new System.Drawing.Bitmap(100, 100);
+        using (var graphics = System.Drawing.Graphics.FromImage(blank))
+            graphics.Clear(System.Drawing.Color.Black);
+        Assert.True(ScreenshotService.IsUniformFrame(blank));
+
+        blank.SetPixel(50, 50, System.Drawing.Color.White);
+        Assert.False(ScreenshotService.IsUniformFrame(blank));
+    }
+
+    [Fact]
     public async Task CleanupOldScreenshots_RemovesOlderThanMaxAge()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "BelfProctor_Test_Screenshots_" + Guid.NewGuid());

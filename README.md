@@ -15,24 +15,26 @@
 cd server
 docker compose up -d
 ```
-- Frontend: `http://localhost:3000/`
-- Backend API: `http://localhost:4000/api`
-- Postgres: `localhost:5432` (user/pass: `postgres/postgres`, DB: `proctor`)
+- Production endpoint: `https://localhost/` (admin, `/api`, and WSS through nginx).
+- Backend and PostgreSQL are private Compose-network services.
 
 Примечания:
 - Бэкенд при старте выполнит `prisma migrate deploy` и создаст директории для хранения файлов.
 - Учтите переменные окружения в `docker-compose.yml` (JWT секрет, admin учётка, `UPLOAD_DIR`).
 
 ## Локальная разработка (без Docker)
+Требуется Node.js 22.22.2+ (major 22) из `.nvmrc`; неподдерживаемая версия останавливается
+preflight-проверкой до сборки или тестов.
+
 1) Установите и запустите PostgreSQL, создайте БД `proctor` (user/pass `postgres/postgres`).
 2) Проверьте `server/backend/.env` (уберите кавычки, если они есть):
 ```
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/proctor?schema=public
 PORT=4000
-JWT_SECRET=supersecretjwt
+JWT_SECRET=generate_a_unique_random_value_of_at_least_32_bytes
 UPLOAD_DIR=storage
 DEFAULT_ADMIN_EMAIL=admin@example.com
-DEFAULT_ADMIN_PASSWORD=admin123
+DEFAULT_ADMIN_PASSWORD=choose_a_unique_strong_password
 ```
 3) Бэкенд:
 ```bash
@@ -51,7 +53,7 @@ npm run dev              # Vite на http://localhost:5173
 
 ## Аутентификация
 - Логин: `POST /api/auth/login` с `email` и `password`.
-- При успешной аутентификации возвращается JWT, хранится в `localStorage` на фронте.
+- При успешной аутентификации сервер устанавливает `HttpOnly; Secure; SameSite=Strict` session cookie; JWT недоступен JavaScript.
 - Админ-учётка берётся из переменных окружения при старте бэкенда.
 
 ## Основные эндпоинты
@@ -68,8 +70,9 @@ npm run dev              # Vite на http://localhost:5173
 - `GET /api/policies` — список политик; `GET /api/policies/download` — загрузка политики для клиента (шифрована ключом клиента).
 
 ## Шифрование
-- Совместимо с клиентом: PBKDF2 (SHA256) для получения ключа из пароля, AES-256-CBC.
-- IV префиксируется к данным. Маршруты, принимающие бинарные данные, используют `express.raw` для `application/octet-stream`.
+- Новые payloads используют versioned envelope `BPG1`: PBKDF2-SHA256 (210 000 итераций, случайная соль) и AES-256-GCM.
+- Каждое устройство получает отдельный credential; production отвергает global/default credentials и изменённые AEAD payloads.
+- Legacy AES-CBC поддерживается только на чтение для контролируемой миграции старой offline queue.
 
 ## Частые проблемы
 - "Can't reach database server": запустите PostgreSQL локально или Docker.

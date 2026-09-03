@@ -10,6 +10,8 @@ public class ProctorSettings
     public string ServerUrl { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
     public string EncryptionKey { get; set; } = string.Empty;
+    public bool AllowInsecureDevelopmentTransport { get; set; } = false;
+    public string TrustedUpdateSignerThumbprint { get; set; } = string.Empty;
     public bool MonitorUSB { get; set; } = true;
     public bool MonitorProcesses { get; set; } = true;
     public bool MonitorNetwork { get; set; } = true;

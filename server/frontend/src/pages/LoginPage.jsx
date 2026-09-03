@@ -79,15 +79,15 @@ export default function LoginPage({ onSuccess }) {
     try {
       const API_URL =
         import.meta.env.VITE_API_URL ||
-        `http://${window.location.hostname}:8080/api`;
+        "/api";
       const res = await fetch(`${API_URL}/auth/login`, {
+        credentials: "same-origin",
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
       if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem("token", data.token);
+        await res.json();
         onSuccess?.();
       } else {
         let detail = "";

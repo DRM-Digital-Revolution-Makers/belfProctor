@@ -18,14 +18,9 @@ export const customDataProvider = (apiUrl) => ({
 });
 
 export const authFetch = async (url, options = {}) => {
-  const token2 = localStorage.getItem("token") || "";
-  const baseHeaders = options.headers || {};
-  const headers = token2
-    ? { ...baseHeaders, Authorization: `Bearer ${token2}` }
-    : baseHeaders;
-  const res = await fetch(url, { ...options, headers });
+  const headers = options.headers || {};
+  const res = await fetch(url, { credentials: "same-origin", ...options, headers });
   if (res.status === 401) {
-    localStorage.removeItem("token");
     window.dispatchEvent(new Event("auth:changed"));
   }
   return res;

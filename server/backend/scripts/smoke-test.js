@@ -20,18 +20,26 @@ async function jsonRequest(path, options = {}) {
 }
 
 function encryptBytes(plaintext, secret) {
-  const key = crypto.pbkdf2Sync(secret, "BelfProctorSalt", 10_000, 32, "sha256");
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
-  return Buffer.concat([iv, cipher.update(plaintext), cipher.final()]);
+  const salt = crypto.randomBytes(16);
+  const nonce = crypto.randomBytes(12);
+  const key = crypto.pbkdf2Sync(secret, salt, 210_000, 32, "sha256");
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([Buffer.from("BPG1", "ascii"), salt, nonce, cipher.getAuthTag(), ciphertext]);
 }
 
 function encryptPayload(value, secret) {
   return encryptBytes(Buffer.from(JSON.stringify(value), "utf8"), secret);
 }
 
-function wsSignature(id, timestamp, secret) {
-  return crypto.createHmac("sha256", secret).update(`${id}\n${timestamp}`).digest("hex");
+function wsSignature(id, timestamp, secret, nonce) {
+  return crypto.createHmac("sha256", secret).update(`${id}\n${timestamp}\n${nonce}`).digest("hex");
+}
+
+function updateDownloadSignature(id, version, timestamp, secret, nonce) {
+  return crypto.createHmac("sha256", secret)
+    .update(`belfproctor-update-download-v1\n${id}\n${version}\n${timestamp}\n${nonce}`)
+    .digest("hex");
 }
 
 function waitForRejectedSocket(url) {
@@ -92,14 +100,23 @@ async function main() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  assert(login.response.ok && login.body?.token, `login failed (${login.response.status})`);
+  const setCookie = login.response.headers.get("set-cookie") || "";
+  const sessionCookie = setCookie.split(";", 1)[0];
+  assert(login.response.ok && login.body?.ok, `login failed (${login.response.status})`);
+  assert(sessionCookie.startsWith("bp_session="), "login did not set the session cookie");
+  assert(/;\s*HttpOnly/i.test(setCookie) && /;\s*SameSite=Strict/i.test(setCookie),
+    "session cookie is missing HttpOnly or SameSite=Strict");
+  if (baseUrl.startsWith("https://")) {
+    assert(/;\s*Secure/i.test(setCookie), "HTTPS session cookie is missing Secure");
+  }
+  assert(!JSON.stringify(login.body).includes("eyJ"), "login exposed a JWT to JavaScript");
   const authHeaders = {
-    authorization: `Bearer ${login.body.token}`,
+    cookie: sessionCookie,
     "content-type": "application/json",
   };
 
   const unauthorized = await jsonRequest("/api/heartbeat/latest");
-  assert(unauthorized.response.status === 401, "monitoring endpoint is readable without JWT");
+  assert(unauthorized.response.status === 401, "monitoring endpoint is readable without a session");
 
   const registration = await jsonRequest("/api/clients/register", {
     method: "POST",
@@ -160,7 +177,7 @@ async function main() {
 
   const screenshotDownload = await fetch(
     `${baseUrl}/api/screenshots/${encodeURIComponent(screenshotRecord.filename)}/file`,
-    { headers: { authorization: authHeaders.authorization } },
+    { headers: { cookie: sessionCookie } },
   );
   assert(screenshotDownload.ok, "uploaded screenshot cannot be downloaded");
   assert(
@@ -168,15 +185,73 @@ async function main() {
     "downloaded screenshot differs from uploaded plaintext",
   );
 
+  const updateVersion = `0.0.0.${Date.now()}`;
+  const updateFixture = Buffer.from("belfproctor-smoke-update-fixture", "utf8");
+  let updateUploaded = false;
+  try {
+    const updateForm = new FormData();
+    updateForm.append("version", updateVersion);
+    updateForm.append("notes", "temporary smoke artifact");
+    updateForm.append("file", new Blob([updateFixture]), "BelfProctor.exe");
+    const updateUpload = await fetch(`${baseUrl}/api/updates`, {
+      method: "POST",
+      headers: { cookie: sessionCookie },
+      body: updateForm,
+    });
+    assert(updateUpload.ok, `temporary update upload failed (${updateUpload.status})`);
+    updateUploaded = true;
+
+    const unsignedUpdate = await fetch(`${baseUrl}/api/updates/${updateVersion}/file`, {
+      headers: { "x-client-id": clientId },
+    });
+    assert(unsignedUpdate.status === 401, "unsigned update download was accepted");
+
+    const updateTimestamp = String(Math.floor(Date.now() / 1000));
+    const updateNonce = crypto.randomBytes(16).toString("hex");
+    const updateHeaders = {
+      "x-client-id": clientId,
+      "x-client-timestamp": updateTimestamp,
+      "x-client-nonce": updateNonce,
+      "x-client-signature": updateDownloadSignature(
+        clientId,
+        updateVersion,
+        updateTimestamp,
+        encryptionKey,
+        updateNonce,
+      ),
+    };
+    const signedUpdate = await fetch(`${baseUrl}/api/updates/${updateVersion}/file`, {
+      headers: updateHeaders,
+    });
+    assert(signedUpdate.ok, `signed update download failed (${signedUpdate.status})`);
+    assert(
+      Buffer.from(await signedUpdate.arrayBuffer()).equals(updateFixture),
+      "signed update download differs from uploaded fixture",
+    );
+    const replayedUpdate = await fetch(`${baseUrl}/api/updates/${updateVersion}/file`, {
+      headers: updateHeaders,
+    });
+    assert(replayedUpdate.status === 401, "replayed update download signature was accepted");
+  } finally {
+    if (updateUploaded) {
+      const cleanup = await fetch(`${baseUrl}/api/updates/${updateVersion}`, {
+        method: "DELETE",
+        headers: { cookie: sessionCookie },
+      });
+      assert(cleanup.ok, `temporary update cleanup failed (${cleanup.status})`);
+    }
+  }
+
   const wsBase = baseUrl.replace(/^http/, "ws");
   await waitForRejectedSocket(`${wsBase}/ws?clientId=${encodeURIComponent(clientId)}`);
 
   const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature = wsSignature(clientId, timestamp, encryptionKey);
-  const socket = await connectSignedSocket(
-    `${wsBase}/ws?clientId=${encodeURIComponent(clientId)}&ts=${timestamp}&sig=${signature}`,
-  );
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const signature = wsSignature(clientId, timestamp, encryptionKey, nonce);
+  const signedSocketUrl = `${wsBase}/ws?clientId=${encodeURIComponent(clientId)}&ts=${timestamp}&nonce=${nonce}&sig=${signature}`;
+  const socket = await connectSignedSocket(signedSocketUrl);
   try {
+    await waitForRejectedSocket(signedSocketUrl);
     await waitForServerConnection();
     const commandMessage = nextJsonMessage(socket);
     const commandRequest = await jsonRequest("/api/commands/send", {
@@ -192,7 +267,7 @@ async function main() {
     socket.close();
   }
 
-  console.log(JSON.stringify({ ok: true, clientId, checks: 13 }));
+  console.log(JSON.stringify({ ok: true, clientId, checks: 18 }));
 }
 
 main().catch((error) => {

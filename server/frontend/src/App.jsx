@@ -7,19 +7,20 @@ import ruRU from "antd/locale/ru_RU";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Sidebar from "./components/Sidebar.jsx";
 
-import ClientsList from "./pages/ClientsList.jsx";
-import ClientDetail from "./pages/ClientDetail.jsx";
-import EventsList from "./pages/EventsList.jsx";
-import ScreenshotsList from "./pages/ScreenshotsList.jsx";
-import ActivitiesList from "./pages/ActivitiesList.jsx";
-import ActivityDetail from "./pages/ActivityDetail.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
-import Timesheet from "./pages/Timesheet.jsx";
-import SettingsPage from "./pages/SettingsPage.jsx";
 import { customDataProvider } from "./dataProvider.js";
 
+const ClientsList = React.lazy(() => import("./pages/ClientsList.jsx"));
+const ClientDetail = React.lazy(() => import("./pages/ClientDetail.jsx"));
+const EventsList = React.lazy(() => import("./pages/EventsList.jsx"));
+const ScreenshotsList = React.lazy(() => import("./pages/ScreenshotsList.jsx"));
+const ActivitiesList = React.lazy(() => import("./pages/ActivitiesList.jsx"));
+const ActivityDetail = React.lazy(() => import("./pages/ActivityDetail.jsx"));
+const Timesheet = React.lazy(() => import("./pages/Timesheet.jsx"));
+const SettingsPage = React.lazy(() => import("./pages/SettingsPage.jsx"));
+
 const API_URL =
-  import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8080/api`;
+  import.meta.env.VITE_API_URL || "/api";
 
 const bpTheme = {
   ...RefineThemes.Blue,
@@ -65,11 +66,12 @@ const bpTheme = {
 };
 
 export default function App() {
-  const [authed, setAuthed] = React.useState(
-    Boolean(localStorage.getItem("token")),
-  );
+  const [authed, setAuthed] = React.useState(null);
   React.useEffect(() => {
-    const handler = () => setAuthed(Boolean(localStorage.getItem("token")));
+    const check = () => fetch(`${API_URL}/auth/me`, { credentials: "same-origin" })
+      .then((res) => setAuthed(res.ok)).catch(() => setAuthed(false));
+    const handler = () => check();
+    check();
     window.addEventListener("auth:changed", handler);
     window.addEventListener("storage", handler);
     return () => {
@@ -77,6 +79,8 @@ export default function App() {
       window.removeEventListener("storage", handler);
     };
   }, []);
+
+  if (authed === null) return null;
 
   if (!authed) {
     return (
@@ -122,6 +126,7 @@ export default function App() {
           <Sidebar />
           <Layout className="bp-main-shell" style={{ background: "#FFFFFF" }}>
             <Layout.Content className="bp-main-content" style={{ background: "#FFFFFF" }}>
+              <React.Suspense fallback={null}>
               <Routes>
                 <Route path="/" element={<EventsList />} />
                 <Route path="clients" element={<ClientsList />} />
@@ -134,6 +139,7 @@ export default function App() {
                 <Route path="timesheet" element={<Navigate to="/report" replace />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Routes>
+              </React.Suspense>
             </Layout.Content>
           </Layout>
         </Layout>

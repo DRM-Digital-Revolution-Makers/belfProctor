@@ -113,9 +113,11 @@ public class CommandChannelWorker : BackgroundService
     public static string BuildWsUrl(string serverUrl, string clientId, string encryptionKey)
     {
         var uri = new Uri(serverUrl);
-        var scheme = uri.Scheme == "https" ? "wss" : "ws";
+        if (uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Command channel requires an HTTPS server URL.");
+        const string scheme = "wss";
         var host = uri.Host;
-        var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
+        var port = uri.IsDefaultPort ? 443 : uri.Port;
         return $"{scheme}://{host}:{port}/ws?{WebSocketAuth.CreateQuery(clientId, encryptionKey)}";
     }
 
@@ -151,6 +153,8 @@ public class CommandChannelWorker : BackgroundService
 
         if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
         {
+            if (uri.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("Command channel requires an HTTPS server URL (WSS transport).");
             var scheme = uri.Scheme == "https" ? "wss" : "ws";
             var host = uri.Host;
             var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
@@ -161,16 +165,6 @@ public class CommandChannelWorker : BackgroundService
                 yield return new Uri($"{scheme}://{host}:8080/ws?{query}");
             }
         }
-        else
-        {
-            var raw = serverUrl?.Trim() ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(raw))
-            {
-                yield return new Uri($"ws://{raw}:8080/ws?{query}");
-            }
-        }
-
-        yield return new Uri($"ws://localhost:8080/ws?{query}");
-        yield return new Uri($"ws://127.0.0.1:8080/ws?{query}");
+        else throw new InvalidOperationException("Command channel server URL is invalid.");
     }
 }

@@ -1,8 +1,6 @@
 import express from "express";
 import request from "supertest";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { config } from "../config";
 
 const getUserMock = jest.fn();
 jest.mock("../store", () => ({
@@ -10,6 +8,7 @@ jest.mock("../store", () => ({
 }));
 
 import authRouter from "../routes/auth";
+import { extractAuthToken } from "../middleware/auth";
 
 function buildApp() {
   const app = express();
@@ -30,7 +29,15 @@ beforeEach(() => {
 });
 
 describe("POST /api/auth/login", () => {
-  it("GIVEN valid credentials WHEN logging in THEN returns a JWT signed with the configured secret", async () => {
+  it("does not accept a session token from the URL query string", () => {
+    const requestLike = {
+      headers: {},
+      query: { token: "must-not-be-read-from-url" },
+    } as any;
+    expect(extractAuthToken(requestLike)).toBe("");
+  });
+
+  it("GIVEN valid credentials WHEN logging in THEN sets an HttpOnly session cookie", async () => {
     getUserMock.mockResolvedValueOnce({
       id: 1,
       email: "admin@local",
@@ -43,13 +50,21 @@ describe("POST /api/auth/login", () => {
       .send({ email: "admin@local", password: PASSWORD })
       .expect(200);
 
-    expect(typeof res.body.token).toBe("string");
-    const payload = jwt.verify(res.body.token, config.jwtSecret) as {
-      email: string;
-      role: string;
-    };
-    expect(payload.email).toBe("admin@local");
-    expect(payload.role).toBe("ADMIN");
+    expect(res.body).toEqual({ ok: true });
+    const cookie = res.headers["set-cookie"]?.[0] || "";
+    expect(cookie).toContain("bp_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+    expect(res.text).not.toContain("eyJ");
+  });
+
+  it("serves /me from the session cookie and clears it on logout", async () => {
+    getUserMock.mockResolvedValueOnce({ id: 1, email: "admin@local", passwordHash, role: "ADMIN" });
+    const agent = request.agent(buildApp());
+    await agent.post("/api/auth/login").send({ email: "admin@local", password: PASSWORD }).expect(200);
+    await agent.get("/api/auth/me").expect(200, { id: 1, email: "admin@local", role: "ADMIN" });
+    const logout = await agent.post("/api/auth/logout").expect(200);
+    expect(logout.headers["set-cookie"]?.[0]).toContain("bp_session=;");
   });
 
   it("GIVEN a wrong password WHEN logging in THEN returns 401", async () => {

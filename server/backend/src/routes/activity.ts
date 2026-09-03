@@ -12,6 +12,7 @@ import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 import { requireAuth } from "../middleware/auth";
+import { config } from "../config";
 
 const router = Router();
 
@@ -54,12 +55,6 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = authoritativeNow();
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       console.error(
         `[Activity] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );
@@ -99,7 +94,7 @@ router.post("/", async (req, res) => {
       inactiveMilliseconds: Number.isFinite(inactiveMs) ? inactiveMs : 0,
     });
     const ms = Date.now() - t0;
-    if (ms > 100 && process.env.NODE_ENV === "production") {
+    if (ms > 100 && config.isProduction) {
       console.warn(`[Activity] Slow request ${clientId}: ${ms}ms`);
     }
     return res.json({ id: "file-saved" });

@@ -9,6 +9,7 @@ import { requireAuth } from "../middleware/auth";
 import { withLock } from "../locks";
 import { getKeysToTry } from "../keyring";
 import { resolveUploadDir } from "../runtimePaths";
+import { config } from "../config";
 
 const router = Router();
 
@@ -61,11 +62,6 @@ router.post("/", async (req, res) => {
 
     const now = authoritativeNow();
     if (!usedKey) {
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       return res.status(400).json({ message: "Decryption failed" });
     }
 
@@ -111,7 +107,7 @@ router.post("/", async (req, res) => {
     }
 
     const ms = Date.now() - t0;
-    if (ms > 250 && process.env.NODE_ENV === "production") {
+    if (ms > 250 && config.isProduction) {
       console.warn(`[Logs] Slow ingest ${clientId}: ${ms}ms`);
     }
     return res.json({ ok: true });

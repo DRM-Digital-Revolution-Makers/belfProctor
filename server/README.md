@@ -7,15 +7,14 @@ Full local stack runs in Docker: PostgreSQL, backend API, frontend SPA.
 ```bash
 cd server
 cp .env.example .env
-# edit .env and set: JWT_SECRET, ENCRYPTION_KEY, DEFAULT_ADMIN_PASSWORD
+# edit .env and set JWT_SECRET, DEFAULT_ADMIN_PASSWORD and TLS certificate paths
 docker compose up -d --build
 ```
 
 After the stack is up:
 
-- Frontend: <http://localhost:3000>
-- Backend API (agents connect here): <http://localhost:4000>
-- Postgres: `localhost:5432` (user `postgres`, db `proctor`)
+- Admin/API/WSS: <https://localhost> (certificate must be trusted by agents and browsers)
+- PostgreSQL and backend remain private Compose-network services.
 
 Migrations run automatically on backend startup (`prisma migrate deploy`).
 
@@ -56,7 +55,7 @@ docker compose down -v
 ## Layout
 
 - `backend/` — Express + Prisma API on port 4000
-- `frontend/` — Vite SPA served via nginx on port 80 → host port 3000. Nginx proxies `/api/*` and `/ws/*` to the backend container.
+- `frontend/` — Vite SPA served by TLS nginx on port 443. Port 80 redirects to HTTPS; nginx proxies `/api/*` and `/ws/*` internally.
 - `backend/storage/` — bind-mounted into the backend container at `/app/storage`. Holds screenshots, agent update binaries, reports, and runtime logs.
 - `backend/prisma/` — schema and SQL migrations.
 
@@ -65,11 +64,11 @@ docker compose down -v
 Required (no defaults):
 
 - `JWT_SECRET`
-- `ENCRYPTION_KEY` (must match agent's key)
 - `DEFAULT_ADMIN_PASSWORD`
+- `TLS_CERT_FILE`, `TLS_KEY_FILE`
 
 Optional (defaulted in `.env.example` and compose):
 
-- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT`
-- `BACKEND_PORT`, `FRONTEND_PORT`
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+- `HTTPS_PORT`, `HTTP_REDIRECT_PORT`
 - `RETENTION_*_DAYS`, `MAX_*_BYTES`, `FEATURE_*`, `LIVE_VIEW_MAX_STREAMS`

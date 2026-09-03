@@ -1,5 +1,7 @@
 import express from "express";
 import request from "supertest";
+import jwt from "jsonwebtoken";
+import { config } from "../config";
 import { encryptAes256CbcPrefixedIv } from "../encryption";
 
 const createMock = jest.fn();
@@ -42,6 +44,8 @@ function encrypted(payload: unknown): Buffer {
     "test_key_for_jest_unit_tests",
   );
 }
+
+const auth = () => `Bearer ${jwt.sign({ id: "u1", role: "ADMIN" }, config.jwtSecret)}`;
 
 describe("POST /api/browser-activity", () => {
   beforeEach(() => {
@@ -159,5 +163,29 @@ describe("POST /api/browser-activity", () => {
 
     expect(res.body).toEqual({ ok: true, inserted: 0 });
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("lists visits and aggregates top domains for an admin", async () => {
+    findManyMock.mockResolvedValueOnce([{ domain: "example.test" }]);
+    groupByMock.mockResolvedValueOnce([{ domain: "example.test", _count: { _all: 3 } }]);
+    const list = await request(buildApp())
+      .get("/api/browser-activity?clientId=CLIENT_TEST&browser=Chrome&limit=5000")
+      .set("Authorization", auth()).expect(200);
+    expect(list.body.total).toBe(1);
+    expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({
+      where: { clientId: "CLIENT_TEST", browser: "chrome" }, take: 1000,
+    }));
+    const top = await request(buildApp())
+      .get("/api/browser-activity/top-domains?clientId=CLIENT_TEST&limit=500")
+      .set("Authorization", auth()).expect(200);
+    expect(top.body.data).toEqual([{ domain: "example.test", count: 3 }]);
+    expect(groupByMock.mock.calls[0][0].take).toBe(50);
+  });
+
+  it("requires a client id on both admin queries", async () => {
+    await request(buildApp()).get("/api/browser-activity")
+      .set("Authorization", auth()).expect(400);
+    await request(buildApp()).get("/api/browser-activity/top-domains")
+      .set("Authorization", auth()).expect(400);
   });
 });

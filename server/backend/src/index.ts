@@ -9,6 +9,7 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
+import { randomUUID } from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { verifyAgentWsSignature } from "./wsAuth";
 import { getKeysToTry } from "./keyring";
@@ -26,9 +27,10 @@ import updatesRouter, { appendDeploymentStatus } from "./routes/updates";
 import workRouter from "./routes/work";
 import pcSessionRouter from "./routes/pcSession";
 import browserActivityRouter from "./routes/browserActivity";
+import commandsRouter from "./routes/commands";
 import { startHeartbeatGapDetector } from "./jobs/heartbeatGapDetector";
 import { startTimeSync, getDebugState as getTimeDebugState, now as authoritativeNow } from "./serverTime";
-import { requireAuth } from "./middleware/auth";
+import { extractAuthToken, requireAdmin, requireAuth } from "./middleware/auth";
 import { jsonErrorHandler } from "./middleware/error";
 import bcrypt from "bcryptjs";
 import { decryptAes256CbcPrefixedIv } from "./encryption";
@@ -44,7 +46,6 @@ import { getSenderClientId, normalizeClientId } from "./clientId";
 import {
   registerClientSocket,
   unregisterClientSocket,
-  sendCommandToClient,
   registerStreamSource,
   registerStreamViewer,
 } from "./wsHub";
@@ -55,8 +56,10 @@ import { initServerLogToStorage } from "./serverLog";
 import { config } from "./config";
 import { connectWithRetry, disconnectPrisma, pingDatabase } from "./prisma";
 import { getConnectedClientCount } from "./wsHub";
+import { isSafeCommandId } from "./util/commandId";
 
 const app = express();
+if (config.isProduction) app.set("trust proxy", 1);
 const PORT = config.port;
 const HOST = config.host;
 const UPLOAD_DIR = config.uploadDir;
@@ -94,14 +97,13 @@ app.use(
   }),
 );
 const corsOptions: cors.CorsOptions = {
-  origin: true,
+  origin: config.isProduction ? false : true,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
     "X-Client-Id",
-    "X-Admin-Password",
     "Cache-Control",
     "Pragma",
     "X-Requested-With",
@@ -113,20 +115,19 @@ app.options(/.*/, cors(corsOptions));
 if (!config.isProduction) {
   app.use(morgan("combined"));
 }
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-// Rate limiter: 10000 req/min (virtually unlimited for your scale). Env RATE_LIMIT_MAX overrides.
+// Global transport-level ceiling. Authentication has an additional strict limiter.
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: config.rateLimitMax,
-  keyGenerator: (req: any) => {
-    const cid = normalizeClientId(String(req?.headers?.["x-client-id"] || ""));
-    if (cid) return `client:${cid}`;
-    return `ip:${String(req.ip || "")}`;
-  },
+  keyGenerator: (req: any) =>
+    `ip:${String(req.ip || req.socket?.remoteAddress || "unknown")}`,
 });
 app.use("/api/", limiter);
+
+// Rate limiting must run before parsers allocate attacker-controlled bodies.
+// Large binary artifacts use their dedicated streaming multipart endpoints.
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // Raw parsers: generous buffers for ingestion
 app.use(
@@ -172,6 +173,7 @@ app.use("/api/updates", updatesRouter);
 app.use("/api/work", workRouter);
 app.use("/api/pc-session", pcSessionRouter);
 app.use("/api/browser-activity", browserActivityRouter);
+app.use("/api/commands", commandsRouter);
 
 // Lazy load: ~200KB saved until first request (flat memory for 20 clients)
 let _legacyTimesheet: any = null;
@@ -209,6 +211,7 @@ if (staticDir) {
 async function findLatestCommandResult(
   commandId: string,
 ): Promise<string | null> {
+  if (!isSafeCommandId(commandId)) return null;
   const baseDir = path.join(UPLOAD_DIR, "commands");
   if (!fs.existsSync(baseDir)) return null;
 
@@ -243,9 +246,7 @@ async function writeJsonFileAtomic(filePath: string, json: string): Promise<void
   await fsPromises.mkdir(dir, { recursive: true });
   const tmp = path.join(
     dir,
-    `${path.basename(filePath)}.tmp_${process.pid}_${Date.now()}_${Math.random()
-      .toString(16)
-      .slice(2)}`,
+    `${path.basename(filePath)}.tmp_${process.pid}_${randomUUID()}`,
   );
   await fsPromises.writeFile(tmp, json, "utf-8");
   try {
@@ -263,19 +264,24 @@ async function writeJsonFileAtomic(filePath: string, json: string): Promise<void
 }
 
 async function readCommandIndex(commandId: string): Promise<string | null> {
+  if (!isSafeCommandId(commandId)) return null;
   const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
   if (!fs.existsSync(fp)) return null;
   try {
     const content = await fsPromises.readFile(fp, "utf-8");
     const obj = JSON.parse(content);
     const p = String(obj?.latestPath || "").trim();
-    return p || null;
+    if (!p) return null;
+    const commandsRoot = path.resolve(UPLOAD_DIR, "commands") + path.sep;
+    const resolved = path.resolve(p);
+    return resolved.startsWith(commandsRoot) ? resolved : null;
   } catch {
     return null;
   }
 }
 
 async function writeCommandIndex(commandId: string, latestPath: string): Promise<void> {
+  if (!isSafeCommandId(commandId)) throw new Error("Invalid command id");
   const fp = path.join(COMMAND_INDEX_DIR, `${commandId}.json`);
   await withLock(`file:${fp}`, async () => {
     await writeJsonFileAtomic(
@@ -296,6 +302,9 @@ app.post(
   async (req, res) => {
     try {
       const commandId = req.params.id;
+      if (!isSafeCommandId(commandId)) {
+        return res.status(400).json({ message: "Invalid command id" });
+      }
       const clientId = getSenderClientId(req);
 
       const client = await getClient(clientId);
@@ -376,6 +385,9 @@ const commandResultHandler = async (
 ) => {
   try {
     const commandId = req.params.id;
+    if (!isSafeCommandId(commandId)) {
+      return res.status(400).json({ message: "Invalid command id" });
+    }
     const indexed = await readCommandIndex(commandId);
     let latestPath = indexed && fs.existsSync(indexed) ? indexed : null;
     if (!latestPath) {
@@ -400,8 +412,8 @@ const commandResultHandler = async (
   }
 };
 
-app.get("/api/commands/:id/json", commandResultHandler);
-app.get("/api/commands/:id/result", commandResultHandler);
+app.get("/api/commands/:id/json", requireAdmin, commandResultHandler);
+app.get("/api/commands/:id/result", requireAdmin, commandResultHandler);
 
 /**
  * Health probe for external monitors (uptime checks, load balancers, the ops
@@ -580,6 +592,7 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
       const authenticated = verifyAgentWsSignature({
         clientId: streamClientId,
         timestamp: String(url.searchParams.get("ts") || ""),
+        nonce: String(url.searchParams.get("nonce") || ""),
         signature: String(url.searchParams.get("sig") || ""),
         secrets: getKeysToTry(client?.encryptionKey),
       });
@@ -592,7 +605,9 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
     }
 
     if (url.pathname.startsWith("/ws/admin/stream/")) {
-      const token = String(url.searchParams.get("token") || "").trim();
+      // Browser WebSockets carry the same-origin HttpOnly session cookie.
+      // URL tokens are forbidden because proxy logs/history can disclose them.
+      const token = extractAuthToken(req as any);
       let actor = "";
       try {
         const payload = jwt.verify(token, JWT_SECRET) as any;
@@ -622,6 +637,7 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
     const authenticated = verifyAgentWsSignature({
       clientId,
       timestamp: String(url.searchParams.get("ts") || ""),
+      nonce: String(url.searchParams.get("nonce") || ""),
       signature: String(url.searchParams.get("sig") || ""),
       secrets: getKeysToTry(client?.encryptionKey),
     });
@@ -642,73 +658,6 @@ function attachWebSocketServer(httpServer: import("http").Server): WebSocketServ
   });
   return wss;
 }
-
-// Admin endpoint to send command to a client via WebSocket
-app.post("/api/commands/send", requireAuth, async (req, res) => {
-  try {
-    const { clientId, type, payload } = req.body as any;
-    if (!clientId || !type)
-      return res.status(400).json({ message: "clientId and type required" });
-    const id = sendCommandToClient(clientId, type, payload ?? {});
-    if (!id) return res.status(404).json({ message: "client not connected" });
-    res.json({ ok: true, id });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: "Failed to send command" });
-  }
-});
-
-// Admin convenience endpoints
-const createCommandSender = (
-  type: string,
-  payloadFactory: (req: express.Request) => any,
-) => {
-  return async (req: express.Request, res: express.Response) => {
-    try {
-      const { clientId } = req.body as any;
-      if (!clientId)
-        return res.status(400).json({ message: "clientId required" });
-      const payload = payloadFactory(req);
-      const id = sendCommandToClient(clientId, type, payload);
-      if (!id) return res.status(404).json({ message: "client not connected" });
-      res.json({ ok: true, id });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ message: `Failed to request ${type}` });
-    }
-  };
-};
-
-app.post(
-  "/api/commands/list",
-  requireAuth,
-  createCommandSender("list", (req) => {
-    const {
-      basePath,
-      pattern = "*",
-      recursive = false,
-      maxEntries = 1000,
-      includeDirs = true,
-    } = req.body;
-    return { basePath, pattern, recursive, maxEntries, includeDirs };
-  }),
-);
-
-app.post(
-  "/api/commands/file",
-  requireAuth,
-  createCommandSender("file", (req) => {
-    return { path: req.body.path };
-  }),
-);
-
-app.post(
-  "/api/commands/folder",
-  requireAuth,
-  createCommandSender("folder", (req) => {
-    return { path: req.body.path };
-  }),
-);
 
 // Express 4 does not natively forward rejected async route promises. The
 // express-async-errors patch above routes them here so a transient DB/filesystem
@@ -792,7 +741,11 @@ async function bootstrap(): Promise<void> {
   registerGracefulShutdown(httpServer, wss);
 }
 
-void bootstrap().catch((e) => {
-  console.error("[Boot] Fatal startup error:", e);
-  process.exit(1);
-});
+if (require.main === module) {
+  void bootstrap().catch((e) => {
+    console.error("[Boot] Fatal startup error:", e);
+    process.exit(1);
+  });
+}
+
+export { app };

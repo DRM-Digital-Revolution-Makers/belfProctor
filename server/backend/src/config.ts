@@ -66,6 +66,7 @@ const EnvSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().int().positive().max(65535).default(8080),
   HOST: z.string().min(1).default("0.0.0.0"),
+  PUBLIC_BASE_URL: z.string().optional(),
 
   // Secrets
   JWT_SECRET: z.string().optional(),
@@ -89,7 +90,12 @@ const EnvSchema = z.object({
 
   // HTTP
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10000),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   DISABLE_FILE_LOGS: boolFromEnv,
+  MAX_SCREENSHOT_BYTES: z.coerce.number().int().positive().max(100 * 1024 * 1024).default(20 * 1024 * 1024),
+  MAX_REPORT_BYTES: z.coerce.number().int().positive().max(1024 * 1024 * 1024).default(200 * 1024 * 1024),
+  MAX_COMMAND_RESULT_BYTES: z.coerce.number().int().positive().max(512 * 1024 * 1024).default(100 * 1024 * 1024),
+  MAX_UPDATE_BYTES: z.coerce.number().int().positive().max(2 * 1024 * 1024 * 1024).default(500 * 1024 * 1024),
 
   // Retention (days)
   RETENTION_SCREENSHOTS_DAYS: z.coerce.number().int().positive().default(30),
@@ -154,6 +160,7 @@ export interface AppConfig {
   readonly port: number;
   readonly host: string;
   readonly uploadDir: string;
+  readonly publicBaseUrl: string | undefined;
 
   readonly jwtSecret: string;
 
@@ -168,7 +175,14 @@ export interface AppConfig {
   readonly dbConnect: { readonly retries: number; readonly retryDelayMs: number };
 
   readonly rateLimitMax: number;
+  readonly loginRateLimitMax: number;
   readonly fileLogsEnabled: boolean;
+  readonly uploadLimits: {
+    readonly screenshotBytes: number;
+    readonly reportBytes: number;
+    readonly commandResultBytes: number;
+    readonly updateBytes: number;
+  };
 
   readonly retention: RetentionConfig;
   readonly features: FeatureFlags;
@@ -264,15 +278,14 @@ export function buildConfig(env: NodeJS.ProcessEnv): BuildConfigResult {
   const hasRealKey = encryptionKeys.length > 0;
   if (!hasRealKey) {
     const msg =
-      "Neither ENCRYPTION_KEY nor ENCRYPTION_KEYS is set; clients can only be decrypted with the insecure default key.";
-    if (isProduction) fatalErrors.push(`${msg} A real key is required in production.`);
-    else warnings.push(msg);
+      "Neither ENCRYPTION_KEY nor ENCRYPTION_KEYS is set; only provisioned per-device credentials can be used.";
+    if (!isProduction) warnings.push(msg);
   }
   // The all-zeros default key is allowed when explicitly opted-in, or whenever
   // no real key is configured (so a fresh/dev install still works), or in any
   // non-production environment. In production WITH a real key it is rejected.
   const allowDefaultEncryptionKey =
-    raw.ALLOW_DEFAULT_ENCRYPTION_KEY || !isProduction || !hasRealKey;
+    !isProduction && (raw.ALLOW_DEFAULT_ENCRYPTION_KEY || !hasRealKey);
   if (isProduction && hasRealKey && allowDefaultEncryptionKey) {
     warnings.push(
       "ALLOW_DEFAULT_ENCRYPTION_KEY is enabled in production — the insecure default key will be accepted.",
@@ -286,7 +299,7 @@ export function buildConfig(env: NodeJS.ProcessEnv): BuildConfigResult {
   if (adminEmail && adminPassword) {
     admin = { email: adminEmail, password: adminPassword };
     if (isProduction && isWeakSecret(adminPassword)) {
-      warnings.push("DEFAULT_ADMIN_PASSWORD looks weak — change it after first login.");
+      fatalErrors.push("DEFAULT_ADMIN_PASSWORD is weak; production startup is refused.");
     }
   } else if (adminEmail || adminPassword) {
     warnings.push(
@@ -302,12 +315,18 @@ export function buildConfig(env: NodeJS.ProcessEnv): BuildConfigResult {
     else warnings.push(`${msg} Database operations will fail until it is configured.`);
   }
 
+  const publicBaseUrl = (raw.PUBLIC_BASE_URL || "").trim() || undefined;
+  if (isProduction && (!publicBaseUrl || !publicBaseUrl.startsWith("https://"))) {
+    fatalErrors.push("PUBLIC_BASE_URL must be an absolute https:// URL in production.");
+  }
+
   const config = assembleConfig(raw, {
     jwtSecret,
     encryptionKeys,
     allowDefaultEncryptionKey,
     admin,
     databaseUrl,
+    publicBaseUrl,
   });
 
   return { config, warnings, fatalErrors };
@@ -319,6 +338,7 @@ interface ResolvedOverrides {
   allowDefaultEncryptionKey: boolean;
   admin: AppConfig["admin"];
   databaseUrl: string | undefined;
+  publicBaseUrl: string | undefined;
 }
 
 function assembleConfig(
@@ -335,6 +355,7 @@ function assembleConfig(
     port: raw.PORT,
     host: raw.HOST,
     uploadDir: resolveUploadDir(),
+    publicBaseUrl: overrides?.publicBaseUrl,
 
     jwtSecret: overrides?.jwtSecret ?? DEV_FALLBACK_JWT_SECRET,
 
@@ -350,7 +371,14 @@ function assembleConfig(
     },
 
     rateLimitMax: raw.RATE_LIMIT_MAX,
+    loginRateLimitMax: raw.LOGIN_RATE_LIMIT_MAX,
     fileLogsEnabled: !raw.DISABLE_FILE_LOGS,
+    uploadLimits: {
+      screenshotBytes: raw.MAX_SCREENSHOT_BYTES,
+      reportBytes: raw.MAX_REPORT_BYTES,
+      commandResultBytes: raw.MAX_COMMAND_RESULT_BYTES,
+      updateBytes: raw.MAX_UPDATE_BYTES,
+    },
 
     retention: {
       screenshotsDays: raw.RETENTION_SCREENSHOTS_DAYS,

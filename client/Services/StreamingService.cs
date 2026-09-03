@@ -91,8 +91,10 @@ public class StreamingService : IDisposable
         var query = WebSocketAuth.CreateQuery(clientId, encryptionKey);
         if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri))
         {
-            return new Uri($"ws://localhost:8080/ws/stream?{query}");
+            throw new InvalidOperationException("Live View server URL is invalid.");
         }
+        if (uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Live View requires an HTTPS server URL (WSS transport).");
 
         var scheme = uri.Scheme == "https" ? "wss" : "ws";
         var port = uri.IsDefaultPort ? (uri.Scheme == "https" ? 443 : 80) : uri.Port;
@@ -116,6 +118,8 @@ public class StreamingService : IDisposable
                 graphics.CopyFromScreen(screen.Bounds.X, screen.Bounds.Y, destX, destY, screen.Bounds.Size);
             }
         }
+        if (ScreenshotService.IsUniformFrame(source))
+            throw new InvalidOperationException("Live View capture produced a uniform/blank frame.");
 
         using var scaled = new Bitmap(width, height);
         using (var graphics = Graphics.FromImage(scaled))

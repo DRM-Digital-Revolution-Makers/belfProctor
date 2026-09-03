@@ -3,8 +3,9 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import { randomUUID } from "crypto";
 import { decryptAes256CbcPrefixedIv, decryptFileStream } from "../encryption";
-import { requireAuth } from "../middleware/auth";
+import { requireAdmin, requireAuth } from "../middleware/auth";
 import { getClient, saveClient, setFavorite } from "../store";
 import { Prisma } from "@prisma/client";
 import { getSenderClientId, normalizeClientId } from "../clientId";
@@ -21,6 +22,8 @@ import {
 import { prisma } from "../prisma";
 import { startOfTashkentDay, endOfTashkentDay } from "../tz";
 import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
+import { isSafeCommandId } from "../util/commandId";
+import { config } from "../config";
 
 const router = Router();
 const storage = multer.diskStorage({
@@ -30,33 +33,20 @@ const storage = multer.diskStorage({
     cb(null, tempDir);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    cb(null, `${Date.now()}_${randomUUID()}`);
   },
 });
-const MAX_SCREENSHOT_BYTES = parseInt(
-  process.env.MAX_SCREENSHOT_BYTES || String(20 * 1024 * 1024),
-  10,
-);
-const MAX_REPORT_BYTES = parseInt(
-  process.env.MAX_REPORT_BYTES || String(200 * 1024 * 1024),
-  10,
-);
-const MAX_COMMAND_RESULT_BYTES = parseInt(
-  process.env.MAX_COMMAND_RESULT_BYTES || String(512 * 1024 * 1024),
-  10,
-);
-
 const uploadScreenshot = multer({
   storage,
-  limits: { fileSize: MAX_SCREENSHOT_BYTES },
+  limits: { fileSize: config.uploadLimits.screenshotBytes },
 });
 const uploadReport = multer({
   storage,
-  limits: { fileSize: MAX_REPORT_BYTES },
+  limits: { fileSize: config.uploadLimits.reportBytes },
 });
 const uploadCommandResult = multer({
   storage,
-  limits: { fileSize: MAX_COMMAND_RESULT_BYTES },
+  limits: { fileSize: config.uploadLimits.commandResultBytes },
 });
 
 const getUploadDir = () => resolveUploadDir();
@@ -88,11 +78,7 @@ router.post(
 
       const safeClientId = clientId;
       const now = authoritativeNow();
-      let client: any = await getClient(safeClientId);
-      if (!client) {
-        await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
-        client = await getClient(safeClientId);
-      }
+      const client: any = await getClient(safeClientId);
 
       const keysToTry = getKeysToTry(client?.encryptionKey);
 
@@ -180,7 +166,6 @@ router.post(
         ok: true,
         id: rec.id,
         filename,
-        path: filepath,
         timestamp: adjTs.toISOString(),
       });
     } catch (e) {
@@ -211,11 +196,7 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
     // commands) rather than raw new Date() — fixes report timestamp drift on
     // hosts with a skewed clock [B-M1].
     const now = authoritativeNow();
-    let client: any = await getClient(safeClientId);
-    if (!client) {
-      await saveClient({ id: safeClientId, createdAt: now, lastSeen: now });
-      client = await getClient(safeClientId);
-    }
+    const client: any = await getClient(safeClientId);
 
     if (!client || !client.encryptionKey) {
       return res
@@ -229,7 +210,11 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
     const filename = `report_${iso}_${Date.now()}.json`;
     const filepath = path.join(clientDir, filename);
 
-    await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    try {
+      await decryptFileStream(tempPath, filepath, client.encryptionKey);
+    } catch {
+      return res.status(400).json({ message: "Decryption failed" });
+    }
 
     // The report file is on disk; persist the DB row with compensation so a DB
     // failure never leaves an orphan file [B-C2].
@@ -269,7 +254,7 @@ router.post("/reports", uploadReport.single("report"), async (req, res) => {
 });
 
 // Toggle favorite
-router.put("/screenshots/:id/favorite", requireAuth, async (req, res) => {
+router.put("/screenshots/:id/favorite", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { isFavorite } = req.body;
@@ -501,21 +486,18 @@ router.post(
     const tempPath = req.file?.path;
     try {
       const id = req.params.id;
+      if (!isSafeCommandId(id)) {
+        return res.status(400).json({ message: "Invalid command id" });
+      }
       const clientId =
         normalizeClientId(String((req as any).body?.clientId || "")) ||
         normalizeClientId(String(req.headers["x-client-id"] || "")) ||
         getSenderClientId(req);
-      const timestampStr =
-        (req.body.timestamp as string) || new Date().toISOString();
       if (!req.file || !tempPath)
         return res.status(400).json({ message: "clientId and file required" });
 
       const now = authoritativeNow();
-      let client: any = await getClient(clientId);
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-        client = await getClient(clientId);
-      }
+      const client: any = await getClient(clientId);
 
       if (!client || !client.encryptionKey) {
         return res
@@ -525,19 +507,23 @@ router.post(
 
       const clientDir = path.join(getUploadDir(), "commands", clientId);
       fs.mkdirSync(clientDir, { recursive: true });
-      const filename = `${id}_${timestampStr.replace(/[:]/g, "-")}_${Date.now()}`;
+      const filename = `${id}_${Date.now()}_${randomUUID()}`;
       const filepath = path.join(clientDir, filename);
 
-      await withLock(`file:${filepath}`, async () => {
-        await decryptFileStream(tempPath, filepath, client.encryptionKey);
-      });
+      try {
+        await withLock(`file:${filepath}`, async () => {
+          await decryptFileStream(tempPath, filepath, client.encryptionKey);
+        });
+      } catch {
+        return res.status(400).json({ message: "Decryption failed" });
+      }
       await saveClient({
         id: clientId,
         encryptionKey: client.encryptionKey,
         lastSeen: now,
       });
 
-      res.json({ ok: true, path: filepath });
+      res.json({ ok: true });
     } catch (e) {
       console.error(e);
       res.status(500).json({ message: "Failed to ingest command file result" });
@@ -552,9 +538,12 @@ router.post(
 );
 
 // Admin: download latest file result for a command id
-router.get("/commands/:id/file/latest", requireAuth, async (req, res) => {
+router.get("/commands/:id/file/latest", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
+    if (!isSafeCommandId(id)) {
+      return res.status(400).json({ message: "Invalid command id" });
+    }
     const baseDir = path.join(getUploadDir(), "commands");
     const clientDirs = fs.existsSync(baseDir) ? fs.readdirSync(baseDir) : [];
     let latestPath = "";

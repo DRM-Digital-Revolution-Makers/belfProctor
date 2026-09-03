@@ -58,12 +58,6 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = authoritativeNow();
-      if (!client) {
-        await saveClient({ id: clientId, createdAt: now, lastSeen: now });
-      } else {
-        await saveClient({ id: clientId, lastSeen: now });
-      }
       console.error(
         `[Events] Failed to decrypt for client ${clientId}. Tried ${keysToTry.length} keys.`,
       );

@@ -220,6 +220,8 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     private IEnumerable<string> GetServerCandidates(bool extendedScan)
     {
+        if (!_settings.AllowInsecureDevelopmentTransport)
+            return Array.Empty<string>();
         var list = new List<string>();
         var configured = NormalizeServerUrl(_settings.ServerUrl);
         // Do NOT add configured here, we handle it separately in TryInitializeBaseAddress
@@ -820,33 +822,33 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
-            _logger.LogWarning("Encryption key not configured. Data will be sent unencrypted.");
-            return data;
+            throw new CryptographicException("Encryption key is not configured; refusing plaintext transmission.");
         }
 
         try
         {
-            using var aes = Aes.Create();
-            aes.Key = DeriveKeyFromPassword(_settings.EncryptionKey);
-            aes.GenerateIV();
-
-            using var encryptor = aes.CreateEncryptor();
-            using var msEncrypt = new MemoryStream();
-            
-            // Записываем IV в начало потока
-            msEncrypt.Write(aes.IV, 0, aes.IV.Length);
-            
-            using (var csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write))
-            {
-                csEncrypt.Write(data, 0, data.Length);
-            }
-
-            return msEncrypt.ToArray();
+            var salt = RandomNumberGenerator.GetBytes(16);
+            var nonce = RandomNumberGenerator.GetBytes(12);
+            var key = Rfc2898DeriveBytes.Pbkdf2(
+                Encoding.UTF8.GetBytes(_settings.EncryptionKey), salt, 210000,
+                HashAlgorithmName.SHA256, 32);
+            var ciphertext = new byte[data.Length];
+            var tag = new byte[16];
+            using var aes = new AesGcm(key, tag.Length);
+            aes.Encrypt(nonce, data, ciphertext, tag);
+            var envelope = new byte[4 + salt.Length + nonce.Length + tag.Length + ciphertext.Length];
+            Encoding.ASCII.GetBytes("BPG1").CopyTo(envelope, 0);
+            salt.CopyTo(envelope, 4);
+            nonce.CopyTo(envelope, 20);
+            tag.CopyTo(envelope, 32);
+            ciphertext.CopyTo(envelope, 48);
+            CryptographicOperations.ZeroMemory(key);
+            return envelope;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to encrypt data");
-            return data;
+            throw new CryptographicException("Payload encryption failed", ex);
         }
     }
 
@@ -953,25 +955,18 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
-            return new StreamContent(inputStream);
+            throw new CryptographicException("Encryption key is not configured; refusing plaintext transmission.");
         }
 
         try 
         {
-            using var aes = Aes.Create();
-            aes.Key = DeriveKeyFromPassword(_settings.EncryptionKey);
-            aes.GenerateIV();
-            
-            var ivStream = new MemoryStream(aes.IV);
-            var encryptor = aes.CreateEncryptor();
-            var cryptoStream = new CryptoStream(inputStream, encryptor, CryptoStreamMode.Read);
-            
-            var combined = new CombinedStream(ivStream, cryptoStream);
-            return new StreamContent(combined);
+            using var plain = new MemoryStream();
+            inputStream.CopyTo(plain);
+            return new StreamContent(new MemoryStream(EncryptData(plain.ToArray()), writable: false));
         }
-        catch
+        catch (Exception ex)
         {
-            return new StreamContent(inputStream);
+            throw new CryptographicException("Stream encryption failed", ex);
         }
     }
 
@@ -1027,11 +1022,27 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         if (string.IsNullOrEmpty(_settings.EncryptionKey))
         {
-            return encryptedData;
+            throw new CryptographicException("Encryption key is not configured.");
         }
 
         try
         {
+            if (encryptedData.Length >= 48 && Encoding.ASCII.GetString(encryptedData, 0, 4) == "BPG1")
+            {
+                var salt = encryptedData.AsSpan(4, 16).ToArray();
+                var nonce = encryptedData.AsSpan(20, 12).ToArray();
+                var tag = encryptedData.AsSpan(32, 16).ToArray();
+                var ciphertext = encryptedData.AsSpan(48).ToArray();
+                var key = Rfc2898DeriveBytes.Pbkdf2(
+                    Encoding.UTF8.GetBytes(_settings.EncryptionKey), salt, 210000,
+                    HashAlgorithmName.SHA256, 32);
+                var plaintext = new byte[ciphertext.Length];
+                using var gcm = new AesGcm(key, tag.Length);
+                gcm.Decrypt(nonce, ciphertext, tag, plaintext);
+                CryptographicOperations.ZeroMemory(key);
+                return plaintext;
+            }
+            // Migration-only CBC reader for locally queued pre-v2 payloads.
             using var aes = Aes.Create();
             aes.Key = DeriveKeyFromPassword(_settings.EncryptionKey);
             
@@ -1051,7 +1062,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to decrypt data");
-            return encryptedData;
+            throw new CryptographicException("Payload authentication or decryption failed", ex);
         }
     }
 
@@ -1061,14 +1072,14 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         return Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, 10000, HashAlgorithmName.SHA256, 32);
     }
 
-    private static string NormalizeServerUrl(string? raw)
+    private string NormalizeServerUrl(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
         raw = raw.Trim();
         if (!raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            raw = "http://" + raw;
+            raw = (_settings.AllowInsecureDevelopmentTransport ? "http://" : "https://") + raw;
         }
 
         if (!raw.EndsWith("/")) raw += "/";

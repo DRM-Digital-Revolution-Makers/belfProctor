@@ -6,7 +6,7 @@ import { authFetch } from "../dataProvider";
 
 const API_URL =
   import.meta.env.VITE_API_URL ||
-  `http://${window.location.hostname}:8080/api`;
+  "/api";
 
 function extractFilename(contentDisposition) {
   const raw = String(contentDisposition || "");

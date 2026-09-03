@@ -22,18 +22,27 @@ public class DataEncryptionTests
 
         var encrypted = svc.EncryptData(original);
         Assert.NotEqual(original, encrypted);
+        Assert.Equal("BPG1", System.Text.Encoding.ASCII.GetString(encrypted, 0, 4));
 
         var decrypted = svc.DecryptData(encrypted);
         Assert.Equal(original, decrypted);
     }
 
     [Fact]
-    public void Encrypt_WithoutKey_ReturnsOriginal()
+    public void Decrypt_TamperedGcmEnvelope_RejectsPayload()
+    {
+        var svc = CreateService("supersecretkey1234567890-supersecret");
+        var encrypted = svc.EncryptData(System.Text.Encoding.UTF8.GetBytes("payload"));
+        encrypted[^1] ^= 1;
+        Assert.Throws<System.Security.Cryptography.CryptographicException>(() => svc.DecryptData(encrypted));
+    }
+
+    [Fact]
+    public void Encrypt_WithoutKey_FailsClosed()
     {
         var svc = CreateService("");
         var data = new byte[] { 1, 2, 3, 4 };
-        var encrypted = svc.EncryptData(data);
-        Assert.Equal(data, encrypted);
+        Assert.Throws<System.Security.Cryptography.CryptographicException>(() => svc.EncryptData(data));
     }
 
     [Fact]

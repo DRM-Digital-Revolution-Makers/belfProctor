@@ -9,8 +9,6 @@ using System.Windows.Forms;
 using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.IO;
-using System.Text;
-using Microsoft.Win32;
 using BelfProctor.Services.WorkTracking;
 
 namespace BelfProctor;
@@ -19,6 +17,46 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Release-builder probe: prove that the trust anchor was embedded in
+        // this exact single-file executable. No host, UI or configuration is
+        // initialized in this mode.
+        var signerProbeIndex = Array.IndexOf(args, "--verify-embedded-signer");
+        if (signerProbeIndex >= 0)
+        {
+            var expected = signerProbeIndex + 1 < args.Length
+                ? args[signerProbeIndex + 1].Replace(" ", string.Empty).ToUpperInvariant()
+                : string.Empty;
+            var actual = UpdateHelper.ResolveTrustedSignerThumbprint(string.Empty);
+            Environment.ExitCode = expected.Length == 40 && actual == expected ? 0 : 41;
+            return;
+        }
+
+        // Set DPI awareness before any WinForms/Screen API is touched. This is
+        // required for physical-pixel multi-monitor bounds when displays use
+        // different scaling factors.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+
+        var captureEvidenceIndex = Array.IndexOf(args, "--capture-desktop-evidence");
+        if (captureEvidenceIndex >= 0)
+        {
+            if (captureEvidenceIndex + 1 >= args.Length ||
+                !Path.IsPathFullyQualified(args[captureEvidenceIndex + 1]))
+            {
+                Environment.ExitCode = 42;
+                return;
+            }
+            try
+            {
+                ScreenshotService.CaptureDesktopEvidence(args[captureEvidenceIndex + 1], 90L);
+                Environment.ExitCode = 0;
+            }
+            catch
+            {
+                Environment.ExitCode = 43;
+            }
+            return;
+        }
+
         // Immediate debug logging to verify process start
         try
         {
@@ -28,22 +66,31 @@ public class Program
         }
         catch { }
 
-        // Elevation handoff: when the unprivileged process needs to install the
-        // service it relaunches itself with this arg under UAC. Do the install
-        // and exit — the freshly-created service will start the worker.
+        // Services run in Session 0 and cannot capture a user's desktop. SCM
+        // therefore hosts only a lightweight supervisor; the actual monitoring
+        // worker runs from an interactive scheduled task in the logged-on session.
+        if (args.Contains("--service-host"))
+        {
+            var serviceHost = Host.CreateDefaultBuilder(args)
+                .UseWindowsService(options => options.ServiceName = ServiceInstaller.ServiceName)
+                .ConfigureServices(services => services.AddHostedService<DesktopAgentSupervisor>())
+                .Build();
+            await serviceHost.RunAsync();
+            return;
+        }
+
+        // Deliberately refuse the legacy self-install path. Registering the
+        // current executable could point SYSTEM/Highest at a user-writable
+        // directory. Deployment must go through the signed administrative
+        // installer, which stages into a protected installation root.
         if (args.Contains("--install-service"))
         {
-            try
-            {
-                using var currentProc = Process.GetCurrentProcess();
-                var exePath = currentProc.MainModule?.FileName
-                    ?? Path.Combine(AppContext.BaseDirectory, "BelfProctor.exe");
-                ServiceInstaller.EnsureInstalled(exePath);
-            }
-            catch (Exception ex)
-            {
-                try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor", "startup_log.txt"), $"{DateTime.Now}: --install-service failed: {ex.Message}\n"); } catch { }
-            }
+            MessageBox.Show(
+                "Self-installation is disabled for security. Run the signed BelfProctor installer as Administrator.",
+                "BelfProctor installation",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            Environment.ExitCode = 44;
             return;
         }
 
@@ -58,11 +105,11 @@ public class Program
             bool createdNew = true;
             try
             {
-                mutex = new Mutex(false, "Global\\Microsoft One Drive", out createdNew);
+                mutex = new Mutex(false, "Global\\BelfProctor", out createdNew);
             }
             catch (UnauthorizedAccessException)
             {
-                try { mutex = new Mutex(false, "Local\\Microsoft One Drive", out createdNew); }
+                try { mutex = new Mutex(false, "Local\\BelfProctor", out createdNew); }
                 catch { mutex = null; createdNew = true; }
             }
             catch (Exception)
@@ -110,18 +157,39 @@ public class Program
             // Explicitly load config from BaseDirectory and AppData
             builder.Configuration.SetBasePath(baseDir);
             builder.Configuration.AddJsonFile(baseConfig, optional: true, reloadOnChange: true);
+#if DEBUG
+            // Portable developer builds may keep a per-user override. Release
+            // builds intentionally trust only the installer-protected file
+            // beside the executable, because the worker runs at High integrity.
             builder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
+#endif
 
-            builder.Services.AddWindowsService(options => options.ServiceName = "Microsoft One Drive");
+            builder.Services.AddWindowsService(options => options.ServiceName = "BelfProctor");
             
             var section = builder.Configuration.GetSection("ProctorSettings");
             var clientIdStr = section["ClientId"] ?? string.Empty;
             var serverUrlStr = section["ServerUrl"] ?? string.Empty;
+            var encryptionKeyStr = section["EncryptionKey"] ?? string.Empty;
+            var allowInsecureTransport = bool.TryParse(section["AllowInsecureDevelopmentTransport"], out var insecureTransport) && insecureTransport;
+            var validServerTransport = Uri.TryCreate(serverUrlStr, UriKind.Absolute, out var configuredServerUri) &&
+                                       (configuredServerUri.Scheme == Uri.UriSchemeHttps || allowInsecureTransport);
+            var validDeviceCredential = encryptionKeyStr.Length >= 32 &&
+                                        !encryptionKeyStr.Contains("PROVISION_", StringComparison.OrdinalIgnoreCase) &&
+                                        !string.Equals(encryptionKeyStr, "ABCDEFGHIJKLMNOP", StringComparison.Ordinal);
+            var signerThumbprint = UpdateHelper.ResolveTrustedSignerThumbprint(
+                section["TrustedUpdateSignerThumbprint"] ?? string.Empty);
+            var updateV2Enabled = !bool.TryParse(section["Features:UpdateV2"], out var configuredUpdateV2) || configuredUpdateV2;
+            var validUpdateTrust = !updateV2Enabled ||
+                                   (signerThumbprint.Length == 40 && signerThumbprint.All(Uri.IsHexDigit));
             
             bool isAutoStart = args.Contains("--auto-start");
             bool needsConfig = showConfigUi ||
                                string.IsNullOrWhiteSpace(clientIdStr) ||
                                string.IsNullOrWhiteSpace(serverUrlStr) ||
+                               clientIdStr.Contains("PROVISION_", StringComparison.OrdinalIgnoreCase) ||
+                               !validServerTransport ||
+                               !validDeviceCredential ||
+                               !validUpdateTrust ||
                                args.Contains("--config-ui");
 
             // Log config status
@@ -189,7 +257,6 @@ public class Program
 
             if (needsConfig)
             {
-                Application.SetHighDpiMode(HighDpiMode.SystemAware);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 
@@ -207,6 +274,8 @@ public class Program
                     ScreenshotRetentionMinutes = GetOverride("ProctorSettings:ScreenshotRetentionMinutes", 60),
                     InactivityThresholdMinutes = GetOverride("ProctorSettings:InactivityThresholdMinutes", 3),
                     EncryptionKey = section["EncryptionKey"] ?? string.Empty,
+                    AllowInsecureDevelopmentTransport = allowInsecureTransport,
+                    TrustedUpdateSignerThumbprint = signerThumbprint,
                     ScreenshotPath = section["ScreenshotPath"] ?? string.Empty,
                     LogPath = section["LogPath"] ?? string.Empty,
                     ReportsPath = section["ReportsPath"] ?? string.Empty,
@@ -217,13 +286,22 @@ public class Program
                     Features = ReadFeatures(section),
                 };
                 
-                var savePaths = new[] { appDataConfig, baseConfig };
+                var savePaths = new[] {
+#if DEBUG
+                    appDataConfig
+#else
+                    baseConfig
+#endif
+                };
                 Application.Run(new UI.SettingsForm(cfg, safeSettings, savePaths));
                 return; // Exit after config
             }
 
-            // Final check before running services
+            // Final check before running services. Keep Release configuration
+            // anchored in the protected install directory.
+#if DEBUG
             builder.Configuration.AddJsonFile(appDataConfig, optional: true, reloadOnChange: true);
+#endif
 
             // Build strongly-typed sanitized settings to avoid binder Int32 failures on "300000.0"
             var sanitizedSection = builder.Configuration.GetSection("ProctorSettings");
@@ -240,6 +318,8 @@ public class Program
                 ScreenshotRetentionMinutes = GetOverride("ProctorSettings:ScreenshotRetentionMinutes", 60),
                 InactivityThresholdMinutes = GetOverride("ProctorSettings:InactivityThresholdMinutes", 3),
                 EncryptionKey = sanitizedSection["EncryptionKey"] ?? string.Empty,
+                AllowInsecureDevelopmentTransport = allowInsecureTransport,
+                TrustedUpdateSignerThumbprint = signerThumbprint,
                 ScreenshotPath = sanitizedSection["ScreenshotPath"] ?? string.Empty,
                 LogPath = sanitizedSection["LogPath"] ?? string.Empty,
                 ReportsPath = sanitizedSection["ReportsPath"] ?? string.Empty,
@@ -276,7 +356,6 @@ public class Program
                 logging.AddProvider(fileLoggerProvider);
             });
 
-            EnsureAutoStart();
             var host = builder.Build();
             await host.RunAsync();
         }
@@ -291,78 +370,4 @@ public class Program
         }
     }
 
-    private static void EnsureAutoStart()
-    {
-        try
-        {
-            using var proc = Process.GetCurrentProcess();
-            var exePath = proc.MainModule?.FileName;
-            if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) return;
-
-            var exeName = Path.GetFileNameWithoutExtension(exePath);
-
-            // 1. Registry Run key — запуск при входе пользователя
-            using var runKey = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
-            runKey?.SetValue("BelfProctor", $"\"{exePath}\" --auto-start");
-
-            // 2. Watchdog через лёгкий PowerShell-скрипт каждые 3 минуты.
-            // PowerShell стартует в ~200мс и ~20МБ, не запускает полный .NET exe зря.
-            // Скрипт проверяет: если процесс не запущен — запускает exe.
-            var watchdogDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BelfProctor");
-            Directory.CreateDirectory(watchdogDir);
-            var watchdogScript = Path.Combine(watchdogDir, "watchdog.ps1");
-
-            File.WriteAllText(watchdogScript,
-                $"if (-not (Get-Process -Name '{exeName}' -ErrorAction SilentlyContinue)) {{\r\n" +
-                $"    Start-Process -FilePath '{exePath}' -ArgumentList '--auto-start' -WindowStyle Hidden\r\n" +
-                $"}}\r\n",
-                Encoding.UTF8);
-
-            const string taskName = "BelfProctor";
-            var xml = $@"<?xml version=""1.0"" encoding=""UTF-16""?>
-<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <Repetition>
-        <Interval>PT3M</Interval>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-    </LogonTrigger>
-  </Triggers>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
-    <Priority>7</Priority>
-  </Settings>
-  <Actions Context=""Author"">
-    <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{watchdogScript}""</Arguments>
-    </Exec>
-  </Actions>
-</Task>";
-
-            var xmlPath = Path.Combine(Path.GetTempPath(), "bp_task.xml");
-            File.WriteAllText(xmlPath, xml, Encoding.Unicode);
-
-            var psi = new ProcessStartInfo("schtasks.exe",
-                $"/Create /F /TN \"{taskName}\" /XML \"{xmlPath}\"")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            using var p = Process.Start(psi);
-            p?.WaitForExit(10000);
-
-            try { File.Delete(xmlPath); } catch { }
-        }
-        catch { }
-    }
 }

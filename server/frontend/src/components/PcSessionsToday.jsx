@@ -4,7 +4,7 @@ import { formatTashkent, tashkentDateKey } from "../utils/time";
 
 const API_URL =
   import.meta.env.VITE_API_URL ||
-  `http://${window.location.hostname}:8080/api`;
+  "/api";
 
 /**
  * Per-client list of "PC was on" intervals for a given day in Asia/Tashkent.
