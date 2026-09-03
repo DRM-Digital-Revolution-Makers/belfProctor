@@ -12,12 +12,17 @@ import { resolveUploadDir } from "../runtimePaths";
 
 const router = Router();
 
+import { tashkentDayKey } from "../tz";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
+
 const UPLOAD_DIR = resolveUploadDir();
 const CLIENT_LOG_DIR = path.join(UPLOAD_DIR, "logs", "clients");
 const SERVER_LOG_DIR = path.join(UPLOAD_DIR, "logs", "server");
 
+// Group client logs into Tashkent calendar days so "2026-06-11.log" matches
+// what the operator would call "11 июня" on their wall clock.
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return tashkentDayKey(d);
 }
 
 async function ensureDir(p: string): Promise<void> {
@@ -54,7 +59,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const now = new Date();
+    const now = authoritativeNow();
     if (!usedKey) {
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
@@ -70,8 +75,8 @@ router.post("/", async (req, res) => {
     const level = String(payload?.level || "INFO").toUpperCase();
     const source = String(payload?.source || "client");
     const tsRaw = payload?.timestamp || payload?.time || payload?.Timestamp;
-    const tsParsed = new Date(tsRaw || Date.now());
-    const when = isNaN(tsParsed.getTime()) ? now : tsParsed;
+    const tsParsed = tsRaw ? new Date(tsRaw) : null;
+    const when = reconcileTime(tsParsed && !isNaN(tsParsed.getTime()) ? tsParsed : null);
 
     const clientDay = dayKey(when);
     const dir = path.join(CLIENT_LOG_DIR, clientId);

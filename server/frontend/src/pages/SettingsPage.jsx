@@ -86,6 +86,7 @@ export default function SettingsPage() {
     <div>
       {/* Outer wrapper */}
       <div
+        className="bp-page-shell"
         style={{
           background: BP.surface,
           borderRadius: 50,
@@ -152,7 +153,7 @@ export default function SettingsPage() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Поиск..."
+                  placeholder={tab === "agents" ? "Поиск по агентам..." : "Поиск..."}
                   style={{
                     flex: 1,
                     border: "none",
@@ -182,6 +183,8 @@ export default function SettingsPage() {
               padding: "0 20px",
               gap: 2,
               marginTop: 8,
+              overflowX: "auto",
+              whiteSpace: "nowrap",
             }}
           >
             <TabButton
@@ -236,6 +239,7 @@ function TabButton({ active, onClick, children }) {
     <button
       type="button"
       onClick={onClick}
+      className="bp-tab-button"
       style={{
         background: "transparent",
         border: "none",
@@ -254,74 +258,43 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-function InfoField({ label, value }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        padding: 4,
-        borderRadius: 2,
-      }}
-    >
-      <span
-        style={{
-          fontFamily: BP.font,
-          fontSize: 14,
-          color: BP.text,
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {label}
-      </span>
-      <span
-        style={{
-          fontFamily: BP.font,
-          fontSize: 16,
-          color: BP.text,
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
 function GeneralTab({ currentLang, langMenuItems, t }) {
   return (
-    <>
-      {/* Info box (Frame 80 — layout_XHTIFA fill_6MCH7X 10px radius padding 12) */}
+    <div className="bp-fade-in" style={{ display: "grid", gap: 18 }}>
       <div
         style={{
-          background: BP.formBg,
-          borderRadius: 10,
-          padding: 12,
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
           gap: 12,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-            flex: 1,
-          }}
-        >
-          <InfoField label="Название системы:" value="Belf Proctor" />
-          <InfoField label="Версия Belf Proctor:" value="1.0.0" />
-          <InfoField label="Последняя версия Агента:" value="1.0.0" />
-        </div>
+        <InfoCard
+          icon="solar:shield-check-bold-duotone"
+          label="Система"
+          value="Belf Proctor"
+          hint="Единая панель мониторинга сотрудников"
+        />
+        <InfoCard
+          icon="solar:code-circle-bold-duotone"
+          label="Версия панели"
+          value="1.0.0"
+          hint="Текущая сборка интерфейса"
+        />
+        <InfoCard
+          icon="solar:download-minimalistic-bold-duotone"
+          label="Версия агента"
+          value="1.0.0"
+          hint="Базовая версия клиентской части"
+        />
       </div>
 
-      {/* Интерфейс section */}
       <div
+        className="bp-section-card bp-interactive-card"
         style={{
           display: "flex",
           flexDirection: "column",
           gap: 12,
-          marginTop: 8,
+          padding: 16,
         }}
       >
         <div
@@ -335,7 +308,6 @@ function GeneralTab({ currentLang, langMenuItems, t }) {
           Интерфейс
         </div>
 
-        {/* Frame 156 — column gap 8 */}
         <div
           style={{
             display: "flex",
@@ -354,7 +326,6 @@ function GeneralTab({ currentLang, langMenuItems, t }) {
             {t("settings.language") || "Язык интерфейса"}
           </div>
 
-          {/* Language select (Frame 285 — layout_YWL5QT: row align-center gap 12 padding 12, 10px radius, 1px stroke) */}
           <Dropdown
             trigger={["click"]}
             menu={{ items: langMenuItems, selectable: true, selectedKeys: [currentLang.value] }}
@@ -362,6 +333,7 @@ function GeneralTab({ currentLang, langMenuItems, t }) {
           >
             <button
               type="button"
+              className="bp-ghost-action"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -398,7 +370,47 @@ function GeneralTab({ currentLang, langMenuItems, t }) {
           </Dropdown>
         </div>
       </div>
-    </>
+    </div>
+  );
+}
+
+function InfoCard({ icon, label, value, hint }) {
+  return (
+    <div
+      className="bp-soft-panel bp-interactive-card"
+      style={{
+        padding: 16,
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start",
+        minHeight: 104,
+        fontFamily: BP.font,
+      }}
+    >
+      <span
+        style={{
+          width: 38,
+          height: 38,
+          borderRadius: 12,
+          background: "rgba(38,126,38,0.09)",
+          color: BP.green,
+          display: "inline-grid",
+          placeItems: "center",
+          flex: "0 0 auto",
+        }}
+      >
+        <Icon icon={icon} width={21} height={21} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ color: BP.muted, fontSize: 13 }}>{label}</div>
+        <div style={{ color: BP.text, fontSize: 20, fontWeight: 510, marginTop: 2 }}>
+          {value}
+        </div>
+        <div style={{ color: BP.light, fontSize: 12, marginTop: 5 }}>
+          {hint}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -423,6 +435,24 @@ function compareVersions(a, b) {
     if (d !== 0) return d;
   }
   return 0;
+}
+
+function formatDeploymentStatus(status, detail) {
+  const value = String(status || "");
+  const suffix = detail ? `: ${detail}` : "";
+  if (value === "sent") return { text: `Команда отправлена${suffix}`, color: BP.blue };
+  if (value === "queued_offline") return { text: "В очереди: агент оффлайн", color: BP.blue };
+  if (value.startsWith("downloading")) return { text: `Скачивание${suffix}`, color: BP.blue };
+  if (value === "verifying") return { text: "Проверка файла", color: BP.blue };
+  if (value === "waiting_idle") return { text: "Ожидание простоя", color: BP.blue };
+  if (value === "installing") return { text: "Установка", color: BP.blue };
+  if (value === "restarted") return { text: "Перезапуск агента", color: BP.blue };
+  if (value === "confirmed") return { text: "Обновление подтверждено", color: BP.green };
+  if (value === "already_up_to_date") return { text: "Актуальная версия", color: BP.green };
+  if (value === "sha_mismatch") return { text: "Ошибка: не совпал SHA-256", color: "#DC2626" };
+  if (value === "failed") return { text: `Ошибка${suffix}`, color: "#DC2626" };
+  if (value.startsWith("error")) return { text: `Ошибка: ${value}${suffix}`, color: "#DC2626" };
+  return { text: `${value}${suffix}`, color: BP.muted };
 }
 
 function AgentsTab({ clients }) {
@@ -631,8 +661,8 @@ function AgentsTab({ clients }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Upload bar */}
       <div
+        className="bp-section-card bp-interactive-card"
         style={{
-          border: `1px solid ${BP.stroke}`,
           borderRadius: 18,
           padding: "16px 28px",
           background: BP.white,
@@ -668,6 +698,7 @@ function AgentsTab({ clients }) {
         <button
           type="button"
           onClick={() => setUploadOpen(true)}
+          className="bp-primary-action"
           style={{
             background: BP.green,
             color: BP.white,
@@ -689,8 +720,8 @@ function AgentsTab({ clients }) {
 
       {/* Versions list */}
       <div
+        className="bp-section-card bp-interactive-card"
         style={{
-          border: `1px solid ${BP.stroke}`,
           borderRadius: 18,
           overflow: "hidden",
           background: BP.white,
@@ -717,6 +748,7 @@ function AgentsTab({ clients }) {
           <button
             type="button"
             onClick={loadAll}
+            className="bp-icon-button"
             style={{
               background: "transparent",
               border: "none",
@@ -770,7 +802,7 @@ function AgentsTab({ clients }) {
                         fontWeight: 400,
                       }}
                     >
-                      latest
+                      актуальная
                     </span>
                   )}
                 </div>
@@ -877,7 +909,7 @@ function AgentsTab({ clients }) {
             onChange={setDeployTo}
             style={{ minWidth: 140 }}
             options={versions.map((v) => ({
-              label: v.version + (v.version === latestVersion ? " (latest)" : ""),
+              label: v.version + (v.version === latestVersion ? " (актуальная)" : ""),
               value: v.version,
             }))}
           />
@@ -885,6 +917,7 @@ function AgentsTab({ clients }) {
             type="button"
             disabled={!selected.length || !deployTo}
             onClick={doDeploy}
+            className="bp-primary-action"
             style={{
               background:
                 !selected.length || !deployTo ? BP.stroke : BP.green,
@@ -909,8 +942,8 @@ function AgentsTab({ clients }) {
 
       {/* Clients table */}
       <div
+        className="bp-section-card bp-interactive-card"
         style={{
-          border: `1px solid ${BP.stroke}`,
           borderRadius: 18,
           overflow: "hidden",
           background: BP.white,
@@ -927,7 +960,7 @@ function AgentsTab({ clients }) {
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 24 }} />
-            <div style={{ width: 40, color: BP.light, fontSize: 14 }}>No</div>
+            <div style={{ width: 40, color: BP.light, fontSize: 14 }}>№</div>
             <div
               style={{
                 color: BP.muted,
@@ -985,7 +1018,7 @@ function AgentsTab({ clients }) {
               let statusText = "";
               let statusColor = BP.muted;
               if (isOnline === false) {
-                statusText = "offline";
+                statusText = "Оффлайн";
                 statusColor = BP.muted;
               } else if (isLatest) {
                 statusText = "✓ актуальная";
@@ -1004,14 +1037,16 @@ function AgentsTab({ clients }) {
                   s === "waiting_idle" ||
                   s === "installing"
                 ) {
-                  statusText = `${s}${dep.lastDetail ? ": " + dep.lastDetail : ""}`;
-                  statusColor = "#22408C";
+                  const formatted = formatDeploymentStatus(s, dep.lastDetail);
+                  statusText = formatted.text;
+                  statusColor = formatted.color;
                 } else if (s === "already_up_to_date") {
                   statusText = "✓ актуальная";
                   statusColor = BP.green;
-                } else if (s.startsWith("error") || s === "sha_mismatch") {
-                  statusText = `ошибка: ${s}`;
-                  statusColor = "#DC2626";
+                } else if (s.startsWith("error") || s === "sha_mismatch" || s === "failed") {
+                  const formatted = formatDeploymentStatus(s, dep.lastDetail);
+                  statusText = formatted.text;
+                  statusColor = formatted.color;
                 }
               }
               const checked = selected.includes(a.id);
@@ -1079,6 +1114,8 @@ function AgentsTab({ clients }) {
         </div>
       </div>
 
+      <ProjectMappingSection apiUrl={API_URL} />
+
       {/* Upload modal */}
       <Modal
         open={uploadOpen}
@@ -1124,7 +1161,6 @@ function AgentsTab({ clients }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".exe"
               onChange={(e) => setFileObj(e.target.files?.[0] || null)}
             />
             {fileObj && (
@@ -1143,4 +1179,372 @@ function AgentsTab({ clients }) {
       </Modal>
     </div>
   );
+}
+
+function ProjectMappingSection({ apiUrl }) {
+  const [roots, setRoots] = React.useState([]);
+  const [aliases, setAliases] = React.useState([]);
+  const [unknown, setUnknown] = React.useState([]);
+  const [rootName, setRootName] = React.useState("");
+  const [rootPath, setRootPath] = React.useState("");
+  const [alias, setAlias] = React.useState("");
+  const [projectName, setProjectName] = React.useState("");
+  const [resolveValues, setResolveValues] = React.useState({});
+
+  const load = React.useCallback(async () => {
+    const [rootsRes, aliasesRes, unknownRes] = await Promise.all([
+      authFetch(`${apiUrl}/work/project-roots`),
+      authFetch(`${apiUrl}/work/project-aliases`),
+      authFetch(`${apiUrl}/work/unknown`),
+    ]);
+    if (rootsRes.ok) {
+      const j = await rootsRes.json();
+      setRoots(Array.isArray(j.data) ? j.data : []);
+    }
+    if (aliasesRes.ok) {
+      const j = await aliasesRes.json();
+      setAliases(Array.isArray(j.data) ? j.data : []);
+    }
+    if (unknownRes.ok) {
+      const j = await unknownRes.json();
+      setUnknown(Array.isArray(j.data) ? j.data : []);
+    }
+  }, [apiUrl]);
+
+  React.useEffect(() => {
+    load().catch(() => {});
+  }, [load]);
+
+  const addRoot = async () => {
+    if (!rootName.trim() || !rootPath.trim()) return;
+    const res = await authFetch(`${apiUrl}/work/project-roots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: rootName.trim(), path: rootPath.trim() }),
+    });
+    if (res.ok) {
+      setRootName("");
+      setRootPath("");
+      await load();
+    }
+  };
+
+  const addAlias = async () => {
+    if (!alias.trim() || !projectName.trim()) return;
+    const res = await authFetch(`${apiUrl}/work/project-aliases`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alias: alias.trim(), projectName: projectName.trim() }),
+    });
+    if (res.ok) {
+      setAlias("");
+      setProjectName("");
+      await load();
+    }
+  };
+
+  const remove = async (url) => {
+    const res = await authFetch(url, { method: "DELETE" });
+    if (res.ok) await load();
+  };
+
+  const resolveUnknown = async (id) => {
+    const value = String(resolveValues[id] || "").trim();
+    if (!value) return;
+    const res = await authFetch(`${apiUrl}/work/unknown/${encodeURIComponent(id)}/resolve`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectName: value }),
+    });
+    if (res.ok) {
+      setResolveValues((prev) => ({ ...prev, [id]: "" }));
+      await load();
+    }
+  };
+
+  const unknownPreview = unknown.slice(0, 12);
+
+  return (
+    <div
+      className="bp-fade-in bp-section-card bp-interactive-card"
+      style={{
+        borderRadius: 18,
+        padding: "18px 28px 22px",
+        background: BP.white,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontFamily: BP.font,
+              fontSize: 18,
+              fontWeight: 510,
+              color: BP.text,
+            }}
+          >
+            Проекты и пути
+          </div>
+          <div
+            style={{
+              color: BP.muted,
+              fontFamily: BP.font,
+              fontSize: 14,
+              marginTop: 4,
+            }}
+          >
+            Настройте, какие папки считать проектами, и разберите внешние пути.
+          </div>
+        </div>
+        <span
+          className="bp-status-pill"
+          style={{
+            background: unknown.length ? "rgba(245,158,11,0.12)" : "rgba(38,126,38,0.1)",
+            color: unknown.length ? "#B45309" : BP.green,
+          }}
+        >
+          <Icon
+            icon={unknown.length ? "solar:danger-triangle-bold-duotone" : "solar:check-circle-bold-duotone"}
+            width={14}
+            height={14}
+          />
+          {unknown.length ? `Неразобрано: ${unknown.length}` : "Все пути разобраны"}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 14,
+          marginTop: 16,
+        }}
+      >
+        <MappingCard
+          icon="solar:folder-open-bold-duotone"
+          title="Корневые папки"
+          description="Папки, внутри которых система ищет проекты."
+          count={roots.length}
+        >
+          <Input value={rootName} onChange={(e) => setRootName(e.target.value)} placeholder="Название проекта" />
+          <Input value={rootPath} onChange={(e) => setRootPath(e.target.value)} placeholder="C:\\Projects или \\\\server\\share" />
+          <button type="button" onClick={addRoot} className="bp-primary-action" style={smallActionStyle(true)}>
+            <Icon icon="solar:add-circle-bold-duotone" width={16} height={16} />
+            Добавить папку
+          </button>
+          <ListRows
+            rows={roots}
+            empty="Корневые папки ещё не добавлены"
+            emptyIcon="solar:folder-with-files-bold-duotone"
+            render={(r) => (
+              <>
+                <span style={{ minWidth: 0 }}>
+                  <strong>{r.name}</strong>
+                  <span className="bp-path-text" title={r.path} style={{ display: "block", color: BP.muted, marginTop: 2 }}>
+                    {r.path}
+                  </span>
+                </span>
+                <button type="button" onClick={() => remove(`${apiUrl}/work/project-roots/${encodeURIComponent(r.id)}`)} className="bp-ghost-action" style={dangerMiniButtonStyle}>
+                  <Icon icon="solar:trash-bin-trash-linear" width={14} height={14} />
+                  Удалить
+                </button>
+              </>
+            )}
+          />
+        </MappingCard>
+
+        <MappingCard
+          icon="solar:link-round-angle-bold-duotone"
+          title="Псевдонимы проектов"
+          description="Свяжите папки-алиасы с единым названием проекта."
+          count={aliases.length}
+        >
+          <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Папка или алиас" />
+          <Input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Основное название проекта" />
+          <button type="button" onClick={addAlias} className="bp-primary-action" style={smallActionStyle(true)}>
+            <Icon icon="solar:add-circle-bold-duotone" width={16} height={16} />
+            Добавить алиас
+          </button>
+          <ListRows
+            rows={aliases}
+            empty="Псевдонимов пока нет"
+            emptyIcon="solar:link-broken-bold-duotone"
+            render={(r) => (
+              <>
+                <span className="bp-path-text" title={`${r.alias} -> ${r.projectName}`}>
+                  {r.alias} <span style={{ color: BP.light }}>→</span> <strong>{r.projectName}</strong>
+                </span>
+                <button type="button" onClick={() => remove(`${apiUrl}/work/project-aliases/${encodeURIComponent(r.id)}`)} className="bp-ghost-action" style={dangerMiniButtonStyle}>
+                  <Icon icon="solar:trash-bin-trash-linear" width={14} height={14} />
+                  Удалить
+                </button>
+              </>
+            )}
+          />
+        </MappingCard>
+
+        <MappingCard
+          icon="solar:question-circle-bold-duotone"
+          title="Неразобранные пути"
+          description="Внешние файлы не теряются: их можно привязать к проекту вручную."
+          count={unknown.length}
+        >
+          <ListRows
+            rows={unknownPreview}
+            empty="Неразобранных путей нет"
+            emptyHint="Когда агент увидит внешний файл, он появится здесь."
+            emptyIcon="solar:check-read-bold-duotone"
+            render={(r) => (
+              <div style={{ display: "grid", gap: 6, width: "100%" }}>
+                <span className="bp-path-text" title={r.path}>{r.path}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Input
+                    value={resolveValues[r.id] || ""}
+                    onChange={(e) => setResolveValues((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                    placeholder="Название проекта"
+                    size="small"
+                  />
+                  <button type="button" onClick={() => resolveUnknown(r.id)} className="bp-ghost-action" style={miniButtonStyle}>
+                    <Icon icon="solar:link-round-bold" width={14} height={14} />
+                    Привязать
+                  </button>
+                </div>
+              </div>
+            )}
+          />
+          {unknown.length > unknownPreview.length && (
+            <div style={{ color: BP.muted, fontSize: 12, fontFamily: BP.font }}>
+              Показаны первые {unknownPreview.length} из {unknown.length}
+            </div>
+          )}
+        </MappingCard>
+      </div>
+    </div>
+  );
+}
+
+function MappingCard({ icon, title, description, count, children }) {
+  return (
+    <div
+      className="bp-soft-panel"
+      style={{
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minWidth: 0,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            display: "inline-grid",
+            placeItems: "center",
+            background: "rgba(38,126,38,0.09)",
+            color: BP.green,
+            flex: "0 0 auto",
+          }}
+        >
+          <Icon icon={icon} width={18} height={18} />
+        </span>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontFamily: BP.font, fontSize: 15, fontWeight: 510 }}>{title}</div>
+            <span className="bp-status-pill" style={{ background: BP.white, color: BP.muted }}>{count}</span>
+          </div>
+          <div style={{ color: BP.muted, fontFamily: BP.font, fontSize: 12, marginTop: 2 }}>
+            {description}
+          </div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ListRows({ rows, render, empty = "Пусто", emptyHint, emptyIcon = "solar:inbox-bold-duotone" }) {
+  if (!rows?.length) {
+    return (
+      <div className="bp-empty-state" style={{ fontFamily: BP.font, fontSize: 13 }}>
+        <Icon icon={emptyIcon} width={22} height={22} color={BP.light} />
+        <div>{empty}</div>
+        {emptyHint && <div style={{ fontSize: 12, color: BP.light }}>{emptyHint}</div>}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      {rows.map((row) => (
+        <div
+          key={row.id}
+          className="bp-hover-row"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+            padding: "9px 10px",
+            border: `1px solid ${BP.surface}`,
+            borderRadius: 10,
+            background: "rgba(255,255,255,0.72)",
+            fontFamily: BP.font,
+            fontSize: 13,
+            minWidth: 0,
+          }}
+        >
+          {render(row)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const miniButtonStyle = {
+  border: `1px solid ${BP.stroke}`,
+  background: BP.white,
+  color: BP.text,
+  borderRadius: 8,
+  padding: "5px 9px",
+  cursor: "pointer",
+  fontFamily: BP.font,
+  fontSize: 12,
+  whiteSpace: "nowrap",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+};
+
+const dangerMiniButtonStyle = {
+  ...miniButtonStyle,
+  color: "#B91C1C",
+  borderColor: "rgba(220,38,38,0.24)",
+};
+
+function smallActionStyle(primary) {
+  return {
+    border: primary ? "none" : `1px solid ${BP.stroke}`,
+    background: primary ? BP.green : BP.white,
+    color: primary ? BP.white : BP.text,
+    borderRadius: 10,
+    padding: "8px 12px",
+    cursor: "pointer",
+    fontFamily: BP.font,
+    fontSize: 14,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "transform 0.16s ease, opacity 0.16s ease",
+  };
 }

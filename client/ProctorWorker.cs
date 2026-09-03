@@ -82,18 +82,25 @@ public class ProctorWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var screenshotLoop = RunScreenshotLoop(stoppingToken);
+        // Stagger startup so a fleet of PCs powering on together (e.g. at 08:00)
+        // does not hit the server in one synchronized burst. Spread the first
+        // tick of each periodic task across a random window. Configurable via
+        // MaxStartupJitterMs (set to 0 to fire immediately — used by tests).
+        var jitterMaxMs = Math.Max(0, _settings.MaxStartupJitterMs);
+        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, jitterMaxMs + 1));
+
+        var screenshotLoop = RunScreenshotLoop(stoppingToken, jitter);
 
         // Heartbeat with adaptive interval
-        _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
-        
+        _heartbeatTimer = new Timer(async _ => await SendHeartbeat(), null, jitter, Timeout.InfiniteTimeSpan);
+
         // Activity reporting (every 1 minute)
-        _activityReportTimer = new Timer(async _ => await SendActivitySnapshot(), null, 
-            TimeSpan.Zero, TimeSpan.FromMinutes(1));
+        _activityReportTimer = new Timer(async _ => await SendActivitySnapshot(), null,
+            jitter, TimeSpan.FromMinutes(1));
 
         var policyInterval = _settings.PolicyUpdateIntervalMs > 1000 ? _settings.PolicyUpdateIntervalMs : 60000;
         var policyUpdateTimer = new Timer(async _ => await UpdatePolicies(), null,
-            TimeSpan.Zero, TimeSpan.FromMilliseconds(policyInterval));
+            jitter, TimeSpan.FromMilliseconds(policyInterval));
 
         try
         {
@@ -109,10 +116,19 @@ public class ProctorWorker : BackgroundService
         }
     }
 
-    private async Task RunScreenshotLoop(CancellationToken ct)
+    private async Task RunScreenshotLoop(CancellationToken ct, TimeSpan startupJitter)
     {
-        var interval = _settings.ScreenshotIntervalMs > 5000 ? _settings.ScreenshotIntervalMs : 300000;
+        // Enforce a floor of 5 minutes. Values < 300 000 ms (e.g. a stale 10 000 saved
+        // to AppData by a previous setIntervals command) would otherwise cause a burst
+        // of screenshots every few seconds right after startup.
+        var interval = _settings.ScreenshotIntervalMs >= 300000 ? _settings.ScreenshotIntervalMs : 300000;
         var timer = new System.Threading.PeriodicTimer(TimeSpan.FromMilliseconds(interval));
+        // Stagger the first (heaviest) capture across the startup window too.
+        if (startupJitter > TimeSpan.Zero)
+        {
+            try { await Task.Delay(startupJitter, ct); }
+            catch (OperationCanceledException) { return; }
+        }
         // Немедленный снимок при старте
         await TakeScreenshot();
         while (await timer.WaitForNextTickAsync(ct))
@@ -265,12 +281,35 @@ public class ProctorWorker : BackgroundService
         var isActive = _activityMonitorService.IsUserActive;
         var ms = (long)_activityMonitorService.ActiveElapsed.TotalMilliseconds;
         var ims = (long)_activityMonitorService.InactiveElapsed.TotalMilliseconds;
-        try { await _dataTransmissionService.SendActivityAsync(isActive, ms, ims); }
-        catch { }
+        try
+        {
+            await _dataTransmissionService.SendActivityAsync(isActive, ms, ims);
+        }
+        catch (Exception ex)
+        {
+            // Transient — the next snapshot retries. Log (not silent) at debug
+            // so it's diagnosable without spamming on every network blip.
+            _logger.LogDebug(ex, "Failed to send activity snapshot");
+        }
     }
 
     private void OnSystemEventOccurred(object? sender, SystemEvent e)
     {
-        _dataTransmissionService.SendSystemEventAsync(e);
+        // Event handler is void; launch the send as a self-contained Task that
+        // logs its own failures, so a transmission error can't become an
+        // unobserved exception or silently drop the event [C-C5].
+        _ = SendSystemEventSafeAsync(e);
+    }
+
+    private async Task SendSystemEventSafeAsync(SystemEvent e)
+    {
+        try
+        {
+            await _dataTransmissionService.SendSystemEventAsync(e);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send system event {EventType}", e.EventType);
+        }
     }
 }

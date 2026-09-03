@@ -62,8 +62,9 @@ public class PolicyServiceTests
     private class StubTransmission : IDataTransmissionService
     {
         public int SystemEventCount { get; private set; }
-        public Task SendScreenshotAsync(string filePath) => Task.CompletedTask;
+        public Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null) => Task.CompletedTask;
         public Task SendSystemEventAsync(SystemEvent systemEvent) { SystemEventCount++; return Task.CompletedTask; }
+        public Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events) => Task.CompletedTask;
         public Task<bool> SendHeartbeatAsync() => Task.FromResult(true);
         public Task<byte[]> DownloadPolicyAsync(string policyId) => Task.FromResult(Array.Empty<byte>());
         public Task SendReportAsync(string reportPath) => Task.CompletedTask;
@@ -71,5 +72,8 @@ public class PolicyServiceTests
         public Task SendCommandResultFileAsync(string commandId, string filePath) => Task.CompletedTask;
         public Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds) => Task.CompletedTask;
         public Task SendClientLogChunkAsync(string fileName, string text) => Task.CompletedTask;
+        public Task SendPcSessionEventAsync(string kind, DateTime utcTimestamp, string bootId) => Task.CompletedTask;
+        public Task SendBrowserActivityAsync(IReadOnlyList<BelfProctor.Models.BrowserVisit> visits) => Task.CompletedTask;
+        public event Action? HeartbeatSucceeded { add { } remove { } }
     }
 }

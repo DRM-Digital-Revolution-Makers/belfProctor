@@ -1,6 +1,4 @@
 import { Router } from "express";
-import fs from "fs";
-import path from "path";
 import { decryptAes256CbcPrefixedIv } from "../encryption";
 import {
   appendEvent,
@@ -8,11 +6,11 @@ import {
   getAppStats,
   getClient,
   saveClient,
-  getClientEvents,
 } from "../store";
 import { getSenderClientId } from "../clientId";
 import { getKeysToTry } from "../keyring";
-import { resolveUploadDir } from "../runtimePaths";
+import { prisma } from "../prisma";
+import { now as authoritativeNow, reconcile as reconcileTime } from "../serverTime";
 
 const router = Router();
 
@@ -59,7 +57,7 @@ router.post("/", async (req, res) => {
     }
 
     if (!usedKey) {
-      const now = new Date();
+      const now = authoritativeNow();
       if (!client) {
         await saveClient({ id: clientId, createdAt: now, lastSeen: now });
       } else {
@@ -72,7 +70,7 @@ router.post("/", async (req, res) => {
     }
 
     const payload = JSON.parse(decryptedJson);
-    const now = new Date();
+    const now = authoritativeNow();
     if (!client) {
       await saveClient({
         id: clientId,
@@ -90,14 +88,14 @@ router.post("/", async (req, res) => {
       const rawType = p.EventType ?? p.eventType;
       const eventType =
         typeof rawType === "number" ? EVENT_TYPE_MAP[rawType] : rawType;
-      const timestamp = new Date(p.Timestamp || p.timestamp || Date.now());
+      const rawTs = p.Timestamp || p.timestamp;
+      const clientTs = rawTs ? new Date(rawTs) : null;
+      const timestamp = reconcileTime(clientTs && !isNaN(clientTs.getTime()) ? clientTs : null);
       const processName = p.ProcessName || p.processName;
 
-      // Update stats for ProcessStarted AND AppUsage
-      if (
-        (eventType === "ProcessStarted" || eventType === "AppUsage") &&
-        processName
-      ) {
+      // Update stats only for foreground AppUsage so Top-apps reflect
+      // what the user actually interacted with, not every spawned process.
+      if (eventType === "AppUsage" && processName) {
         await upsertAppStat(clientId, processName, timestamp);
       }
 
@@ -147,40 +145,21 @@ router.get("/stats", async (req, res) => {
 
 router.get("/", async (req, res) => {
   const { page = "1", pageSize = "20", clientId } = req.query as any;
-  const p = parseInt(page, 10);
+  const p = Math.max(1, parseInt(page, 10) || 1);
   const ps = Math.min(parseInt(pageSize, 10) || 20, 50);
 
-  const eventsDir = path.join(resolveUploadDir(), "events");
-  if (!fs.existsSync(eventsDir)) {
-    return res.json({ data: [], total: 0 });
-  }
+  const where = clientId ? { clientId: String(clientId) } : {};
+  const [data, total] = await prisma.$transaction([
+    prisma.event.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
+      skip: (p - 1) * ps,
+      take: ps,
+    }),
+    prisma.event.count({ where }),
+  ]);
 
-  let allEvents: any[] = [];
-  try {
-    if (clientId) {
-      allEvents = await getClientEvents(clientId, 20, 4096);
-    } else {
-      const files = fs
-        .readdirSync(eventsDir)
-        .filter((f) => f.endsWith(".jsonl"));
-      for (const f of files) {
-        const id = f.replace(/\.jsonl$/, "");
-        const clientEvents = await getClientEvents(id, 8, 2048);
-        allEvents.push(...clientEvents);
-      }
-    }
-  } catch (e) {
-    console.error(e);
-  }
-
-  allEvents.sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-  );
-
-  const total = allEvents.length;
-  const paginated = allEvents.slice((p - 1) * ps, p * ps);
-
-  return res.json({ data: paginated, total });
+  return res.json({ data, total });
 });
 
 export default router;

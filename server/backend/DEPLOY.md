@@ -1,24 +1,5 @@
-## BelfProctor Server (Backend) Deploy
+# BelfProctor Backend
 
-### 1) Prepare
+The local development and deployment workflow is now Docker-based.
 
-- Copy `.env.example` to `.env` and fill:
-  - `ENCRYPTION_KEY` (must match clients)
-  - `JWT_SECRET`
-  - `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD`
-
-### 2) Install deps
-
-```bash
-npm ci
-```
-
-### 3) Run
-
-```bash
-npm start
-```
-
-### 4) Data folders
-
-All runtime data is stored under `UPLOAD_DIR` (default `./storage`).
+See [../README.md](../README.md) at the `server/` directory for instructions on bringing up the full stack (PostgreSQL + backend + frontend) and migrating legacy file-based data into Postgres.

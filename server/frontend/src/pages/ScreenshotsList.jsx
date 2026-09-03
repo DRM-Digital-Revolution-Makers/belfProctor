@@ -4,6 +4,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authFetch } from "../dataProvider.js";
+import { formatTashkent } from "../utils/time";
 
 /* ============ Design tokens ============ */
 const BP = {
@@ -33,19 +34,11 @@ function formatBytes(bytes) {
   return `${Math.round(n)}${units[u]}`;
 }
 
-function formatTs(value, lang) {
+function formatTs(value) {
   if (!value) return { time: "—", date: "—", full: "—" };
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return { time: "—", date: "—", full: "—" };
-  const time = d.toLocaleTimeString(lang === "uz" ? "uz-UZ" : "ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const date = d.toLocaleDateString(lang === "uz" ? "uz-UZ" : "ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+  const time = formatTashkent(value, "HH:mm");
+  const date = formatTashkent(value, "DD.MM.YYYY");
+  if (time === "—" || date === "—") return { time: "—", date: "—", full: "—" };
   return { time, date, full: `${time},${date}` };
 }
 
@@ -59,22 +52,51 @@ export default function ScreenshotsList() {
     `http://${window.location.hostname}:8080/api`;
 
   const clientFromUrl = searchParams.get("clientId");
+  const dateFromUrl = searchParams.get("date");
 
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
-  const [page, setPage] = React.useState(1);
+  const [loading, setLoading] = React.useState(false);
   const [clients, setClients] = React.useState([]);
   const [filters, setFilters] = React.useState({
     clientId: clientFromUrl || null,
     category: null,
     isFavorite: false,
     sort: "desc",
+    date: dateFromUrl || null,
   });
   const [selected, setSelected] = React.useState(null);
   const [thumbUrls, setThumbUrls] = React.useState({});
   const [previewUrl, setPreviewUrl] = React.useState(null);
 
   const pageSize = 50;
+  const hasMore = items.length < total;
+
+  // Refs to avoid stale closures in IntersectionObserver
+  const loadingRef = React.useRef(false);
+  const pageRef = React.useRef(1);
+  const hasMoreRef = React.useRef(false);
+  const sentinelRef = React.useRef(null);
+  const fetchRef = React.useRef(null);
+
+  // Track every object URL we create so they can be freed — otherwise an
+  // infinite scroll over hundreds of screenshots leaks that many blobs [F-C2].
+  const objectUrlsRef = React.useRef(new Set());
+  const trackObjectUrl = React.useCallback((url) => {
+    objectUrlsRef.current.add(url);
+    return url;
+  }, []);
+  const revokeAllObjectUrls = React.useCallback(() => {
+    for (const u of objectUrlsRef.current) {
+      try { URL.revokeObjectURL(u); } catch { /* already revoked */ }
+    }
+    objectUrlsRef.current.clear();
+  }, []);
+
+  React.useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
+
+  /* Free all object URLs on unmount to prevent a blob memory leak [F-C2]. */
+  React.useEffect(() => () => revokeAllObjectUrls(), [revokeAllObjectUrls]);
 
   /* Load clients */
   React.useEffect(() => {
@@ -84,47 +106,92 @@ export default function ScreenshotsList() {
       .catch(() => setClients([]));
   }, [API_URL]);
 
-  /* Load screenshots */
-  const load = React.useCallback(() => {
-    const params = new URLSearchParams({
-      page: String(page),
-      pageSize: String(pageSize),
-      ts: String(Date.now()),
-    });
-    if (filters.clientId) params.append("clientId", filters.clientId);
-    if (filters.category) params.append("category", filters.category);
-    if (filters.isFavorite) params.append("isFavorite", "true");
+  /* Fetch a page and optionally append to existing list */
+  const fetchPage = React.useCallback(
+    async (page, append) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          pageSize: String(pageSize),
+          ts: String(Date.now()),
+        });
+        if (filters.clientId) params.append("clientId", filters.clientId);
+        if (filters.category) params.append("category", filters.category);
+        if (filters.isFavorite) params.append("isFavorite", "true");
+        if (filters.date) params.append("date", filters.date);
 
-    authFetch(`${API_URL}/screenshots?${params.toString()}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json) => {
-        if (!json) return;
+        const r = await authFetch(`${API_URL}/screenshots?${params}`, {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const json = await r.json();
         let data = json.data || [];
         if (filters.sort === "asc") {
           data = [...data].sort(
-            (a, b) =>
-              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
           );
         } else {
           data = [...data].sort(
-            (a, b) =>
-              new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
           );
         }
-        setItems(data);
         setTotal(json.total || 0);
-        if (data.length && (!selected || !data.find((d) => d.id === selected.id))) {
-          setSelected(data[0]);
+        if (append) {
+          setItems((prev) => {
+            const existing = new Set(prev.map((i) => i.id));
+            return [...prev, ...data.filter((d) => !existing.has(d.id))];
+          });
+        } else {
+          setItems(data);
+          if (data.length) setSelected(data[0]);
         }
-      })
-      .catch(() => {});
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [API_URL, filters, page]);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [API_URL, filters],
+  );
+
+  // Keep fetchRef current so the observer callback always uses latest version
+  React.useEffect(() => { fetchRef.current = fetchPage; }, [fetchPage]);
+
+  /* Reset and reload when filters change */
   React.useEffect(() => {
-    load();
-  }, [load]);
+    pageRef.current = 1;
+    // The old list is being discarded — free its blobs and drop cached urls
+    // so they are re-fetched fresh for the new filter set [F-C2].
+    revokeAllObjectUrls();
+    setThumbUrls({});
+    setPreviewUrl(null);
+    setItems([]);
+    setTotal(0);
+    setSelected(null);
+    fetchPage(1, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, API_URL]);
+
+  /* Infinite scroll — sentinel triggers next page load */
+  React.useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loadingRef.current && hasMoreRef.current) {
+          pageRef.current += 1;
+          fetchRef.current(pageRef.current, true);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []); // created once — uses refs internally
 
   /* Lazy-load thumbnail urls */
   React.useEffect(() => {
@@ -136,15 +203,13 @@ export default function ScreenshotsList() {
         .then((r) => (r.ok ? r.blob() : null))
         .then((blob) => {
           if (cancelled || !blob) return;
-          const objUrl = URL.createObjectURL(blob);
+          const objUrl = trackObjectUrl(URL.createObjectURL(blob));
           setThumbUrls((prev) => ({ ...prev, [it.id]: objUrl }));
         })
         .catch(() => {});
     });
-    return () => {
-      cancelled = true;
-    };
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, API_URL]);
 
   /* Load full preview for selected */
@@ -161,7 +226,7 @@ export default function ScreenshotsList() {
         .then((r) => (r.ok ? r.blob() : null))
         .then((blob) => {
           if (!blob) return;
-          const objUrl = URL.createObjectURL(blob);
+          const objUrl = trackObjectUrl(URL.createObjectURL(blob));
           setPreviewUrl(objUrl);
         })
         .catch(() => {});
@@ -193,9 +258,14 @@ export default function ScreenshotsList() {
   const openFile = async (id) => {
     const url = `${API_URL}/screenshots/${id}/file?ts=${Date.now()}`;
     const res = await authFetch(url, { cache: "no-store" });
-    if (!res.ok) return;
+    if (!res.ok) {
+      message.error(t("common.requestError"));
+      return;
+    }
     const blob = await res.blob();
-    window.open(URL.createObjectURL(blob), "_blank");
+    // The opened tab needs the URL, so we can't revoke it immediately; track it
+    // and free it on unmount instead of leaking it forever [F-C2].
+    window.open(trackObjectUrl(URL.createObjectURL(blob)), "_blank");
   };
 
   const downloadFile = async (id, filename) => {
@@ -262,7 +332,7 @@ export default function ScreenshotsList() {
             flex: 1,
           }}
         >
-          {/* Header — pixel-perfect Figma layout_RCEI91 */}
+          {/* Header */}
           <div
             style={{
               display: "flex",
@@ -326,7 +396,7 @@ export default function ScreenshotsList() {
               </span>
             </div>
 
-            {/* Right side: small ArrowButton (Figma Frame 56) */}
+            {/* Right side: menu */}
             <Dropdown
               trigger={["click"]}
               menu={{
@@ -348,8 +418,6 @@ export default function ScreenshotsList() {
                       onClick: () => {
                         setFilters((f) => ({ ...f, clientId: c.id }));
                         setSearchParams({ clientId: c.id });
-                        setSelected(null);
-                        setPage(1);
                       },
                     })),
                   },
@@ -643,7 +711,7 @@ export default function ScreenshotsList() {
                 </Dropdown>
                 <div style={{ flex: 1 }} />
                 <span style={{ color: BP.light, fontSize: 13 }}>
-                  Всего: {total}
+                  {items.length} / {total}
                 </span>
               </div>
 
@@ -656,16 +724,18 @@ export default function ScreenshotsList() {
                 }}
               />
 
-              {/* Thumbnails grid */}
+              {/* Thumbnails grid with infinite scroll */}
               <div
                 style={{
                   flex: 1,
-                  overflow: "auto",
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  maxHeight: "calc(100vh - 280px)",
                   padding: "10px 12px",
                   background: BP.white,
                 }}
               >
-                {items.length === 0 ? (
+                {items.length === 0 && !loading ? (
                   <div style={{ padding: 32, textAlign: "center" }}>
                     <Empty description={t("common.noData")} />
                   </div>
@@ -766,19 +836,21 @@ export default function ScreenshotsList() {
                   </div>
                 )}
 
-                {total > items.length && (
+                {/* Sentinel — IntersectionObserver watches this to trigger next page */}
+                <div ref={sentinelRef} style={{ height: 1 }} />
+
+                {/* Loading indicator shown while fetching next page */}
+                {loading && (
                   <div
                     style={{
                       textAlign: "center",
                       padding: "16px 0 8px",
+                      color: BP.light,
+                      fontFamily: BP.font,
+                      fontSize: 13,
                     }}
                   >
-                    <Button
-                      onClick={() => setPage((p) => p + 1)}
-                      style={{ borderRadius: 30 }}
-                    >
-                      Загрузить ещё ({total - items.length})
-                    </Button>
+                    Загрузка...
                   </div>
                 )}
               </div>

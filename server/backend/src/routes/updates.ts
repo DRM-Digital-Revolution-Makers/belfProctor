@@ -12,6 +12,7 @@ import {
   requestClientUpdate,
   listPendingUpdates,
 } from "../wsHub";
+import { prisma } from "../prisma";
 
 const router = Router();
 
@@ -59,6 +60,43 @@ interface DeploymentRecord {
   lastStatus?: string;
   lastStatusAt?: string;
   lastDetail?: string;
+}
+
+function toDeploymentStatus(status: string):
+  | "queued"
+  | "sent"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "restarted"
+  | "confirmed"
+  | "rolled_back"
+  | "failed"
+  | "already_up_to_date" {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("already")) return "already_up_to_date";
+  if (normalized.includes("queued")) return "queued";
+  if (normalized.includes("sent")) return "sent";
+  if (normalized.includes("download")) return "downloading";
+  if (normalized.includes("verify")) return "verifying";
+  if (normalized.includes("install")) return "installing";
+  if (normalized.includes("restart")) return "restarted";
+  if (normalized.includes("confirm") || normalized === "ok" || normalized === "success") {
+    return "confirmed";
+  }
+  if (normalized.includes("rollback") || normalized.includes("rolled")) return "rolled_back";
+  if (normalized.includes("sha") || normalized.includes("mismatch")) return "failed";
+  if (normalized.includes("fail") || normalized.includes("error")) return "failed";
+  return "sent";
+}
+
+async function ensurePrismaClient(clientId: string): Promise<void> {
+  const existing = await getClient(clientId);
+  await prisma.client.upsert({
+    where: { id: clientId },
+    update: existing?.encryptionKey ? { encryptionKey: existing.encryptionKey } : {},
+    create: { id: clientId, encryptionKey: existing?.encryptionKey || "" },
+  });
 }
 
 async function ensureRoot(): Promise<void> {
@@ -118,6 +156,15 @@ export async function appendDeploymentStatus(
   items[idx].lastStatusAt = new Date().toISOString();
   if (detail !== undefined) items[idx].lastDetail = detail;
   await writeDeployments(items);
+  await prisma.updateDeployment
+    .update({
+      where: { id: commandId },
+      data: {
+        status: toDeploymentStatus(status),
+        detail: detail !== undefined ? detail : status,
+      },
+    })
+    .catch(() => null);
 }
 
 function isValidVersion(v: string): boolean {
@@ -194,6 +241,29 @@ router.post(
       // Sort: newest version semantically last? Simpler — by uploadedAt desc.
       next.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
       await writeIndex(next);
+      try {
+        await prisma.agentVersion.upsert({
+          where: { version },
+          update: {
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+          create: {
+            version,
+            filename: "BelfProctor.exe",
+            sha256: sha,
+            size: BigInt(size),
+            notes: notes || undefined,
+          },
+        });
+      } catch (prismaErr) {
+        console.warn(
+          "[updates] prisma agentVersion mirror failed (file record kept):",
+          (prismaErr as Error)?.message || prismaErr,
+        );
+      }
 
       return res.json({ ok: true, update: meta });
     } catch (e) {
@@ -227,6 +297,7 @@ router.delete("/:version", requireAuth, async (req, res) => {
   }
   const idx = await readIndex();
   await writeIndex(idx.filter((m) => m.version !== version));
+  await prisma.agentVersion.delete({ where: { version } }).catch(() => null);
   return res.json({ ok: true });
 });
 
@@ -272,6 +343,25 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
     sha256: meta.sha256,
   };
 
+  await prisma.agentVersion
+    .upsert({
+      where: { version: meta.version },
+      update: {
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+      create: {
+        version: meta.version,
+        filename: meta.filename,
+        sha256: meta.sha256,
+        size: BigInt(meta.size),
+        notes: meta.notes || undefined,
+      },
+    })
+    .catch(() => null);
+
   const deployments = await readDeployments();
   const results: Array<{
     clientId: string;
@@ -296,6 +386,8 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
         commandId: r.commandId,
       });
       if (r.commandId) {
+        // Persist file-based record FIRST — it's the source of truth for the UI.
+        // Prisma mirror is best-effort; never let it block the file write.
         deployments.push({
           id: r.commandId,
           version: meta.version,
@@ -305,6 +397,24 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
           lastStatus: r.sent ? "sent" : "queued_offline",
           lastStatusAt: new Date().toISOString(),
         });
+        try {
+          await ensurePrismaClient(clientId);
+          await prisma.updateDeployment
+            .create({
+              data: {
+                id: r.commandId,
+                version: meta.version,
+                clientId,
+                status: r.sent ? "sent" : "queued",
+              },
+            })
+            .catch(() => null);
+        } catch (prismaErr) {
+          console.warn(
+            "[updates] prisma mirror failed (file record kept):",
+            (prismaErr as Error)?.message || prismaErr,
+          );
+        }
       }
     } catch (e) {
       console.error("[updates] deploy failed for", clientId, e);
@@ -322,28 +432,43 @@ router.post("/:version/deploy", requireAuth, async (req, res) => {
 // GET /api/updates/:version/file  (client)
 // Auth: X-Client-Id header → must be a known client.
 router.get("/:version/file", async (req, res) => {
-  const version = String(req.params.version || "").trim();
-  if (!isValidVersion(version)) {
-    return res.status(400).json({ message: "invalid version" });
+  try {
+    const version = String(req.params.version || "").trim();
+    if (!isValidVersion(version)) {
+      return res.status(400).json({ message: "invalid version" });
+    }
+    const clientId = String(req.headers["x-client-id"] || "").trim();
+    if (!clientId) {
+      return res.status(401).json({ message: "client id required" });
+    }
+    const client = await getClient(clientId);
+    if (!client) {
+      console.error(`[updates] download rejected: unknown client "${clientId}"`);
+      return res.status(403).json({ message: "unknown client" });
+    }
+    const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
+    if (!fs.existsSync(exePath)) {
+      console.error(`[updates] download rejected: file not found at ${exePath}`);
+      return res.status(404).json({ message: "not found" });
+    }
+    const stat = fs.statSync(exePath);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="BelfProctor.exe"`);
+    res.setHeader("Content-Length", stat.size);
+    return res.sendFile(exePath, (err) => {
+      if (err && !res.headersSent) {
+        console.error("[updates] sendFile error:", err);
+        res.status(500).json({ message: "file send failed" });
+      } else if (err) {
+        console.error("[updates] sendFile error (headers already sent):", err);
+      }
+    });
+  } catch (e) {
+    console.error("[updates] file download handler error:", e);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: "internal error" });
+    }
   }
-  const clientId = String(req.headers["x-client-id"] || "").trim();
-  if (!clientId) {
-    return res.status(401).json({ message: "client id required" });
-  }
-  const client = await getClient(clientId);
-  if (!client) {
-    return res.status(403).json({ message: "unknown client" });
-  }
-  const exePath = path.join(UPDATES_ROOT, version, "BelfProctor.exe");
-  if (!fs.existsSync(exePath)) {
-    return res.status(404).json({ message: "not found" });
-  }
-  res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="BelfProctor.exe"`,
-  );
-  return res.sendFile(exePath);
 });
 
 // GET /api/updates/connectivity  (admin)

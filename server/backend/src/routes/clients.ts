@@ -12,13 +12,29 @@ import {
   streamDailyActivitySummary,
   streamMonthlyActivitySummary,
   streamAppCounts,
+  computeAppUsageWorkSummary,
   getTimesheetDataForMonth,
   getUser,
 } from "../store";
 import { requestClientUninstall } from "../wsHub";
 import { resolveUploadDir } from "../runtimePaths";
+import { prisma } from "../prisma";
+import {
+  startOfTashkentDay,
+  endOfTashkentDay,
+  tashkentHourOf,
+  tashkentMinutesOfDay,
+  tashkentDayKey,
+} from "../tz";
 
 const router = Router();
+
+// Boundaries follow Asia/Tashkent (UTC+5) — a "day" on the dashboard means
+// the user's local calendar day, not the server-container UTC day.
+function dateRangeFromDay(dateStr: string): { start: Date; end: Date } {
+  const anchor = new Date(`${dateStr}T12:00:00Z`);
+  return { start: startOfTashkentDay(anchor), end: endOfTashkentDay(anchor) };
+}
 
 function parseScreenshotTimestamp(
   filename: string,
@@ -104,11 +120,62 @@ router.get("/categories", requireAuth, async (_req, res) => {
   }
 });
 
+// NOTE: WorkSession/WorkSessionEvent are populated by a client pipeline this
+// deployment's agent never actually sends (processName is always "unknown",
+// filePath/windowTitle/projectName are always empty) - these two routes
+// instead reconstruct app/window usage from Event(eventType=AppUsage), which
+// the agent does send richly. See computeAppUsageWorkSummary in ../store.
+router.get("/:id/work-summary", requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    // Default to today's calendar day in Asia/Tashkent so the dashboard matches
+    // what the user sees on their own clock, not the server-container UTC day.
+    const dateStr =
+      String(req.query.date || "").trim() || tashkentDayKey(new Date());
+    const { start, end } = dateRangeFromDay(dateStr);
+    const summary = await computeAppUsageWorkSummary(id, start, end);
+    const screenshots = await prisma.screenshot.findMany({
+      where: { clientId: id, timestamp: { gte: start, lte: end } },
+      orderBy: { timestamp: "desc" },
+      take: 60,
+    });
+
+    return res.json({
+      date: dateStr,
+      totals: summary.totals,
+      apps: summary.apps,
+      files: summary.files,
+      screenshots: screenshots.map((s: any) => ({
+        ...s,
+        url: `/api/screenshots/${s.filename}/file`,
+      })),
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Failed to get work summary" });
+  }
+});
+
+router.get("/:id/work-sessions", requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const from = req.query.from
+      ? new Date(String(req.query.from))
+      : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+    const summary = await computeAppUsageWorkSummary(id, from, to);
+    res.json({ data: summary.sessions, total: summary.sessions.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to get work sessions" });
+  }
+});
+
 router.put("/:id/category", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || "");
     const category = String((req.body as any)?.category || "").trim();
-    await saveClient({ id, category, updatedAt: new Date() });
+    await saveClient({ id, category });
     res.json(await getClient(id));
   } catch (e) {
     console.error(e);
@@ -174,11 +241,7 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
     return res.status(400).json({ message: "Date required (YYYY-MM-DD)" });
   }
 
-  const startOfDay = new Date(dateStr);
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date(dateStr);
-  endOfDay.setHours(23, 59, 59, 999);
+  const { start: startOfDay, end: endOfDay } = dateRangeFromDay(dateStr);
 
   // 1. Activity: stream + compute aggregates (no arrays, CPU-bound)
   const {
@@ -219,8 +282,8 @@ router.get("/:id/daily-summary", requireAuth, async (req, res) => {
           url: `/api/screenshots/${f}/file`,
         });
 
-        // Add to hourly stats
-        const hour = timestamp.getHours();
+        // Add to hourly stats (Tashkent-anchored — matches the dashboard's day boundary)
+        const hour = tashkentHourOf(timestamp);
         if (hour >= 0 && hour < 24) {
           hourlyStats[hour].screenshotsCount++;
         }
@@ -263,11 +326,8 @@ router.get("/:id/screenshots/pdf", requireAuth, async (req, res) => {
     return res.status(400).json({ message: "from/to required (YYYY-MM-DD)" });
   }
 
-  const startOfRange = new Date(fromStr);
-  startOfRange.setHours(0, 0, 0, 0);
-
-  const endOfRange = new Date(toStr);
-  endOfRange.setHours(23, 59, 59, 999);
+  const { start: startOfRange } = dateRangeFromDay(fromStr);
+  const { end: endOfRange } = dateRangeFromDay(toStr);
 
   let startMinutes: number | null = null;
   let endMinutes: number | null = null;
@@ -322,7 +382,7 @@ router.get("/:id/screenshots/pdf", requireAuth, async (req, res) => {
       if (ts < startOfRange || ts > endOfRange) continue;
 
       if (startMinutes !== null && endMinutes !== null) {
-        const mins = ts.getHours() * 60 + ts.getMinutes();
+        const mins = tashkentMinutesOfDay(ts);
         if (mins < startMinutes || mins > endMinutes) continue;
       }
 
@@ -397,8 +457,13 @@ router.get("/:id/monthly-summary", requireAuth, async (req, res) => {
   }
 
   const [year, month] = dateStr.split("-").map(Number);
-  const startOfMonth = new Date(year, month - 1, 1);
-  const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+  // Month boundaries follow Asia/Tashkent: the first day's 00:00 in Tashkent
+  // through the last day's 23:59 in Tashkent.
+  const firstDayStr = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const lastDayStr = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const { start: startOfMonth } = dateRangeFromDay(firstDayStr);
+  const { end: endOfMonth } = dateRangeFromDay(lastDayStr);
 
   // 1. Activity: stream + compute daily aggregates (no arrays)
   const { dailyActivity, totalActiveMs, totalInactiveMs } =

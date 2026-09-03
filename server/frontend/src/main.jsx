@@ -7,7 +7,12 @@ import "./index.css";
 import "./i18n";
 import dayjs from "dayjs";
 import "dayjs/locale/ru";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault("Asia/Tashkent");
 dayjs.locale("ru");
 
 ReactDOM.createRoot(document.getElementById("root")).render(

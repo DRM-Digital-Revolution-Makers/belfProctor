@@ -29,9 +29,12 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     private readonly string _pendingReports;
     private readonly string _pendingEvents;
     private readonly string _pendingActivity;
+    private readonly string _pendingWorkEvents;
     private readonly string _pendingHeartbeats;
     private readonly string _pendingCmdJson;
     private readonly string _pendingCmdFiles;
+    private readonly string _pendingPcSession;
+    private readonly string _pendingBrowser;
     private System.Threading.Timer? _retryTimer;
     private System.Threading.Timer? _eventBatchTimer;
     private readonly ConcurrentQueue<SystemEvent> _eventQueue = new();
@@ -39,6 +42,8 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     private readonly SemaphoreSlim _batchLock = new(1, 1);
     private readonly SemaphoreSlim _flushLock = new(1, 1);
     private string _currentBaseUrl = string.Empty;
+
+    public event Action? HeartbeatSucceeded;
 
     public DataTransmissionService(
         ILogger<DataTransmissionService> logger,
@@ -76,16 +81,22 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         _pendingReports = Path.Combine(_pendingBase, "Reports");
         _pendingEvents = Path.Combine(_pendingBase, "Events");
         _pendingActivity = Path.Combine(_pendingBase, "Activity");
+        _pendingWorkEvents = Path.Combine(_pendingBase, "WorkEvents");
         _pendingHeartbeats = Path.Combine(_pendingBase, "Heartbeats");
         _pendingCmdJson = Path.Combine(_pendingBase, "CmdJson");
         _pendingCmdFiles = Path.Combine(_pendingBase, "CmdFiles");
+        _pendingPcSession = Path.Combine(_pendingBase, "PcSession");
+        _pendingBrowser = Path.Combine(_pendingBase, "Browser");
         Directory.CreateDirectory(_pendingScreenshots);
         Directory.CreateDirectory(_pendingReports);
         Directory.CreateDirectory(_pendingEvents);
         Directory.CreateDirectory(_pendingActivity);
+        Directory.CreateDirectory(_pendingWorkEvents);
         Directory.CreateDirectory(_pendingHeartbeats);
         Directory.CreateDirectory(_pendingCmdJson);
         Directory.CreateDirectory(_pendingCmdFiles);
+        Directory.CreateDirectory(_pendingPcSession);
+        Directory.CreateDirectory(_pendingBrowser);
         _retryTimer = new System.Threading.Timer(_ => { try { FlushPendingAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
         _eventBatchTimer = new System.Threading.Timer(_ => { try { FlushEventBatchAsync().GetAwaiter().GetResult(); } catch { } }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
         try
@@ -337,20 +348,25 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         }
     }
 
-    public async Task SendScreenshotAsync(string filePath)
+    public async Task SendScreenshotAsync(string filePath, WorkScreenshotMetadata? metadata = null)
     {
+        if (!File.Exists(filePath))
+        {
+            _logger.LogWarning("Screenshot file not found: {FilePath}", filePath);
+            return;
+        }
+
+        // Stamp UTC capture time before any network work so both the try and catch
+        // paths use the same filename — the catch cannot access variables declared
+        // inside the try block, and a 30-second HttpClient timeout would otherwise
+        // shift the pending filename (and server timestamp) by up to 30 seconds.
+        var now = DateTime.UtcNow;
+        var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
+        var destPending = Path.Combine(_pendingScreenshots, sendName);
+
         try
         {
-            if (!File.Exists(filePath))
-            {
-                _logger.LogWarning("Screenshot file not found: {FilePath}", filePath);
-                return;
-            }
-
             bool sent = false;
-            var now = DateTime.Now;
-            var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
-            var destPending = Path.Combine(_pendingScreenshots, sendName);
 
             using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var streamContent = GetEncryptedStreamContent(fileStream))
@@ -358,11 +374,12 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "screenshot", sendName);
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                // Send Local Time exactly as is (no Z, no offset)
-                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                // Explicit Z — server must treat this as UTC, no guessing.
+                content.Add(new StringContent(now.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                AddScreenshotMetadata(content, metadata);
 
                 var response = await PostWithAutoDiscoverAsync("screenshots", content);
-                
+
                 if (response.IsSuccessStatusCode)
                 {
                     sent = true;
@@ -382,20 +399,55 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 try { Directory.CreateDirectory(_pendingScreenshots); } catch { }
                 try { if (File.Exists(filePath)) File.Move(filePath, destPending, true); } catch { }
+                TryWriteScreenshotSidecar(destPending, metadata);
+                TrimPendingDirectory(_pendingScreenshots, "*.jpg", 5);
                 _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending screenshot: {FilePath}", filePath);
-            try 
-            { 
-                var now = DateTime.Now;
-                var sendName = $"{_settings.ClientId}_{now:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
-                var dest = Path.Combine(_pendingScreenshots, sendName);
-                if (File.Exists(filePath)) File.Move(filePath, dest, true); 
+            try
+            {
+                if (File.Exists(filePath)) File.Move(filePath, destPending, true);
+                TryWriteScreenshotSidecar(destPending, metadata);
+                TrimPendingDirectory(_pendingScreenshots, "*.jpg", 5);
             } catch { }
             _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
+        }
+    }
+
+    private static void AddScreenshotMetadata(MultipartFormDataContent content, WorkScreenshotMetadata? metadata)
+    {
+        if (metadata == null) return;
+        if (!string.IsNullOrWhiteSpace(metadata.CaptureReason)) content.Add(new StringContent(metadata.CaptureReason), "captureReason");
+        if (!string.IsNullOrWhiteSpace(metadata.LinkedSessionId)) content.Add(new StringContent(metadata.LinkedSessionId), "linkedSessionId");
+        if (!string.IsNullOrWhiteSpace(metadata.ProcessName)) content.Add(new StringContent(metadata.ProcessName), "processName");
+        if (!string.IsNullOrWhiteSpace(metadata.FilePath)) content.Add(new StringContent(metadata.FilePath), "filePath");
+        if (!string.IsNullOrWhiteSpace(metadata.ProjectName)) content.Add(new StringContent(metadata.ProjectName), "projectName");
+    }
+
+    private static void TryWriteScreenshotSidecar(string imagePath, WorkScreenshotMetadata? metadata)
+    {
+        if (metadata == null || string.IsNullOrWhiteSpace(imagePath)) return;
+        try
+        {
+            File.WriteAllText(imagePath + ".json", JsonConvert.SerializeObject(metadata));
+        }
+        catch { }
+    }
+
+    private static WorkScreenshotMetadata? TryReadScreenshotSidecar(string imagePath)
+    {
+        try
+        {
+            var sidecar = imagePath + ".json";
+            if (!File.Exists(sidecar)) return null;
+            return JsonConvert.DeserializeObject<WorkScreenshotMetadata>(File.ReadAllText(sidecar));
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -403,6 +455,52 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
     {
         _eventQueue.Enqueue(systemEvent);
         return Task.CompletedTask;
+    }
+
+    public async Task SendWorkEventsAsync(IEnumerable<WorkEventEnvelope> events)
+    {
+        var batch = events?.Where(e => e != null).ToList() ?? new List<WorkEventEnvelope>();
+        if (batch.Count == 0) return;
+
+        var json = JsonConvert.SerializeObject(batch, new JsonSerializerSettings
+        {
+            DateTimeZoneHandling = DateTimeZoneHandling.Utc,
+            NullValueHandling = NullValueHandling.Ignore
+        });
+
+        try
+        {
+            var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
+            using var content = new ByteArrayContent(encryptedData);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var response = await PostWithAutoDiscoverAsync("work/events", content);
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("Work event batch sent successfully: {Count}", batch.Count);
+                return;
+            }
+
+            _logger.LogWarning("Failed to send work events. Status: {StatusCode}", response.StatusCode);
+            await SavePendingWorkEventsAsync(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending work events");
+            await SavePendingWorkEventsAsync(json);
+        }
+    }
+
+    private async Task SavePendingWorkEventsAsync(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(_pendingWorkEvents);
+            var name = Path.Combine(_pendingWorkEvents, $"work_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(name, json);
+            TrimPendingDirectory(_pendingWorkEvents, "*.json", 1000);
+        }
+        catch { }
     }
 
     private async Task FlushEventBatchAsync()
@@ -423,7 +521,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
                     try
                     {
-                        var json = JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified });
+                        var json = JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc });
                         var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
                         
                         using var content = new ByteArrayContent(encryptedData);
@@ -438,14 +536,14 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         else
                         {
                             _logger.LogWarning("Failed to send system event batch. Status: {StatusCode}", response.StatusCode);
-                            var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json");
+                            var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
                             try { await File.WriteAllTextAsync(name, json); } catch { }
                         }
                     }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error sending system event batch");
-                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified })); } catch { }
+                        try { var name = Path.Combine(_pendingEvents, $"batch_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(batch, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc })); } catch { }
                     }
                 }
             }
@@ -458,17 +556,18 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
 
     public async Task SendActivityAsync(bool isActive, long activeMilliseconds, long inactiveMilliseconds)
     {
+        var payload = new
+        {
+            ClientId = _settings.ClientId,
+            Timestamp = DateTime.UtcNow,
+            IsActive = isActive,
+            ActiveMilliseconds = activeMilliseconds,
+            InactiveMilliseconds = inactiveMilliseconds
+        };
+        var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc });
+
         try
         {
-            var payload = new
-            {
-                ClientId = _settings.ClientId,
-                Timestamp = DateTime.Now,
-                IsActive = isActive,
-                ActiveMilliseconds = activeMilliseconds,
-                InactiveMilliseconds = inactiveMilliseconds
-            };
-            var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Unspecified });
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             using var content = new ByteArrayContent(encryptedData);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
@@ -486,37 +585,124 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending activity");
-            try { var name = Path.Combine(_pendingActivity, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { IsActive = isActive, ActiveMilliseconds = activeMilliseconds, InactiveMilliseconds = inactiveMilliseconds })); } catch { }
+            try { var name = Path.Combine(_pendingActivity, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
         }
+    }
+
+    public async Task SendPcSessionEventAsync(string kind, DateTime utcTimestamp, string bootId)
+    {
+        var payload = new
+        {
+            ClientId = _settings.ClientId,
+            Kind = kind,
+            BootId = bootId,
+            TimestampUtc = DateTime.SpecifyKind(utcTimestamp, DateTimeKind.Utc),
+        };
+        var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { DateTimeZoneHandling = DateTimeZoneHandling.Utc });
+
+        try
+        {
+            var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+            using var content = new ByteArrayContent(encrypted);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+            var response = await PostWithAutoDiscoverAsync("pc-session", content);
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("PcSession event sent: {Kind} {BootId}", kind, bootId);
+                return;
+            }
+            _logger.LogWarning("Failed to send pc-session. Status: {StatusCode}", response.StatusCode);
+            await SavePendingPcSessionAsync(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending pc-session");
+            await SavePendingPcSessionAsync(json);
+        }
+    }
+
+    private async Task SavePendingPcSessionAsync(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(_pendingPcSession);
+            var name = Path.Combine(_pendingPcSession, $"pc_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(name, json);
+            TrimPendingDirectory(_pendingPcSession, "*.json", 200);
+        }
+        catch { }
+    }
+
+    public async Task SendBrowserActivityAsync(IReadOnlyList<BrowserVisit> visits)
+    {
+        if (visits == null || visits.Count == 0) return;
+        var json = JsonConvert.SerializeObject(visits, new JsonSerializerSettings
+        {
+            DateTimeZoneHandling = DateTimeZoneHandling.Utc,
+            NullValueHandling = NullValueHandling.Ignore,
+        });
+
+        try
+        {
+            var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+            using var content = new ByteArrayContent(encrypted);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+            var response = await PostWithAutoDiscoverAsync("browser-activity", content);
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("Browser activity batch sent: {Count}", visits.Count);
+                return;
+            }
+            _logger.LogWarning("Failed to send browser activity. Status: {StatusCode}", response.StatusCode);
+            await SavePendingBrowserAsync(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending browser activity");
+            await SavePendingBrowserAsync(json);
+        }
+    }
+
+    private async Task SavePendingBrowserAsync(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(_pendingBrowser);
+            var name = Path.Combine(_pendingBrowser, $"br_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(name, json);
+            TrimPendingDirectory(_pendingBrowser, "*.json", 500);
+        }
+        catch { }
     }
 
     public async Task<bool> SendHeartbeatAsync()
     {
+        var heartbeat = new
+        {
+            ClientId = _settings.ClientId,
+            Timestamp = DateTime.UtcNow,
+            Status = "Online",
+            Version = AppVersion,
+            Machine = Environment.MachineName,
+            OS = Environment.OSVersion.ToString(),
+            UptimeSeconds = (int)(DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds,
+            CommandChannel = new
+            {
+                Connected = ConnectivityState.WsConnected,
+                LastChangeUtc = ConnectivityState.WsLastChangeUtc,
+                LastError = ConnectivityState.WsLastError,
+            },
+            Memory = new
+            {
+                WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
+                PrivateMemorySize = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64,
+            }
+        };
+        var json = JsonConvert.SerializeObject(heartbeat);
+
         try
         {
-            var heartbeat = new
-            {
-                ClientId = _settings.ClientId,
-                Timestamp = DateTime.Now,
-                Status = "Online",
-                Version = AppVersion,
-                Machine = Environment.MachineName,
-                OS = Environment.OSVersion.ToString(),
-                UptimeSeconds = (int)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
-                CommandChannel = new
-                {
-                    Connected = ConnectivityState.WsConnected,
-                    LastChangeUtc = ConnectivityState.WsLastChangeUtc,
-                    LastError = ConnectivityState.WsLastError,
-                },
-                Memory = new
-                {
-                    WorkingSet = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
-                    PrivateMemorySize = System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64,
-                }
-            };
-
-            var json = JsonConvert.SerializeObject(heartbeat);
             var encryptedData = EncryptData(Encoding.UTF8.GetBytes(json));
             
             using var content = new ByteArrayContent(encryptedData);
@@ -527,6 +713,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Heartbeat sent successfully");
+                try { HeartbeatSucceeded?.Invoke(); } catch { }
                 try
                 {
                     var body = await response.Content.ReadAsStringAsync();
@@ -549,14 +736,14 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             else
             {
                 _logger.LogWarning("Failed to send heartbeat. Status: {StatusCode}", response.StatusCode);
-                try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
+                try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
                 return false;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat");
-            try { var name = Path.Combine(_pendingHeartbeats, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, JsonConvert.SerializeObject(new { ClientId = _settings.ClientId, Timestamp = DateTime.Now, Status = "Online", Version = "1.0.0", Machine = Environment.MachineName, OS = Environment.OSVersion.ToString() })); } catch { }
+            try { var name = Path.Combine(_pendingHeartbeats, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + ".json"); await File.WriteAllTextAsync(name, json); } catch { }
             return false;
         }
     }
@@ -604,7 +791,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "report", Path.GetFileName(reportPath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 var response = await PostWithAutoDiscoverAsync("reports", content);
                 
@@ -676,7 +863,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Failed to send command result json. Status: {StatusCode}", response.StatusCode);
-                var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json");
+                var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json");
                 try { await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
             }
             else
@@ -687,7 +874,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending command result json");
-            try { var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.Now:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
+            try { var name = Path.Combine(_pendingCmdJson, $"cmd_{commandId}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.json"); await File.WriteAllBytesAsync(name, jsonBytes); } catch { }
         }
     }
 
@@ -708,7 +895,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
             {
                 content.Add(streamContent, "file", Path.GetFileName(filePath));
                 content.Add(new StringContent(_settings.ClientId), "clientId");
-                content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
 
                 response = await PostWithAutoDiscoverAsync($"commands/{commandId}/result", content);
             }
@@ -928,7 +1115,26 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         {
             _logger.LogDebug("Starting FlushPendingAsync");
 
-            foreach (var file in Directory.GetFiles(_pendingScreenshots))
+            // Trim any large backlog that may have accumulated from older builds
+            // (e.g. WorkTrackingService taking screenshots on every window switch).
+            // Keep only the 3 most recent .jpg files; delete everything else.
+            TrimPendingDirectory(_pendingScreenshots, "*.jpg", 3);
+            // Remove orphaned .json sidecars whose matching .jpg was just deleted.
+            foreach (var sidecar in Directory.GetFiles(_pendingScreenshots, "*.json"))
+            {
+                var jpg = sidecar.Substring(0, sidecar.Length - 5); // strip ".json"
+                if (!File.Exists(jpg)) try { File.Delete(sidecar); } catch { }
+            }
+
+            // Send 1 pending screenshot per flush cycle. The retry timer fires every
+            // minute, so catch-up is at most 3 screenshots over 3 minutes — no burst.
+            const int MaxScreenshotsPerFlush = 1;
+            var screenshotFiles = Directory.GetFiles(_pendingScreenshots)
+                .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f)
+                .Take(MaxScreenshotsPerFlush);
+
+            foreach (var file in screenshotFiles)
             {
                 try
                 {
@@ -937,23 +1143,29 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     using (var content = new MultipartFormDataContent())
                     {
                         var sendName = Path.GetFileName(file);
-                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTime(file);
-                        var uploadName = $"{_settings.ClientId}_{timestamp:yyyy-MM-ddTHH-mm-ss.fff}.jpg";
-                        
+                        var timestamp = TryExtractTimestampFromFileName(sendName) ?? File.GetCreationTimeUtc(file);
+                        var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
+                            ? timestamp
+                            : timestamp.ToUniversalTime();
+                        var uploadName = $"{_settings.ClientId}_{utcTimestamp:yyyy-MM-ddTHH-mm-ss.fff}Z.jpg";
+
                         content.Add(streamContent, "screenshot", uploadName);
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
-                        
+                        content.Add(new StringContent(utcTimestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                        var metadata = TryReadScreenshotSidecar(file);
+                        AddScreenshotMetadata(content, metadata);
+
                         var resp = await PostWithAutoDiscoverAsync("screenshots", content);
-                        
-                        if (resp.IsSuccessStatusCode) 
+
+                        if (resp.IsSuccessStatusCode)
                         {
                             _logger.LogDebug("Pending screenshot sent successfully: {FileName}", sendName);
                             File.Delete(file);
+                            try { File.Delete(file + ".json"); } catch { }
                         }
                         else
                         {
-                             _logger.LogWarning("Failed to send pending screenshot {FileName}. Status: {Status}", sendName, resp.StatusCode);
+                            _logger.LogWarning("Failed to send pending screenshot {FileName}. Status: {Status}", sendName, resp.StatusCode);
                         }
                     }
                 }
@@ -973,7 +1185,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     {
                         content.Add(streamContent, "report", Path.GetFileName(file));
                         content.Add(new StringContent(_settings.ClientId), "clientId");
-                        content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                        content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                         var resp = await PostWithAutoDiscoverAsync("reports", content);
                         
                         if (resp.IsSuccessStatusCode) 
@@ -1013,6 +1225,20 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                 catch { }
             }
 
+            foreach (var file in Directory.GetFiles(_pendingWorkEvents, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await PostWithAutoDiscoverAsync("work/events", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
             foreach (var file in Directory.GetFiles(_pendingHeartbeats, "*.json"))
             {
                 try
@@ -1022,6 +1248,34 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                     using var content = new ByteArrayContent(encrypted);
                     content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
                     var resp = await PostWithAutoDiscoverAsync("heartbeat", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingPcSession, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await PostWithAutoDiscoverAsync("pc-session", content);
+                    if (resp.IsSuccessStatusCode) File.Delete(file);
+                }
+                catch { }
+            }
+
+            foreach (var file in Directory.GetFiles(_pendingBrowser, "*.json"))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file);
+                    var encrypted = EncryptData(Encoding.UTF8.GetBytes(json));
+                    using var content = new ByteArrayContent(encrypted);
+                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                    var resp = await PostWithAutoDiscoverAsync("browser-activity", content);
                     if (resp.IsSuccessStatusCode) File.Delete(file);
                 }
                 catch { }
@@ -1066,7 +1320,7 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
                         {
                             content.Add(streamContent, "file", Path.GetFileName(file));
                             content.Add(new StringContent(_settings.ClientId), "clientId");
-                            content.Add(new StringContent(DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
+                            content.Add(new StringContent(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture)), "timestamp");
                             var resp = await PostWithAutoDiscoverAsync($"commands/{cmdId}/result", content);
                             if (resp.IsSuccessStatusCode) 
                             {
@@ -1105,23 +1359,43 @@ public class DataTransmissionService : IDataTransmissionService, IDisposable
         _ = Task.Run(async () => { try { await FlushPendingAsync(); } catch { } });
     }
 
-    private static DateTime? TryExtractTimestampFromFileName(string fileName)
+    private static void TrimPendingDirectory(string directory, string pattern, int maxFiles)
     {
         try
         {
-            var name = Path.GetFileNameWithoutExtension(fileName);
-            var parts = name.Split('_');
-            if (parts.Length >= 3)
+            var files = Directory.GetFiles(directory, pattern)
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.CreationTimeUtc)
+                .ToList();
+            foreach (var file in files.Skip(maxFiles))
             {
-                var ts = parts[^1];
-                // Try parsing the format we actually use: yyyy-MM-ddTHH-mm-ss.fff
-                // Also support legacy format just in case
-                if (DateTime.TryParseExact(ts, "yyyy-MM-ddTHH-mm-ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var local) ||
-                    DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out local))
-                {
-                    // Return as is (Unspecified/Local) so it prints cleanly
-                    return local;
-                }
+                try { file.Delete(); } catch { }
+            }
+        }
+        catch { }
+    }
+
+    private static DateTime? TryExtractTimestampFromFileName(string fileName)
+    {
+        // Filename is "CLIENTID_yyyy-MM-ddTHH-mm-ss.fff[.bla].jpg".
+        // Pull the last underscore-separated token, strip extension, parse.
+        // Critically: SendScreenshotAsync now writes DateTime.UtcNow, so the
+        // string IS already UTC — return it tagged DateTimeKind.Utc to avoid
+        // an accidental local-time re-interpretation at the next flush.
+        try
+        {
+            var name = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            var lastUnderscore = name.LastIndexOf('_');
+            if (lastUnderscore < 0 || lastUnderscore >= name.Length - 1) return null;
+            var ts = name.Substring(lastUnderscore + 1);
+            // Strip trailing Z (new format stamps the filename with explicit UTC marker).
+            if (ts.EndsWith("Z", StringComparison.OrdinalIgnoreCase)) ts = ts.Substring(0, ts.Length - 1);
+
+            DateTime parsed;
+            if (DateTime.TryParseExact(ts, "yyyy-MM-ddTHH-mm-ss.fff", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out parsed) ||
+                DateTime.TryParseExact(ts, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out parsed))
+            {
+                return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
             }
         }
         catch { }

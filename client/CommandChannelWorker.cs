@@ -39,22 +39,35 @@ public class CommandChannelWorker : BackgroundService
                     _logger.LogInformation("Command channel connected");
                     ConnectivityState.SetWsConnected(true);
                     backoffSeconds = 2;
+                    // Matches the server's WebSocket maxPayload. The previous 64KB
+                    // cap both under-sized the server's limit AND broke the whole
+                    // connection on an over-limit frame; now we fully drain and
+                    // discard only the offending message, keeping the channel up [C-M9].
+                    const int MaxWsMessageBytes = 2 * 1024 * 1024;
                     var buf = new byte[16 * 1024];
                     while (ws.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
                     {
                         using var ms = new MemoryStream();
                         WebSocketReceiveResult? result = null;
+                        var oversize = false;
                         do
                         {
                             result = await ws.ReceiveAsync(buf, stoppingToken);
                             if (result.MessageType == WebSocketMessageType.Close) break;
-                            if (result.Count > 0) ms.Write(buf, 0, result.Count);
-                            if (ms.Length > 64 * 1024) break;
+                            if (result.Count > 0)
+                            {
+                                if (ms.Length + result.Count > MaxWsMessageBytes) oversize = true;
+                                else ms.Write(buf, 0, result.Count);
+                            }
                         } while (!result.EndOfMessage);
 
                         if (result == null || result.MessageType == WebSocketMessageType.Close) break;
+                        if (oversize)
+                        {
+                            _logger.LogWarning("Discarded oversized WS message (> {Max} bytes)", MaxWsMessageBytes);
+                            continue;
+                        }
                         if (result.MessageType != WebSocketMessageType.Text) continue;
-                        if (ms.Length > 64 * 1024) break;
 
                         var msg = Encoding.UTF8.GetString(ms.ToArray());
                         Command? cmd = null;
