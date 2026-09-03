@@ -128,6 +128,8 @@ try {
         "BelfProctor.dll",
         "BelfProctor.runtimeconfig.json",
         "appsettings.json",
+        "uninstall.ps1",
+        "update-helper.ps1",
         "Microsoft.Extensions.Hosting.dll",
         "Microsoft.Extensions.Hosting.WindowsServices.dll",
         "Microsoft.Extensions.Configuration.dll",
@@ -173,12 +175,15 @@ try {
     }
 
     # Create Windows Service
+    # Service is started by SCM in Session 0 — the agent's Program.cs requires
+    # --auto-start to skip the WinForms config UI and actually run the worker.
     $executablePath = Join-Path $InstallPath $ExecutableName
-    
+    $serviceBinaryPath = '"' + $executablePath + '" --auto-start'
+
     Write-Host "Creating Windows Service..." -ForegroundColor Yellow
     $serviceParams = @{
         Name = $ServiceName
-        BinaryPathName = $executablePath
+        BinaryPathName = $serviceBinaryPath
         DisplayName = $DisplayName
         Description = $Description
         StartupType = "Automatic"

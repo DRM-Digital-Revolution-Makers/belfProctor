@@ -105,13 +105,13 @@ public class ReportingService : IReportingService
             
             var report = new
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 ClientId = _settings.ClientId,
                 ReportType = "Security",
                 Period = new
                 {
-                    From = DateTime.Now.AddHours(-24),
-                    To = DateTime.Now
+                    From = DateTime.UtcNow.AddHours(-24),
+                    To = DateTime.UtcNow
                 },
                 EventsSummary = new
                 {
@@ -371,7 +371,7 @@ private Task<object> GetStatisticsAsync()
                 ScreenshotsCount = screenshotCount,
                 LogFilesCount = logFiles.Length,
                 TotalLogSize = totalLogSize,
-                UptimeHours = (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalHours
+                UptimeHours = (DateTime.UtcNow - Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalHours
             });
         }
         catch (Exception ex)

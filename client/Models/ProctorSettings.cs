@@ -25,4 +25,5 @@ public class ProctorSettings
     public int InactivityThresholdMinutes { get; set; } = 3; // минуты, через сколько считать пользователя неактивным
     public List<string> DirectoryRoots { get; set; } = new();
     public string AdminPasswordHash { get; set; } = string.Empty;
+    public FeatureSettings Features { get; set; } = new();
 }

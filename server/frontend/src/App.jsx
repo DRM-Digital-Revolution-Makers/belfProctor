@@ -111,6 +111,7 @@ export default function App() {
         ]}
       >
         <Layout
+          className="bp-app-shell"
           style={{
             minHeight: "100vh",
             background: "#FFFFFF",
@@ -119,8 +120,8 @@ export default function App() {
           }}
         >
           <Sidebar />
-          <Layout style={{ background: "#FFFFFF" }}>
-            <Layout.Content style={{ background: "#FFFFFF" }}>
+          <Layout className="bp-main-shell" style={{ background: "#FFFFFF" }}>
+            <Layout.Content className="bp-main-content" style={{ background: "#FFFFFF" }}>
               <Routes>
                 <Route path="/" element={<EventsList />} />
                 <Route path="clients" element={<ClientsList />} />

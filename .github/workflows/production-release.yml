@@ -1,0 +1,146 @@
+name: Production release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-release-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            server/backend/package-lock.json
+            server/frontend/package-lock.json
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Read client version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content "client/Properties/BelfProctor.csproj"
+          $version = @($project.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Version is missing in client/Properties/BelfProctor.csproj"
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+            throw "Version must be x.y.z or x.y.z.w, got: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Ensure release tag is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $ErrorActionPreference = "Continue"
+          gh release view $tag *> $null
+          $exists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = "Stop"
+          if ($exists) {
+            throw "Release $tag already exists. Bump <Version> in client/Properties/BelfProctor.csproj before merging to main."
+          }
+          exit 0
+
+      - name: Install backend dependencies
+        working-directory: server/backend
+        run: npm ci
+
+      - name: Validate backend
+        working-directory: server/backend
+        run: |
+          npm run prisma:generate
+          npm run build
+          npm test -- --runInBand
+
+      - name: Install frontend dependencies
+        working-directory: server/frontend
+        run: npm ci
+
+      - name: Validate frontend
+        working-directory: server/frontend
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Restore client dependencies
+        run: |
+          dotnet restore client/Properties/BelfProctor.csproj
+          dotnet restore client/tests/BelfProctor.UnitTests/BelfProctor.UnitTests.csproj
+          dotnet restore client/tests/BelfProctor.IntegrationTests/BelfProctor.IntegrationTests.csproj
+          dotnet restore client/tests/BelfProctor.SystemTests/BelfProctor.SystemTests.csproj
+
+      - name: Validate client
+        run: |
+          dotnet build client/Properties/BelfProctor.csproj -c Release --no-restore
+          dotnet test client/tests/BelfProctor.UnitTests/BelfProctor.UnitTests.csproj -c Release --no-restore
+          dotnet test client/tests/BelfProctor.IntegrationTests/BelfProctor.IntegrationTests.csproj -c Release --no-restore
+          dotnet test client/tests/BelfProctor.SystemTests/BelfProctor.SystemTests.csproj -c Release --no-restore
+
+      - name: Publish client executable
+        shell: pwsh
+        run: |
+          dotnet publish client/Properties/BelfProctor.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -o artifacts/client
+          $publishedExe = Get-ChildItem "artifacts/client" -Filter "*.exe" | Select-Object -First 1
+          if (-not $publishedExe) {
+            throw "Client publish did not produce an .exe"
+          }
+          Copy-Item $publishedExe.FullName "artifacts/BelfProctor-${{ steps.version.outputs.version }}.exe"
+
+      - name: Package server bundle
+        shell: pwsh
+        run: |
+          $bundle = "artifacts/server_bundle/server"
+          New-Item -ItemType Directory -Force "$bundle/backend", "$bundle/frontend/dist" | Out-Null
+
+          Copy-Item "server/backend/package.json" "$bundle/backend/"
+          Copy-Item "server/backend/package-lock.json" "$bundle/backend/"
+          Copy-Item "server/backend/dist" "$bundle/backend/dist" -Recurse
+          Copy-Item "server/backend/prisma" "$bundle/backend/prisma" -Recurse
+          Copy-Item "server/backend/.env.example" "$bundle/backend/.env.example"
+          Copy-Item "server/backend/*.bat" "$bundle/backend/" -ErrorAction SilentlyContinue
+          Copy-Item "server/frontend/dist/*" "$bundle/frontend/dist/" -Recurse
+          Compress-Archive -Path "artifacts/server_bundle/*" -DestinationPath "artifacts/belfProctor-server.zip" -Force
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: BelfProctor ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            artifacts/BelfProctor-${{ steps.version.outputs.version }}.exe
+            artifacts/belfProctor-server.zip

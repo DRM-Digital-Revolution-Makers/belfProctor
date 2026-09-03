@@ -2,10 +2,11 @@
 setlocal
 REM Build script for BelfProctor
 
-REM Ensure we run from the script directory (client)
+REM Ensure we run from the script directory
 pushd "%~dp0"
 
-set "PROJECT=BelfProctor.csproj"
+set "CLIENT_ROOT=%~dp0.."
+set "PROJECT=..\Properties\BelfProctor.csproj"
 set DOTNET_CLI_UI_LANGUAGE=en-US
 
 REM Use local cache for obj/bin to avoid network share timestamp issues (ensure trailing slashes)
@@ -32,7 +33,7 @@ if not exist "%SYS_BIN_DIR%" mkdir "%SYS_BIN_DIR%"
 REM Verify project file exists
 if not exist "%PROJECT%" (
     echo ERROR: Project file not found: %PROJECT%
-    echo Make sure you are in the 'client' directory.
+    echo Make sure the client project exists at 'client\Properties\BelfProctor.csproj'.
     pause
     exit /b 1
 )
@@ -57,8 +58,8 @@ echo.
 
 REM Clean previous builds
 echo Cleaning previous builds...
-if exist "bin" rmdir /s /q "bin"
-if exist "obj" rmdir /s /q "obj"
+if exist "%CLIENT_ROOT%\bin" rmdir /s /q "%CLIENT_ROOT%\bin"
+if exist "%CLIENT_ROOT%\obj" rmdir /s /q "%CLIENT_ROOT%\obj"
 REM Note: do not aggressively delete repo publish to avoid locking issues on network drives
 
 REM Restore packages
@@ -92,9 +93,9 @@ if %errorLevel% neq 0 (
 REM Run tests
 echo Running unit, integration, and system tests...
 set "TEST_FAILED=0"
-set "UNIT_DIR=tests\BelfProctor.UnitTests"
-set "INT_DIR=tests\BelfProctor.IntegrationTests"
-set "SYS_DIR=tests\BelfProctor.SystemTests"
+set "UNIT_DIR=..\tests\BelfProctor.UnitTests"
+set "INT_DIR=..\tests\BelfProctor.IntegrationTests"
+set "SYS_DIR=..\tests\BelfProctor.SystemTests"
 REM Use directory references to avoid any csproj path metadata issues
 dotnet test %UNIT_DIR% -c Release --no-restore -p:BaseIntermediateOutputPath=%UNIT_OBJ_DIR% -p:BaseOutputPath=%UNIT_BIN_DIR% --logger "trx;LogFileName=TestResults_Unit.trx" --collect:"XPlat Code Coverage"
 if %errorLevel% neq 0 (
@@ -125,16 +126,18 @@ if %errorLevel% neq 0 (
 
 REM Copy configuration files to publish directory
 echo Copying configuration files...
-copy "appsettings.json" "%PUBLISH_DIR%" >nul
-copy "appsettings.Production.json" "%PUBLISH_DIR%" >nul
+copy "..\Properties\appsettings.json" "%PUBLISH_DIR%" >nul
+copy "..\Properties\appsettings.Production.json" "%PUBLISH_DIR%" >nul
+copy "uninstall.ps1" "%PUBLISH_DIR%" >nul
+copy "update-helper.ps1" "%PUBLISH_DIR%" >nul
 copy "install-windows-service.ps1" "%PUBLISH_DIR%" >nul
 copy "install-client.bat" "%PUBLISH_DIR%" >nul
-copy "README.md" "%PUBLISH_DIR%" >nul
+copy "..\README.md" "%PUBLISH_DIR%" >nul
 
 REM Attempt to mirror to repo publish directory for convenience (non-fatal on failure)
-if not exist "publish" mkdir "publish"
+if not exist "..\publish" mkdir "..\publish"
 echo Mirroring artifacts to repo 'publish' directory...
-xcopy /E /I /Y "%PUBLISH_DIR%*" "publish\" >nul
+xcopy /E /I /Y "%PUBLISH_DIR%*" "..\publish\" >nul
 if %errorLevel% neq 0 (
     echo WARNING: Could not mirror to repo publish (file may be locked). Use local path: %PUBLISH_DIR%
 )

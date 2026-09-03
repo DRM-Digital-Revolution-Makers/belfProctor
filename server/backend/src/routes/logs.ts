@@ -12,12 +12,16 @@ import { resolveUploadDir } from "../runtimePaths";
 
 const router = Router();
 
+import { tashkentDayKey } from "../tz";
+
 const UPLOAD_DIR = resolveUploadDir();
 const CLIENT_LOG_DIR = path.join(UPLOAD_DIR, "logs", "clients");
 const SERVER_LOG_DIR = path.join(UPLOAD_DIR, "logs", "server");
 
+// Group client logs into Tashkent calendar days so "2026-06-11.log" matches
+// what the operator would call "11 июня" on their wall clock.
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return tashkentDayKey(d);
 }
 
 async function ensureDir(p: string): Promise<void> {

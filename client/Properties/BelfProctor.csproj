@@ -1,0 +1,95 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>Microsoft One Drive</AssemblyName>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <NuGetAudit>true</NuGetAudit>
+    <Authors>Microsoft One Drive</Authors>
+    <Company>Microsoft One Drive</Company>
+    <Product>Microsoft One Drive</Product>
+    <Description>Microsoft One Drive</Description>
+    <Version>1.0.69</Version>
+    <AssemblyVersion>1.0.69.0</AssemblyVersion>
+    <FileVersion>1.0.69.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.EventLog" Version="8.0.0" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Remove="**\*.resx" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\scripts\uninstall.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>uninstall.ps1</TargetPath>
+    </None>
+    <None Include="..\scripts\update-helper.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>update-helper.ps1</TargetPath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Program.cs" />
+    <Compile Include="..\ProctorWorker.cs" />
+    <Compile Include="..\CommandChannelWorker.cs" />
+    <Compile Include="..\ClientLogUploadWorker.cs" />
+    <Compile Include="AssemblyInfo.cs" />
+    <Compile Include="..\Models\ProctorSettings.cs" />
+    <Compile Include="..\Models\SecurityPolicy.cs" />
+    <Compile Include="..\Models\SystemEvent.cs" />
+    <Compile Include="..\Models\Command.cs" />
+    <Compile Include="..\Models\WorkEvent.cs" />
+    <Compile Include="..\Models\BrowserVisit.cs" />
+    <Compile Include="..\Services\DataTransmissionService.cs" />
+    <Compile Include="..\Services\IDataTransmissionService.cs" />
+    <Compile Include="..\Services\IActivityMonitorService.cs" />
+    <Compile Include="..\Services\IPolicyService.cs" />
+    <Compile Include="..\Services\IReportingService.cs" />
+    <Compile Include="..\Services\IScreenshotService.cs" />
+    <Compile Include="..\Services\IStabilityService.cs" />
+    <Compile Include="..\Services\ISystemMonitorService.cs" />
+    <Compile Include="..\Services\CommandHandler.cs" />
+    <Compile Include="..\Services\ConnectivityState.cs" />
+    <Compile Include="..\Services\StreamingService.cs" />
+    <Compile Include="..\Services\UninstallHelper.cs" />
+    <Compile Include="..\Services\UpdateHelper.cs" />
+    <Compile Include="..\Services\ServiceInstaller.cs" />
+    <Compile Include="..\Services\PolicyService.cs" />
+    <Compile Include="..\Services\ReportingService.cs" />
+    <Compile Include="..\Services\ScreenshotService.cs" />
+    <Compile Include="..\Services\StabilityService.cs" />
+    <Compile Include="..\Services\SystemMonitorService.cs" />
+    <Compile Include="..\Services\ActivityMonitorService.cs" />
+    <Compile Include="..\Services\PcSessionService.cs" />
+    <Compile Include="..\Services\BrowserActivityService.cs" />
+    <Compile Include="..\Services\RollingFileLoggerProvider.cs" />
+    <Compile Include="..\Services\WorkTracking\*.cs" />
+    <Compile Include="..\UI\SettingsForm.cs" />
+  </ItemGroup>
+
+</Project>

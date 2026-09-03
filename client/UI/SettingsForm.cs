@@ -331,10 +331,10 @@ public class SettingsForm : Form
             }
         }
 
-        // Define install path (stealth folder)
+        // Define install path
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var installDir = Path.Combine(appData, "SystemWorker");
-        var installPath = Path.Combine(installDir, "SystemWorker.exe");
+        var installDir = Path.Combine(appData, "BelfProctor");
+        var installPath = Path.Combine(installDir, "BelfProctor.exe");
         var currentPath = Environment.ProcessPath ?? Application.ExecutablePath;
 
         // Save settings to config file (standard logic)
@@ -386,15 +386,46 @@ public class SettingsForm : Form
             {
                 if (!Directory.Exists(installDir)) Directory.CreateDirectory(installDir);
 
-                // Check for existing running process in install path and kill it
-                var existingProcess = Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
+                // Stop the Windows service first — it owns the running exe as
+                // LocalSystem, so a user-mode Process.Kill cannot release the
+                // file lock. sc.exe stop succeeds for both admin and a service
+                // that allows user control; if neither, the catch below falls
+                // through to Kill+overwrite which may still fail.
+                try
+                {
+                    var stopPsi = new ProcessStartInfo("sc.exe", "stop BelfProctor")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                    };
+                    using var stopProc = Process.Start(stopPsi);
+                    stopProc?.WaitForExit(10000);
+                    // Give SCM a moment to release the file handle even after
+                    // STATE: STOPPED is reported.
+                    for (int i = 0; i < 20; i++)
+                    {
+                        try
+                        {
+                            using var probe = File.Open(installPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                            break;
+                        }
+                        catch { System.Threading.Thread.Sleep(250); }
+                    }
+                }
+                catch { }
+
+                // Best-effort: also kill any lingering user-mode processes by name.
+                var existingProcess = Process.GetProcessesByName("BelfProctor").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id))
+                    ?? Process.GetProcessesByName("SystemWorker").FirstOrDefault(p => !p.Id.Equals(Process.GetCurrentProcess().Id));
                 if (existingProcess != null)
                 {
-                    try 
-                    { 
-                        existingProcess.Kill(); 
+                    try
+                    {
+                        existingProcess.Kill();
                         existingProcess.WaitForExit(3000);
-                    } 
+                    }
                     catch { }
                 }
 
@@ -409,7 +440,7 @@ public class SettingsForm : Form
                         var destFile = Path.Combine(installDir, fileName);
                         // Skip the main exe as we handle it specifically or it might be locked? 
                         // Actually, File.Copy allows overwriting. 
-                        // But we want to rename the main exe to SystemWorker.exe
+                        // Keep the main exe under the canonical BelfProctor.exe name.
                         
                         if (string.Equals(file, currentPath, StringComparison.OrdinalIgnoreCase))
                         {
@@ -439,12 +470,10 @@ public class SettingsForm : Form
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
             if (_runOnStartup.Checked)
             {
-                // Use a stealthy name key
                 // IMPORTANT: Quote the path to handle spaces in username/path
                 // Add --auto-start flag
-                key?.SetValue("WindowsSystemWorker", $"\"{installPath}\" --auto-start");
-                // Remove old key if exists
-                key?.DeleteValue("BelfProctor", false);
+                key?.SetValue("BelfProctor", $"\"{installPath}\" --auto-start");
+                key?.DeleteValue("WindowsSystemWorker", false);
                 
                 // FALLBACK 1: Create Shortcut in Startup Folder
                 CreateStartupShortcut(installPath, installDir);
@@ -459,8 +488,10 @@ public class SettingsForm : Form
                 
                 // Remove Shortcut
                 var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+                var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
                 if (File.Exists(shortcutPath)) File.Delete(shortcutPath);
+                var legacyShortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+                if (File.Exists(legacyShortcutPath)) File.Delete(legacyShortcutPath);
             }
         }
         catch (Exception ex)
@@ -469,8 +500,27 @@ public class SettingsForm : Form
         }
 
         MessageBox.Show("Settings saved. Application updated and will restart in background.");
-        
-        // If we just installed it, launch the installed version and exit this one
+
+        // Make sure the BelfProctor Windows service exists and is running.
+        // If we're not elevated, this kicks UAC for a child process that does the
+        // sc.exe create + start, then returns ElevationRequested — we treat that
+        // as success and exit; the service will own the worker from then on.
+        var serviceResult = BelfProctor.Services.ServiceInstaller.EnsureInstalled(installPath);
+        bool serviceOwnsWorker =
+            serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.AlreadyInstalled
+            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.Installed
+            || serviceResult == BelfProctor.Services.ServiceInstaller.EnsureResult.ElevationRequested;
+
+        if (serviceOwnsWorker)
+        {
+            // The service runs the worker as LocalSystem with --auto-start; no
+            // need to spawn another user-mode copy.
+            Application.Exit();
+            return;
+        }
+
+        // Service install failed (e.g. user denied UAC) — fall back to the
+        // legacy HKCU\Run launch so the agent still runs, just not as a service.
         if (!isInstalled && File.Exists(installPath))
         {
             Process.Start(installPath);
@@ -478,25 +528,14 @@ public class SettingsForm : Form
         }
         else
         {
-            // If already installed, we might need to restart to pick up config?
-            // Actually, we are running as Settings UI. The background service might be running or not.
-            // If we killed it above, we should restart it.
-            // But we only killed it if we were NOT installed (updating).
-            // If we ARE installed (isInstalled=true), we didn't kill anything.
-            // But we saved config.
-            // We should restart to apply config.
-            
-            // Check if we are running as worker or just UI?
-             // This is SettingsForm. We are likely just UI or UI mode of worker.
-             // We should restart ourselves.
-             
-             // Restart with --auto-start to run silently as service
-             var proc = new ProcessStartInfo(Application.ExecutablePath);
-             proc.UseShellExecute = true;
-             proc.Arguments = "--auto-start";
-             Process.Start(proc);
-             Application.Exit();
-         }
+            var proc = new ProcessStartInfo(Application.ExecutablePath)
+            {
+                UseShellExecute = true,
+                Arguments = "--auto-start",
+            };
+            Process.Start(proc);
+            Application.Exit();
+        }
     }
 
     private static bool IsAdmin()
@@ -529,7 +568,7 @@ public class SettingsForm : Form
         try
         {
             var startupPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-            var shortcutPath = Path.Combine(startupPath, "SystemWorker.lnk");
+            var shortcutPath = Path.Combine(startupPath, "BelfProctor.lnk");
             
             // Use VBScript to create shortcut to avoid COM dependencies
             var vbsScript = new StringBuilder();
@@ -570,7 +609,7 @@ public class SettingsForm : Form
             // We use schtasks.exe. This requires Admin usually, but if run as standard user, it might fail or create a user task.
             // We'll try to create a user-level task which doesn't strictly need Admin if it's for the current user.
             
-            var taskName = "WindowsSystemWorkerUpdate"; // Innocent name
+            var taskName = "BelfProctorUpdate";
             // Use escaped double quotes for path to handle spaces correctly
             var args = $"/create /tn \"{taskName}\" /tr \"\\\"{targetPath}\\\" --auto-start\" /sc onlogon /f";
             

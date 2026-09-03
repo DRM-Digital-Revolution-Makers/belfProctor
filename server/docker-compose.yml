@@ -1,47 +1,83 @@
-version: "3.9"
-
 services:
   db:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: proctor
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-proctor}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-proctor}
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
       context: ./backend
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 4000
+      HOST: 0.0.0.0
       UPLOAD_DIR: /app/storage
-      JWT_SECRET: supersecretjwt
-      DEFAULT_ADMIN_EMAIL: admin@example.com
-      DEFAULT_ADMIN_PASSWORD: admin123
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/proctor?schema=public
-    depends_on:
-      - db
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-proctor}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set in .env}
+      DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-admin@local}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?DEFAULT_ADMIN_PASSWORD must be set in .env}
+      RETENTION_SCREENSHOTS_DAYS: ${RETENTION_SCREENSHOTS_DAYS:-30}
+      RETENTION_APP_HISTORY_DAYS: ${RETENTION_APP_HISTORY_DAYS:-30}
+      RETENTION_COMMANDS_DAYS: ${RETENTION_COMMANDS_DAYS:-7}
+      RETENTION_ACTIVITY_DAYS: ${RETENTION_ACTIVITY_DAYS:-30}
+      RETENTION_HEARTBEAT_DAYS: ${RETENTION_HEARTBEAT_DAYS:-2}
+      MAX_SCREENSHOT_BYTES: ${MAX_SCREENSHOT_BYTES:-20971520}
+      MAX_REPORT_BYTES: ${MAX_REPORT_BYTES:-209715200}
+      MAX_COMMAND_RESULT_BYTES: ${MAX_COMMAND_RESULT_BYTES:-536870912}
+      FEATURE_UPDATE_V2: ${FEATURE_UPDATE_V2:-true}
+      FEATURE_WORK_TRACKING: ${FEATURE_WORK_TRACKING:-true}
+      FEATURE_PROJECT_MAPPING: ${FEATURE_PROJECT_MAPPING:-true}
+      FEATURE_LIVE_VIEW: ${FEATURE_LIVE_VIEW:-true}
+      FEATURE_RULES_CLASSIFIER: ${FEATURE_RULES_CLASSIFIER:-true}
+      LIVE_VIEW_MAX_STREAMS: ${LIVE_VIEW_MAX_STREAMS:-10}
+      GITHUB_RELEASE_REPOSITORY: ${GITHUB_RELEASE_REPOSITORY:-}
+      GITHUB_RELEASE_TOKEN: ${GITHUB_RELEASE_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_CLIENT_ASSET_REGEX: ${GITHUB_CLIENT_ASSET_REGEX:-^BelfProctor(\.|-|_).*\.exe$|^BelfProctor\.exe$}
+      GITHUB_SERVER_ASSET_REGEX: ${GITHUB_SERVER_ASSET_REGEX:-^belfProctor-server\.zip$|^BelfProctor(\.|-|_)Server.*\.zip$}
+      GITHUB_RELEASE_AUTO_DEPLOY_CLIENT: ${GITHUB_RELEASE_AUTO_DEPLOY_CLIENT:-false}
+      GITHUB_RELEASE_POLL_ENABLED: ${GITHUB_RELEASE_POLL_ENABLED:-false}
+      GITHUB_RELEASE_POLL_INTERVAL_HOURS: ${GITHUB_RELEASE_POLL_INTERVAL_HOURS:-24}
+      GITHUB_RELEASE_POLL_START_DELAY_SECONDS: ${GITHUB_RELEASE_POLL_START_DELAY_SECONDS:-60}
+      UPDATE_QUEUE_MAX_PENDING: ${UPDATE_QUEUE_MAX_PENDING:-20}
+      CLIENT_UPDATE_DEPLOY_BATCH_SIZE: ${CLIENT_UPDATE_DEPLOY_BATCH_SIZE:-10}
+      CLIENT_UPDATE_DEPLOY_BATCH_DELAY_MS: ${CLIENT_UPDATE_DEPLOY_BATCH_DELAY_MS:-30000}
     volumes:
-      - backend_storage:/app/storage
+      - ./backend/storage:/app/storage
     ports:
-      - "4000:4000"
-    command: /bin/sh -c "npx prisma migrate deploy && node dist/index.js"
+      - "${BACKEND_PORT:-4000}:4000"
 
   frontend:
     build:
       context: ./frontend
-    environment:
-      # Used at build time for API base URL in the SPA
-      VITE_API_URL: http://localhost:4000/api
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    init: true
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
 
 volumes:
   pgdata:
-  backend_storage:

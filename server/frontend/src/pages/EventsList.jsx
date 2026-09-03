@@ -1,10 +1,11 @@
 import React from "react";
-import { Table, Modal, Empty } from "antd";
+import { Table, Modal } from "antd";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import { authFetch } from "../dataProvider.js";
+import { formatTashkent } from "../utils/time";
 
 /* ============ Design primitives (pixel-perfect Figma) ============ */
 
@@ -23,6 +24,7 @@ const BP = {
 function ArrowButton() {
   return (
     <div
+      className="bp-icon-button"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -47,10 +49,11 @@ function ArrowButton() {
 function SectionCard({ children, style }) {
   return (
     <div
+      className="bp-interactive-card"
       style={{
         background: BP.white,
-        borderRadius: 30,
-        border: `3px solid ${BP.white}`,
+        borderRadius: 24,
+        border: "1px solid rgba(164,164,164,0.42)",
         boxShadow: BP.shadow,
         display: "flex",
         flexDirection: "column",
@@ -62,19 +65,35 @@ function SectionCard({ children, style }) {
   );
 }
 
-function StatCard({ title, value, sub }) {
+function StatCard({ title, value, sub, icon, tone = "green" }) {
+  const toneColor = tone === "blue" ? "#22408C" : BP.green;
   return (
-    <SectionCard style={{ flex: 1, padding: 20, justifyContent: "space-between", minHeight: 140 }}>
+    <SectionCard style={{ flex: 1, padding: 20, justifyContent: "space-between", minHeight: 132 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 20, justifyContent: "space-between" }}>
-        <div
-          style={{
-            fontFamily: BP.font,
-            fontSize: 20,
-            fontWeight: 510,
-            color: BP.text,
-          }}
-        >
-          {title}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 12,
+              background: tone === "blue" ? "rgba(34,64,140,0.08)" : "rgba(38,126,38,0.09)",
+              color: toneColor,
+              display: "inline-grid",
+              placeItems: "center",
+            }}
+          >
+            <Icon icon={icon} width={20} height={20} />
+          </span>
+          <div
+            style={{
+              fontFamily: BP.font,
+              fontSize: 18,
+              fontWeight: 510,
+              color: BP.text,
+            }}
+          >
+            {title}
+          </div>
         </div>
         <ArrowButton />
       </div>
@@ -101,6 +120,17 @@ function StatCard({ title, value, sub }) {
         {sub}
       </div>
     </SectionCard>
+  );
+}
+
+function DashboardEmpty({ icon, title, text, action }) {
+  return (
+    <div className="bp-empty-state" style={{ margin: 28, minHeight: 132, fontFamily: BP.font }}>
+      <Icon icon={icon} width={26} height={26} color={BP.light} />
+      <div style={{ color: BP.text, fontSize: 15, fontWeight: 510 }}>{title}</div>
+      <div style={{ color: BP.muted, fontSize: 13 }}>{text}</div>
+      {action}
+    </div>
   );
 }
 
@@ -145,6 +175,7 @@ function Divider() {
 function OnlineRow({ index, name, onOpen }) {
   return (
     <div
+      className="bp-hover-row"
       style={{
         display: "flex",
         alignItems: "center",
@@ -200,6 +231,7 @@ function OnlineRow({ index, name, onOpen }) {
 function ReportButton({ icon, number, label, onClick }) {
   return (
     <div
+      className="bp-hover-row"
       onClick={onClick}
       style={{
         display: "flex",
@@ -257,6 +289,7 @@ function ProfilePillButton({ onClick, label }) {
     <button
       type="button"
       onClick={onClick}
+      className="bp-ghost-action"
       style={{
         background: BP.surface,
         color: BP.muted,
@@ -449,6 +482,7 @@ export default function EventsList() {
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Outer wrapper — layout_KDRBS7: padding 20, gap 40 */}
       <div
+        className="bp-page-shell"
         style={{
           background: BP.surface,
           borderRadius: 50,
@@ -461,21 +495,25 @@ export default function EventsList() {
         }}
       >
         {/* Аппер бар: 3 stat cards */}
-        <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
           <StatCard
             title={t("dashboard.activeCount")}
             value={stats.active}
             sub={`из ${stats.totalClients} человек`}
+            icon="solar:user-check-bold-duotone"
           />
           <StatCard
             title={t("dashboard.connectedCount")}
             value={stats.connected}
             sub={`из ${stats.totalClients} человек`}
+            icon="solar:server-square-cloud-bold-duotone"
+            tone="blue"
           />
           <StatCard
             title={t("dashboard.screenshotsToday")}
             value={screenshotsToday}
             sub={t("dashboard.screenshotsTodaySub")}
+            icon="solar:gallery-bold-duotone"
           />
         </div>
 
@@ -493,12 +531,11 @@ export default function EventsList() {
               }}
             >
               {onlineList.length === 0 ? (
-                <div style={{ padding: 28 }}>
-                  <Empty
-                    description={t("common.noData")}
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                </div>
+                <DashboardEmpty
+                  icon="solar:user-cross-rounded-bold-duotone"
+                  title="Сейчас никто не онлайн"
+                  text="Когда агент подключится, сотрудник появится в этом списке."
+                />
               ) : (
                 onlineList.map((h, i) => (
                   <OnlineRow
@@ -516,7 +553,8 @@ export default function EventsList() {
         {/* Нижний бар: Отчет + Мониторинг */}
         <div
           style={{
-            display: "flex",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
             gap: 12,
             alignItems: "stretch",
             flex: 1,
@@ -524,7 +562,7 @@ export default function EventsList() {
           }}
         >
           {/* Отчет блок */}
-          <SectionCard style={{ width: 340, minWidth: 280 }}>
+          <SectionCard style={{ minWidth: 0 }}>
             <SectionHeader title={t("nav.report")} />
             <Divider />
             <div
@@ -538,19 +576,19 @@ export default function EventsList() {
               <ReportButton
                 icon="solar:calendar-bold-duotone"
                 number="1"
-                label={t("dashboard.reportDay")}
+                label="Дневной отчет"
                 onClick={() => navigate("/report")}
               />
               <ReportButton
                 icon="solar:calendar-bold-duotone"
                 number="7"
-                label={t("dashboard.reportWeek")}
+                label="Недельный отчет"
                 onClick={() => navigate("/report")}
               />
               <ReportButton
                 icon="solar:calendar-bold-duotone"
                 number="30"
-                label={t("dashboard.reportMonth")}
+                label="Месячный отчет"
                 onClick={() => navigate("/report")}
               />
             </div>
@@ -606,12 +644,11 @@ export default function EventsList() {
               }}
             >
               {monitoringRows.length === 0 ? (
-                <div style={{ padding: 28 }}>
-                  <Empty
-                    description={t("common.noData")}
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                </div>
+                <DashboardEmpty
+                  icon="solar:monitor-smartphone-bold-duotone"
+                  title="Событий мониторинга пока нет"
+                  text="Активность появится после первого события от клиента."
+                />
               ) : (
                 monitoringRows.map((row) => (
                   <div
@@ -695,19 +732,7 @@ export default function EventsList() {
               title: t("common.time"),
               dataIndex: "timestamp",
               width: 180,
-              render: (v) => {
-                if (!v) return "-";
-                try {
-                  const d = new Date(v);
-                  if (isNaN(d.getTime())) return "-";
-                  d.setHours(d.getHours() - 2);
-                  return d.toLocaleString(
-                    i18n.language === "uz" ? "uz-UZ" : "ru-RU",
-                  );
-                } catch {
-                  return "-";
-                }
-              },
+              render: (v) => formatTashkent(v),
             },
             {
               title: t("common.browser"),

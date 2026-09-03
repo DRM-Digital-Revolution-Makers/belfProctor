@@ -4,6 +4,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authFetch } from "../dataProvider.js";
+import { formatTashkent } from "../utils/time";
 
 /* ============ Design tokens ============ */
 const BP = {
@@ -33,19 +34,11 @@ function formatBytes(bytes) {
   return `${Math.round(n)}${units[u]}`;
 }
 
-function formatTs(value, lang) {
+function formatTs(value) {
   if (!value) return { time: "—", date: "—", full: "—" };
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return { time: "—", date: "—", full: "—" };
-  const time = d.toLocaleTimeString(lang === "uz" ? "uz-UZ" : "ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const date = d.toLocaleDateString(lang === "uz" ? "uz-UZ" : "ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+  const time = formatTashkent(value, "HH:mm");
+  const date = formatTashkent(value, "DD.MM.YYYY");
+  if (time === "—" || date === "—") return { time: "—", date: "—", full: "—" };
   return { time, date, full: `${time},${date}` };
 }
 
@@ -59,6 +52,7 @@ export default function ScreenshotsList() {
     `http://${window.location.hostname}:8080/api`;
 
   const clientFromUrl = searchParams.get("clientId");
+  const dateFromUrl = searchParams.get("date");
 
   const [items, setItems] = React.useState([]);
   const [total, setTotal] = React.useState(0);
@@ -69,6 +63,7 @@ export default function ScreenshotsList() {
     category: null,
     isFavorite: false,
     sort: "desc",
+    date: dateFromUrl || null,
   });
   const [selected, setSelected] = React.useState(null);
   const [thumbUrls, setThumbUrls] = React.useState({});
@@ -94,6 +89,7 @@ export default function ScreenshotsList() {
     if (filters.clientId) params.append("clientId", filters.clientId);
     if (filters.category) params.append("category", filters.category);
     if (filters.isFavorite) params.append("isFavorite", "true");
+    if (filters.date) params.append("date", filters.date);
 
     authFetch(`${API_URL}/screenshots?${params.toString()}`, {
       cache: "no-store",
@@ -660,7 +656,9 @@ export default function ScreenshotsList() {
               <div
                 style={{
                   flex: 1,
-                  overflow: "auto",
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  maxHeight: "calc(100vh - 280px)",
                   padding: "10px 12px",
                   background: BP.white,
                 }}

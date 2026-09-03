@@ -112,7 +112,7 @@ public class SystemMonitorService : ISystemMonitorService
 
     public Task<List<SystemEvent>> GetRecentEventsAsync(TimeSpan timeSpan)
     {
-        var cutoffTime = DateTime.Now - timeSpan;
+        var cutoffTime = DateTime.UtcNow - timeSpan;
         
         lock (_eventsLock)
         {
@@ -168,7 +168,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                                             var systemEvent = new SystemEvent
                                             {
-                                                Timestamp = DateTime.Now,
+                                                Timestamp = DateTime.UtcNow,
                                                 EventType = SystemEventType.ProcessStarted,
                                                 Description = $"Process started: {p.ProcessName}",
                                                 ProcessName = p.ProcessName,
@@ -325,7 +325,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 var systemEvent = new SystemEvent
                 {
-                    Timestamp = DateTime.Now,
+                    Timestamp = DateTime.UtcNow,
                     EventType = SystemEventType.FileAccess,
                     Description = "File created on USB device",
                     DeviceId = root,
@@ -345,7 +345,7 @@ public class SystemMonitorService : ISystemMonitorService
             {
                 var systemEvent = new SystemEvent
                 {
-                    Timestamp = DateTime.Now,
+                    Timestamp = DateTime.UtcNow,
                     EventType = SystemEventType.FileAccess,
                     Description = "File modified on USB device",
                     DeviceId = root,
@@ -367,7 +367,7 @@ public class SystemMonitorService : ISystemMonitorService
 
     private async Task MonitorNetworkActivity()
     {
-        var lastNetworkCheck = DateTime.Now;
+        var lastNetworkCheck = DateTime.UtcNow;
         
         while (!_cancellationTokenSource?.Token.IsCancellationRequested ?? false)
         {
@@ -431,7 +431,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.ProcessStarted,
                 Description = $"Process started: {processName}",
                 ProcessName = processName,
@@ -461,7 +461,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.ProcessStopped,
                 Description = $"Process stopped: {processName}",
                 ProcessName = processName,
@@ -499,7 +499,7 @@ public class SystemMonitorService : ISystemMonitorService
 
             var systemEvent = new SystemEvent
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 EventType = SystemEventType.USBConnected,
                 Description = $"USB device connected: {driveName}",
                 DeviceId = driveName
@@ -538,7 +538,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                     var systemEvent = new SystemEvent
                     {
-                        Timestamp = DateTime.Now,
+                        Timestamp = DateTime.UtcNow,
                         EventType = SystemEventType.NetworkConnection,
                         Description = $"Network connection established",
                         NetworkAddress = remoteAddress,
@@ -591,7 +591,7 @@ public class SystemMonitorService : ISystemMonitorService
         {
             var recentSimilar = _recentEvents
                 .Where(e => e.EventType == newEvent.EventType && 
-                        e.Timestamp > DateTime.Now.AddMinutes(-1))
+                        e.Timestamp > DateTime.UtcNow.AddMinutes(-1))
                 .Any(e => e.NetworkAddress == newEvent.NetworkAddress);
             
             return recentSimilar;
@@ -636,7 +636,7 @@ public class SystemMonitorService : ISystemMonitorService
 
                                 var systemEvent = new SystemEvent
                                 {
-                                    Timestamp = DateTime.Now,
+                                    Timestamp = DateTime.UtcNow,
                                     EventType = SystemEventType.AppUsage,
                                     Description = $"User opened: {title}",
                                     ProcessName = processName,

@@ -1,8 +1,3 @@
-let PrismaClientCtor: any = null;
-try {
-  PrismaClientCtor = require("@prisma/client").PrismaClient;
-} catch {
-  PrismaClientCtor = null;
-}
+import { PrismaClient } from "@prisma/client";
 
-export const prisma = PrismaClientCtor ? new PrismaClientCtor() : null;
+export const prisma = new PrismaClient();
